@@ -12,14 +12,14 @@ import { User } from './models/User';
 let sequelizeInstance: SequelizeType | null = null;
 
 function buildSequelize(): SequelizeType {
-  const { MYSQL_HOST, MYSQL_PORT, MYSQL_USER, MYSQL_PASSWORD, MYSQL_DB } = config;
+  const { MYSQL } = config;
   const instance = new SequelizeType({
     dialect: 'mysql',
-    host: MYSQL_HOST,
-    port: MYSQL_PORT,
-    username: MYSQL_USER,
-    password: MYSQL_PASSWORD,
-    database: MYSQL_DB,
+    host: MYSQL.HOST,
+    port: MYSQL.PORT,
+    username: MYSQL.USER,
+    password: MYSQL.PASSWORD,
+    database: MYSQL.DB,
     logging: false, // 由 pino 统一管日志
     define: {
       charset: 'utf8mb4',
