@@ -1,0 +1,66 @@
+# ─── 操作系统 ──────────────────────────────
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# ─── 编辑器 / IDE ──────────────────────────
+.idea/
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+*.swp
+*.swo
+*~
+.fuse_hidden*
+.history/
+
+# ─── Node.js ───────────────────────────────
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnp.*
+.yarn/cache
+.yarn/install-state.gz
+.yarn/build-state.yml
+.yarn/unplugged
+
+# ─── TypeScript ────────────────────────────
+*.tsbuildinfo
+dist/
+build/
+*.tsbuildinfo
+
+# ─── Vite / React 前端 ────────────────────
+.vite/
+.cache/
+coverage/
+*.local
+
+# ─── 环境变量 / 密钥 ───────────────────────
+.env
+.env.*
+!.env.example
+.envrc
+
+# ─── 日志 ──────────────────────────────────
+logs/
+*.log
+npm-debug.log*
+
+# ─── 临时文件 ──────────────────────────────
+tmp/
+temp/
+.tmp/
+.cache/
+
+# ─── 测试覆盖率 ────────────────────────────
+.nyc_output/
+coverage/
+*.lcov
+
+# ─── 文档项目特有 ──────────────────────────
+# 文档项目不需要 node_modules 和构建产物,
+# 但保留 .DS_Store 在根目录被忽略即可
