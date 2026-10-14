@@ -17,15 +17,13 @@ import {
   message,
 } from 'antd';
 import type { TableColumnsType } from 'antd';
+import { PlusOutlined, ReloadOutlined, UserAddOutlined } from '@ant-design/icons';
 import { adminApi } from '../../lib/adminApi';
 import { getToken } from '../../lib/apiFactory';
+import { PageHeader } from '../../components/shell/PageHeader';
 
-const { Title, Paragraph } = Typography;
+const { Paragraph } = Typography;
 
-/**
- * 用户角色 —— 跟 src/lib/validators.ts §roleSchema 一致（拒收 agent）
- * 详见 docs/16-a-需求-多租户与登录.md §A3 + docs/04-c-ui-后台管理页面.md §5.8
- */
 type UserRole = 'admin' | 'customer';
 
 interface UserRow {
@@ -39,7 +37,7 @@ interface UserRow {
 
 /**
  * 从 adminApi 的 token 解出当前 admin 的 user id —— 用来在「删除」按钮上
- * disable 掉自己（前端兜底；后端 src/gateway/admin/user-routes.ts:98 也防）
+ * disable 掉自己（前端兜底；后端 src/gateway/admin/user-routes.ts 也防）
  */
 function currentAdminId(): string | null {
   const tok = getToken();
@@ -53,21 +51,21 @@ function currentAdminId(): string | null {
 }
 
 /**
- * /admin/users —— 租户 admin 管本租户用户（Step 13 P10）
+ * /admin/users —— 租户 admin 管本租户用户
  *
- * 后端 4 个端点（docs/06-API接口.md §6.3 / src/gateway/admin/user-routes.ts）：
+ * 后端 4 个端点：
  *   GET    /users           列表（本租户）
- *   POST   /users           新建（任意 role；roleSchema 当前只收 admin/customer）
+ *   POST   /users           新建
  *   PATCH  /users/:id       改邮箱 / 重置密码（不支持改 role）
  *   DELETE /users/:id       删除（不能删自己）
  *
- * UI 草图：docs/04-c-ui-后台管理页面.md §5.8
+ * UI 详见 docs/04-c-ui-后台管理页面.md §5.8
  */
 export function AdminUsersPage(): ReactElement {
   const [rows, setRows] = useState<UserRow[] | null>(null);
   const [errMsg, setErrMsg] = useState<string | null>(null);
 
-  // 检索 / 筛选（client-side，后端 list 端点还没接 filter 参数）
+  // client-side 检索 / 筛选（后端 list 端点还没接 filter 参数）
   const [search, setSearch] = useState('');
   const [roleFilter, setRoleFilter] = useState<'all' | UserRole>('all');
 
@@ -76,7 +74,7 @@ export function AdminUsersPage(): ReactElement {
   const [createForm] = Form.useForm<{ email: string; role: UserRole; password: string }>();
   const [createSubmitting, setCreateSubmitting] = useState(false);
 
-  // 编辑 Drawer（只覆盖邮箱 + 可选重置密码 —— updateUserSchema 不收 role）
+  // 编辑 Drawer
   const [editing, setEditing] = useState<UserRow | null>(null);
   const [editForm] = Form.useForm<{ email: string; password?: string }>();
   const [editSubmitting, setEditSubmitting] = useState(false);
@@ -108,7 +106,6 @@ export function AdminUsersPage(): ReactElement {
   }, [rows, search, roleFilter]);
 
   // ===== 创建 =====
-
   const submitCreate = async (): Promise<void> => {
     const v = await createForm.validateFields().catch(() => null);
     if (v === null) return;
@@ -123,7 +120,7 @@ export function AdminUsersPage(): ReactElement {
       const status = (e as { response?: { status?: number } }).response?.status;
       const data = (e as { response?: { data?: { message?: string } } }).response?.data;
       if (status === 400 && data?.message !== undefined) {
-        message.error(data.message); // 「邮箱已存在」等
+        message.error(data.message);
       } else {
         message.error('创建失败');
       }
@@ -133,7 +130,6 @@ export function AdminUsersPage(): ReactElement {
   };
 
   // ===== 编辑 =====
-
   const openEdit = (row: UserRow): void => {
     editForm.setFieldsValue({ email: row.email, password: '' });
     setEditing(row);
@@ -168,7 +164,6 @@ export function AdminUsersPage(): ReactElement {
   };
 
   // ===== 删除 =====
-
   const onDelete = async (row: UserRow): Promise<void> => {
     try {
       await adminApi.delete(`/users/${row.id}`);
@@ -188,9 +183,10 @@ export function AdminUsersPage(): ReactElement {
       title: '邮箱',
       dataIndex: 'email',
       key: 'email',
+      ellipsis: true,
       render: (email: string, row) => (
-        <Space size={4}>
-          <span>{email}</span>
+        <Space size={6}>
+          <span style={{ fontWeight: 500 }}>{email}</span>
           {row.must_change_password && <Tag color="orange">待改密</Tag>}
         </Space>
       ),
@@ -199,28 +195,37 @@ export function AdminUsersPage(): ReactElement {
       title: '角色',
       dataIndex: 'role',
       key: 'role',
-      render: (r: UserRole) => <Tag color={r === 'admin' ? 'geekblue' : 'green'}>{r}</Tag>,
+      width: 110,
+      render: (r: UserRole) => (
+        <Tag color={r === 'admin' ? 'red' : 'blue'} style={{ fontWeight: 500 }}>
+          {r === 'admin' ? '后台管理员' : '前台用户'}
+        </Tag>
+      ),
     },
     {
       title: '最后登录',
       dataIndex: 'last_login_at',
       key: 'last_login_at',
-      render: (t: string | null) => (t === null ? '—' : new Date(t).toLocaleString()),
+      width: 180,
+      render: (t: string | null) =>
+        t === null ? <span style={{ color: 'rgba(0,0,0,0.45)' }}>—</span> : new Date(t).toLocaleString(),
     },
     {
       title: '创建时间',
       dataIndex: 'created_at',
       key: 'created_at',
+      width: 180,
       render: (t: string) => new Date(t).toLocaleString(),
     },
     {
       title: '操作',
       key: 'actions',
+      width: 140,
       render: (_: unknown, row) => {
         const isSelf = selfId !== null && selfId === row.id;
         return (
-          <Space>
-            <Button size="small" onClick={() => openEdit(row)}>
+          <Space onClick={(e) => e.stopPropagation()}>
+            <Button type="link" size="small" onClick={() => openEdit(row)}>
               编辑
             </Button>
             <Popconfirm
@@ -231,10 +236,11 @@ export function AdminUsersPage(): ReactElement {
               }
               okText="确认"
               cancelText="取消"
+              okButtonProps={{ danger: true }}
               disabled={isSelf}
               {...(isSelf ? {} : { onConfirm: () => void onDelete(row) })}
             >
-              <Button size="small" danger disabled={isSelf}>
+              <Button type="link" size="small" danger disabled={isSelf}>
                 删除
               </Button>
             </Popconfirm>
@@ -246,27 +252,36 @@ export function AdminUsersPage(): ReactElement {
 
   return (
     <div>
-      <Space style={{ marginBottom: 16, justifyContent: 'space-between', display: 'flex' }}>
-        <Title level={3} style={{ margin: 0 }}>
-          用户管理
-        </Title>
-        <Space>
-          <Button type="primary" onClick={() => setCreatingOpen(true)}>
-            + 创建用户
-          </Button>
-          <Button onClick={() => void load()}>刷新</Button>
-        </Space>
-      </Space>
-      <Paragraph type="secondary">
-        列本租户所有用户（admin + customer），可创建、改邮箱 / 重置密码、删除。
-      </Paragraph>
+      <PageHeader
+        title="用户管理"
+        subtitle="本租户的后台管理员和前台用户。"
+        extra={
+          <>
+            <Button icon={<ReloadOutlined />} onClick={() => void load()}>
+              刷新
+            </Button>
+            <Button
+              type="primary"
+              icon={<PlusOutlined />}
+              onClick={() => setCreatingOpen(true)}
+            >
+              创建用户
+            </Button>
+          </>
+        }
+      />
 
       {errMsg !== null && (
-        <Alert type="error" showIcon message={errMsg} style={{ marginBottom: 16 }} />
+        <Alert
+          type="error"
+          showIcon
+          message={errMsg}
+          style={{ marginBottom: 16 }}
+        />
       )}
 
-      <Card style={{ marginBottom: 16 }}>
-        <Space wrap>
+      <Card styles={{ body: { padding: 16 } }}>
+        <Space wrap size={12} style={{ marginBottom: 12 }}>
           <Input.Search
             placeholder="按邮箱搜索"
             allowClear
@@ -279,31 +294,36 @@ export function AdminUsersPage(): ReactElement {
           <Select
             value={roleFilter}
             onChange={(v) => setRoleFilter(v)}
-            style={{ width: 180 }}
+            style={{ width: 160 }}
             options={[
               { value: 'all', label: '全部角色' },
-              { value: 'admin', label: '仅 admin（后台）' },
-              { value: 'customer', label: '仅 customer（前台）' },
+              { value: 'admin', label: '后台管理员' },
+              { value: 'customer', label: '前台用户' },
             ]}
           />
         </Space>
-      </Card>
-
-      <Card>
         <Table
           rowKey="id"
           columns={columns}
           dataSource={filtered}
           loading={rows === null}
           pagination={false}
-          locale={{ emptyText: rows === null ? '加载中…' : '本租户还没有用户，去建一个吧' }}
+          tableLayout="fixed"
+          locale={{
+            emptyText: rows === null ? '加载中…' : '还没有用户',
+          }}
         />
       </Card>
 
-      {/* 创建：email + role + 初始密码 */}
+      {/* 创建 */}
       <Modal
         open={creatingOpen}
-        title="创建用户"
+        title={
+          <Space>
+            <UserAddOutlined />
+            创建用户
+          </Space>
+        }
         okText="创建"
         cancelText="取消"
         confirmLoading={createSubmitting}
@@ -353,10 +373,10 @@ export function AdminUsersPage(): ReactElement {
         </Form>
       </Modal>
 
-      {/* 编辑：email + 可选重置密码（不支持改 role，跟后端 updateUserSchema 一致） */}
+      {/* 编辑 */}
       <Drawer
         open={editing !== null}
-        title={editing === null ? '' : `编辑用户 ${editing.email}`}
+        title={editing === null ? '' : `编辑用户 · ${editing.email}`}
         width={420}
         onClose={() => {
           setEditing(null);
@@ -393,8 +413,7 @@ export function AdminUsersPage(): ReactElement {
           </Form.Item>
           {editing !== null && (
             <Paragraph type="secondary" style={{ marginTop: -8 }}>
-              角色「{editing.role}」由创建决定，不可在编辑时变更（后端 updateUserSchema 不收
-              role）。
+              角色「{editing.role === 'admin' ? '后台管理员' : '前台用户'}」由创建决定，不可在编辑时变更。
             </Paragraph>
           )}
         </Form>

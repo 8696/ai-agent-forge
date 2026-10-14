@@ -1,11 +1,11 @@
 import type { ReactElement } from 'react';
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Alert, Button, Card, Form, Input, Typography } from 'antd';
+import { Alert, Button, Form, Input, Tag } from 'antd';
+import { LockOutlined, MailOutlined, UserOutlined } from '@ant-design/icons';
 import { customerApi } from '../../lib/customerApi';
 import { setToken } from '../../lib/apiFactory';
-
-const { Title, Paragraph } = Typography;
+import { AuthShell } from '../../components/shell/AuthShell';
 
 interface FormValues {
   email: string;
@@ -14,10 +14,7 @@ interface FormValues {
 }
 
 /**
- * P-L3 · 租户前台登录（customer）
- * 路由：/customer/login
- * 调：POST /api/v1/customer/login
- * 详见 docs/16-需求技术对照表 A4
+ * P-L3 · 租户前台登录（customer）—— 详见 docs/04-b-ui-登录与聊天挂件.md §3.3
  */
 export function CustomerLoginPage(): ReactElement {
   const navigate = useNavigate();
@@ -43,28 +40,81 @@ export function CustomerLoginPage(): ReactElement {
   };
 
   return (
-    <Card style={{ maxWidth: 400, margin: '64px auto' }}>
-      <Title level={3}>用户登录</Title>
-      <Paragraph type="secondary">前台 customer 入口（需带租户号）</Paragraph>
-      {errMsg !== null && <Alert type="error" message={errMsg} style={{ marginBottom: 16 }} />}
-      <Form<FormValues> layout="vertical" onFinish={onFinish} disabled={loading}>
+    <AuthShell
+      roleLabel="customer 子系统 · 租户前台"
+      title="用户登录"
+      description="租户 customer 入口 · 需带租户号"
+      badge={
+        <Tag color="blue" style={{ margin: 0, fontWeight: 500 }}>
+          <UserOutlined style={{ marginRight: 4 }} />
+          customer
+        </Tag>
+      }
+    >
+      {errMsg !== null && (
+        <Alert
+          type="error"
+          showIcon
+          message={errMsg}
+          style={{ marginBottom: 18 }}
+        />
+      )}
+
+      <Form<FormValues>
+        layout="vertical"
+        onFinish={onFinish}
+        disabled={loading}
+        requiredMark={false}
+        size="large"
+      >
         <Form.Item
           name="tenant_code"
           label="租户号"
-          rules={[{ required: true, pattern: /^[a-z0-9-]{3,32}$/ }]}
+          rules={[
+            { required: true, message: '请输入租户号' },
+            { pattern: /^[a-z0-9-]{3,32}$/, message: '3-32 位，小写字母 / 数字 / 短横线' },
+          ]}
         >
-          <Input placeholder="例：acme-corp" autoComplete="off" />
+          <Input
+            prefix={<UserOutlined style={{ color: 'rgba(0,0,0,0.45)' }} />}
+            placeholder="例：acme-corp"
+            autoComplete="off"
+          />
         </Form.Item>
-        <Form.Item name="email" label="邮箱" rules={[{ required: true, type: 'email' }]}>
-          <Input autoComplete="email" />
+
+        <Form.Item
+          name="email"
+          label="邮箱"
+          rules={[
+            { required: true, message: '请输入邮箱' },
+            { type: 'email', message: '邮箱格式不正确' },
+          ]}
+        >
+          <Input
+            prefix={<MailOutlined style={{ color: 'rgba(0,0,0,0.45)' }} />}
+            placeholder="你的邮箱"
+            autoComplete="email"
+          />
         </Form.Item>
-        <Form.Item name="password" label="密码" rules={[{ required: true }]}>
-          <Input.Password autoComplete="current-password" />
+
+        <Form.Item
+          name="password"
+          label="密码"
+          rules={[{ required: true, message: '请输入密码' }]}
+        >
+          <Input.Password
+            prefix={<LockOutlined style={{ color: 'rgba(0,0,0,0.45)' }} />}
+            placeholder="密码"
+            autoComplete="current-password"
+          />
         </Form.Item>
-        <Button type="primary" htmlType="submit" loading={loading} block>
-          登录
-        </Button>
+
+        <Form.Item style={{ marginBottom: 0 }}>
+          <Button type="primary" htmlType="submit" loading={loading} block size="large">
+            登录
+          </Button>
+        </Form.Item>
       </Form>
-    </Card>
+    </AuthShell>
   );
 }

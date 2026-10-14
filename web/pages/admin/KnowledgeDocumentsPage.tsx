@@ -15,6 +15,13 @@ import {
   message,
 } from 'antd';
 import type { TableColumnsType, UploadProps } from 'antd';
+import {
+  CloudUploadOutlined,
+  FilePdfOutlined,
+  FileMarkdownOutlined,
+  FileTextOutlined,
+  ReloadOutlined,
+} from '@ant-design/icons';
 import { InboxOutlined } from '@ant-design/icons';
 import {
   deleteDocument,
@@ -24,8 +31,9 @@ import {
   type DocumentStatus,
   type FileType,
 } from '../../lib/adminKnowledge';
+import { PageHeader } from '../../components/shell/PageHeader';
 
-const { Title, Paragraph, Text } = Typography;
+const { Text } = Typography;
 const { Dragger } = Upload;
 
 const STATUS_COLOR: Record<DocumentStatus, string> = {
@@ -42,17 +50,14 @@ const STATUS_TEXT: Record<DocumentStatus, string> = {
   failed: '失败',
 };
 
-const TYPE_COLOR: Record<FileType, string> = {
-  pdf: 'red',
-  markdown: 'geekblue',
-  txt: 'green',
-};
-
-/**
- * 拒收类型（与 src/services/document-upload.ts:detectFileType 一致）：
- * Step 4 实际只接 PDF / MD / TXT（mammoth 未引入，Word 下一步再加）
- */
 const ACCEPT = '.pdf,.md,.markdown,.txt';
+
+const FileTypeIcon = ({ type }: { type: FileType | null }): ReactElement => {
+  if (type === null) return <></>;
+  if (type === 'pdf') return <FilePdfOutlined style={{ color: '#ff4d4f' }} />;
+  if (type === 'markdown') return <FileMarkdownOutlined style={{ color: '#2f54eb' }} />;
+  return <FileTextOutlined style={{ color: '#13c2c2' }} />;
+};
 
 /**
  * /admin/knowledge/documents —— 知识库管理 P8
@@ -81,23 +86,18 @@ export function KnowledgeDocumentsPage(): ReactElement {
     void load();
   }, []);
 
-  // 客户端状态过滤
   const filtered = useMemo(() => {
     const data = rows ?? [];
     return statusFilter === 'all' ? data : data.filter((r) => r.status === statusFilter);
   }, [rows, statusFilter]);
 
-  // 上传 Dragger：beforeUpload=false 让 antd 不真发，由我们 axios 发（带拦截器 / token）
-  // antd v6 + beforeUpload=false 时，onChange 收到的 file 是 new File() clone（普通 File 对象，没有 originFileObj）；
-  // antd v4/v5 是包装对象才有 originFileObj。两种情况都兼容：
   const draggerProps: UploadProps = {
     name: 'file',
     multiple: false,
     accept: ACCEPT,
     showUploadList: false,
-    beforeUpload: () => false, // 阻止 antd 默认上传
+    beforeUpload: () => false,
     onChange: (info) => {
-      // 兼容 v4/v5 包装对象 + v6 clone：先看 originFileObj，没有就当 info.file 本身是 File
       const maybeWrapped = info.file as unknown as { originFileObj?: File };
       const file: File | undefined =
         maybeWrapped.originFileObj instanceof File
@@ -111,7 +111,6 @@ export function KnowledgeDocumentsPage(): ReactElement {
   };
 
   const doUpload = async (file: File): Promise<void> => {
-    // 前端先按扩展名拒一波（后端也拒；前端早失败 UX 更好）
     const lower = file.name.toLowerCase();
     if (!/\.(pdf|md|markdown|txt)$/.test(lower)) {
       message.error('仅支持 PDF / Markdown / TXT 文件');
@@ -157,16 +156,25 @@ export function KnowledgeDocumentsPage(): ReactElement {
       title: '文件名',
       dataIndex: 'title',
       key: 'title',
+      ellipsis: true,
       render: (t: string, row) => (
-        <Space size={4} direction="vertical" style={{ lineHeight: 1.2 }}>
-          <span>{t}</span>
-          {row.file_type !== null && (
-            <Tag color={TYPE_COLOR[row.file_type]} style={{ marginInlineEnd: 0 }}>
-              {row.file_type}
-            </Tag>
-          )}
+        <Space size={10} align="center">
+          <FileTypeIcon type={row.file_type} />
+          <span style={{ fontWeight: 500 }}>{t}</span>
         </Space>
       ),
+    },
+    {
+      title: '类型',
+      dataIndex: 'file_type',
+      key: 'file_type',
+      width: 110,
+      render: (t: FileType | null) =>
+        t === null ? (
+          <span style={{ color: 'rgba(0,0,0,0.45)' }}>—</span>
+        ) : (
+          <Tag style={{ fontWeight: 500 }}>{t.toUpperCase()}</Tag>
+        ),
     },
     {
       title: '状态',
@@ -174,14 +182,16 @@ export function KnowledgeDocumentsPage(): ReactElement {
       key: 'status',
       width: 110,
       render: (s: DocumentStatus) => (
-        <Tag color={STATUS_COLOR[s]}>{STATUS_TEXT[s]}</Tag>
+        <Tag color={STATUS_COLOR[s]} style={{ fontWeight: 500 }}>
+          {STATUS_TEXT[s]}
+        </Tag>
       ),
     },
     {
       title: '块数',
       dataIndex: 'chunk_count',
       key: 'chunk_count',
-      width: 80,
+      width: 90,
       align: 'right',
       render: (n: number) => (n === 0 ? '—' : n),
     },
@@ -189,19 +199,19 @@ export function KnowledgeDocumentsPage(): ReactElement {
       title: '上传时间',
       dataIndex: 'uploaded_at',
       key: 'uploaded_at',
-      width: 170,
+      width: 180,
       render: (t: string) => new Date(t).toLocaleString(),
     },
     {
       title: '操作',
       key: 'actions',
-      width: 160,
+      width: 120,
       render: (_: unknown, row) => (
         <Space onClick={(e) => e.stopPropagation()}>
-          <Button size="small" onClick={() => setDetail(row)}>
+          <Button type="link" size="small" onClick={() => setDetail(row)}>
             详情
           </Button>
-          <Button size="small" danger onClick={() => void onDelete(row)}>
+          <Button type="link" size="small" danger onClick={() => void onDelete(row)}>
             删除
           </Button>
         </Space>
@@ -211,45 +221,65 @@ export function KnowledgeDocumentsPage(): ReactElement {
 
   return (
     <div>
-      <Space style={{ marginBottom: 16, justifyContent: 'space-between', display: 'flex' }}>
-        <Title level={3} style={{ margin: 0 }}>
-          知识库管理
-        </Title>
-        <Space>
-          <Button onClick={() => void load()}>刷新</Button>
-        </Space>
-      </Space>
-      <Paragraph type="secondary">
-        上传 PDF / Markdown / TXT 文件，系统同步拆块 + 向量化入知识库；检索效果可在「检索测试」页验证。
-      </Paragraph>
+      <PageHeader
+        title="文档管理"
+        subtitle="上传 PDF / Markdown / TXT，系统会拆块并写入知识库。"
+        extra={
+          <Button icon={<ReloadOutlined />} onClick={() => void load()}>
+            刷新
+          </Button>
+        }
+      />
 
       {errMsg !== null && (
-        <Alert type="error" showIcon message={errMsg} style={{ marginBottom: 16 }} />
+        <Alert
+          type="error"
+          showIcon
+          message={errMsg}
+          style={{ marginBottom: 16 }}
+        />
       )}
 
-      <Card style={{ marginBottom: 16 }} title="上传文档">
+      <Card
+        title={
+          <Space>
+            <CloudUploadOutlined style={{ color: '#2f54eb' }} />
+            上传文档
+          </Space>
+        }
+        style={{ marginBottom: 16, borderRadius: 12 }}
+        styles={{ body: { padding: 20 } }}
+      >
         <Dragger {...draggerProps} disabled={uploading}>
-          <p className="ant-upload-drag-icon">
-            <InboxOutlined />
+          <p className="ant-upload-drag-icon" style={{ marginBottom: 8 }}>
+            <InboxOutlined style={{ color: '#2f54eb' }} />
           </p>
-          <p className="ant-upload-text">点击或拖拽文件到这里上传</p>
-          <p className="ant-upload-hint">
+          <p
+            className="ant-upload-text"
+            style={{ fontSize: 15, fontWeight: 500, color: '#1f2937' }}
+          >
+            点击或拖拽文件到这里上传
+          </p>
+          <p
+            className="ant-upload-hint"
+            style={{ fontSize: 13, color: 'rgba(0,0,0,0.45)' }}
+          >
             支持 PDF / Markdown / TXT，单文件 ≤ 50 MB；上传后自动拆块并向量化（同步处理）
           </p>
         </Dragger>
         {uploading && (
-          <div style={{ marginTop: 12 }}>
-            <Progress percent={uploadPct} status="active" />
+          <div style={{ marginTop: 16 }}>
+            <Progress percent={uploadPct} status="active" strokeColor="#2f54eb" />
           </div>
         )}
       </Card>
 
       <Card>
-        <Space style={{ marginBottom: 12 }}>
+        <Space wrap style={{ marginBottom: 12 }}>
           <Select
             value={statusFilter}
             onChange={(v) => setStatusFilter(v)}
-            style={{ width: 180 }}
+            style={{ width: 160 }}
             options={[
               { value: 'all', label: '全部状态' },
               { value: 'uploaded', label: '已上传' },
@@ -265,8 +295,9 @@ export function KnowledgeDocumentsPage(): ReactElement {
           dataSource={filtered}
           loading={rows === null}
           pagination={false}
+          tableLayout="fixed"
           locale={{
-            emptyText: rows === null ? '加载中…' : '本租户还没有文档，去上传一个吧',
+            emptyText: rows === null ? '加载中…' : '还没有文档',
           }}
           onRow={(row) => ({
             onClick: () => setDetail(row),
@@ -277,46 +308,50 @@ export function KnowledgeDocumentsPage(): ReactElement {
 
       <Drawer
         open={detail !== null}
-        title={detail === null ? '' : `文档详情：${detail.title}`}
-        width={420}
+        title={detail === null ? '' : `文档详情 · ${detail.title}`}
+        width={460}
         onClose={() => setDetail(null)}
         destroyOnClose
       >
         {detail !== null && (
-          <Space direction="vertical" size={12} style={{ width: '100%' }}>
+          <Space direction="vertical" size={16} style={{ width: '100%' }}>
             <div>
-              <Text type="secondary">ID</Text>
+              <Text type="secondary" style={{ fontSize: 12 }}>ID</Text>
               <div>
                 <Text code>{detail.id}</Text>
               </div>
             </div>
             <div>
-              <Text type="secondary">类型</Text>
-              <div>
+              <Text type="secondary" style={{ fontSize: 12 }}>类型</Text>
+              <div style={{ marginTop: 4 }}>
                 {detail.file_type !== null ? (
-                  <Tag color={TYPE_COLOR[detail.file_type]}>{detail.file_type}</Tag>
+                  <Tag style={{ fontWeight: 500 }}>
+                    {detail.file_type.toUpperCase()}
+                  </Tag>
                 ) : (
                   '—'
                 )}
               </div>
             </div>
             <div>
-              <Text type="secondary">状态</Text>
-              <div>
-                <Tag color={STATUS_COLOR[detail.status]}>{STATUS_TEXT[detail.status]}</Tag>
+              <Text type="secondary" style={{ fontSize: 12 }}>状态</Text>
+              <div style={{ marginTop: 4 }}>
+                <Tag color={STATUS_COLOR[detail.status]} style={{ fontWeight: 500 }}>
+                  {STATUS_TEXT[detail.status]}
+                </Tag>
               </div>
             </div>
             <div>
-              <Text type="secondary">块数</Text>
-              <div>{detail.chunk_count}</div>
+              <Text type="secondary" style={{ fontSize: 12 }}>块数</Text>
+              <div style={{ marginTop: 4 }}>{detail.chunk_count}</div>
             </div>
             <div>
-              <Text type="secondary">上传时间</Text>
-              <div>{new Date(detail.uploaded_at).toLocaleString()}</div>
+              <Text type="secondary" style={{ fontSize: 12 }}>上传时间</Text>
+              <div style={{ marginTop: 4 }}>{new Date(detail.uploaded_at).toLocaleString()}</div>
             </div>
             <div>
-              <Text type="secondary">最后更新</Text>
-              <div>{new Date(detail.updated_at).toLocaleString()}</div>
+              <Text type="secondary" style={{ fontSize: 12 }}>最后更新</Text>
+              <div style={{ marginTop: 4 }}>{new Date(detail.updated_at).toLocaleString()}</div>
             </div>
           </Space>
         )}

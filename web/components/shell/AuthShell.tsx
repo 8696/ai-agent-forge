@@ -1,0 +1,96 @@
+import type { ReactElement, ReactNode } from 'react';
+import { Card, Space, Typography } from 'antd';
+import { BrandMark } from './BrandMark';
+import { ActiveModelsFooter } from '../ActiveModelsFooter';
+
+const { Title, Text } = Typography;
+
+interface AuthShellProps {
+  /** 角色标识（影响 footer 右侧文案） */
+  roleLabel: string;
+  /** 主标题 */
+  title: string;
+  /** 副标题 / 描述 */
+  description?: string;
+  /** 顶部小标识（角色图标可放这里） */
+  badge?: ReactNode;
+  children: ReactNode;
+}
+
+/**
+ * 3 个登录页公共外壳 —— 详见 docs/04-b-ui-登录与聊天挂件.md §3
+ *
+ * 视觉：
+ *  - 全屏深浅渐变背景（"高级感"）
+ *  - 顶部品牌 + 角色 badge
+ *  - 中央毛玻璃卡片（白底，圆角 12）
+ *  - 底部 footer（active models + role label）
+ */
+export function AuthShell(props: AuthShellProps): ReactElement {
+  return (
+    <div
+      style={{
+        minHeight: '100vh',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: '40px 16px',
+        background:
+          'radial-gradient(ellipse at top, #e8efff 0%, #f5f7fa 50%, #f0f2f5 100%)',
+      }}
+    >
+      {/* 顶部品牌 */}
+      <div style={{ marginBottom: 28, textAlign: 'center' }}>
+        <Space direction="vertical" size={10} align="center">
+          <BrandMark size="lg" variant="light" />
+          {props.badge !== undefined && props.badge}
+        </Space>
+      </div>
+
+      {/* 主卡片 */}
+      <Card
+        style={{
+          width: '100%',
+          maxWidth: 420,
+          borderRadius: 12,
+          boxShadow:
+            '0 12px 32px rgba(15, 23, 42, 0.08), 0 2px 6px rgba(15, 23, 42, 0.04)',
+          border: '1px solid rgba(0,0,0,0.04)',
+        }}
+        styles={{ body: { padding: '32px 28px' } }}
+      >
+        <div style={{ textAlign: 'center', marginBottom: 24 }}>
+          <Title level={2} style={{ marginBottom: 6, fontSize: 22, fontWeight: 600 }}>
+            {props.title}
+          </Title>
+          {props.description !== undefined && (
+            <Text type="secondary" style={{ fontSize: 13 }}>
+              {props.description}
+            </Text>
+          )}
+        </div>
+        {props.children}
+      </Card>
+
+      {/* 底部 */}
+      <div
+        style={{
+          marginTop: 28,
+          textAlign: 'center',
+          fontSize: 12,
+          color: 'rgba(0,0,0,0.45)',
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          gap: 10,
+        }}
+      >
+        <Text type="secondary" style={{ fontSize: 12 }}>
+          {props.roleLabel}
+        </Text>
+        <ActiveModelsFooter />
+      </div>
+    </div>
+  );
+}

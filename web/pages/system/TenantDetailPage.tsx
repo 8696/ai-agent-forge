@@ -5,23 +5,32 @@ import {
   Alert,
   Button,
   Card,
+  Col,
   DatePicker,
   Descriptions,
   Form,
   Input,
   Modal,
   Popconfirm,
+  Row,
   Select,
   Space,
-  Spin,
   Tag,
   Typography,
   message,
 } from 'antd';
+import {
+  ArrowLeftOutlined,
+  KeyOutlined,
+  PauseCircleOutlined,
+  PlayCircleOutlined,
+  CalendarOutlined,
+} from '@ant-design/icons';
 import dayjs, { type Dayjs } from 'dayjs';
 import { systemApi } from '../../lib/systemApi';
+import { PageHeader } from '../../components/shell/PageHeader';
 
-const { Title, Paragraph } = Typography;
+const { Text } = Typography;
 
 interface TenantDetail {
   id: string;
@@ -29,7 +38,6 @@ interface TenantDetail {
   name: string;
   plan: 'free' | 'pro' | 'enterprise';
   settings: Record<string, unknown> | null;
-  /** F2 */
   status: 'active' | 'disabled';
   expires_at: string | null;
   created_at: string;
@@ -49,9 +57,14 @@ const PLAN_COLOR: Record<string, string> = {
   enterprise: 'gold',
 };
 
+const PLAN_LABEL: Record<string, string> = {
+  free: 'Free',
+  pro: 'Pro',
+  enterprise: 'Enterprise',
+};
+
 /**
  * /system/tenants/:id —— 单租户详情 + 改基本资料 + 重置 admin 密码 + F2 启停 / 到期
- * 详见 docs/16-e §F1 + §F2
  */
 export function SystemTenantDetailPage(): ReactElement {
   const { id } = useParams<{ id: string }>();
@@ -61,7 +74,6 @@ export function SystemTenantDetailPage(): ReactElement {
   const [resetOpen, setResetOpen] = useState(false);
   const [resetForm] = Form.useForm<{ new_password: string }>();
 
-  // F2：到期时间 Modal
   const [expiresOpen, setExpiresOpen] = useState(false);
   const [expiresForm] = Form.useForm<{ expires_at: Dayjs | null }>();
 
@@ -85,13 +97,19 @@ export function SystemTenantDetailPage(): ReactElement {
   if (errMsg !== null) {
     return (
       <div>
-        <Button onClick={() => navigate('/system/tenants')}>返回列表</Button>
-        <Alert type="error" showIcon message={errMsg} style={{ marginTop: 16 }} />
+        <Button
+          icon={<ArrowLeftOutlined />}
+          onClick={() => navigate('/system/tenants')}
+          style={{ marginBottom: 16 }}
+        >
+          返回列表
+        </Button>
+        <Alert type="error" showIcon message={errMsg} />
       </div>
     );
   }
   if (data === null) {
-    return <Spin tip="加载中..." style={{ display: 'block', marginTop: 80 }} />;
+    return <Alert showIcon message="加载中..." type="info" />;
   }
 
   const onPatch = async (values: {
@@ -122,8 +140,6 @@ export function SystemTenantDetailPage(): ReactElement {
       message.error(status === 404 ? '租户 admin 不存在' : '重置失败');
     }
   };
-
-  // ===== F2 actions =====
 
   const onSubmitExpires = async (): Promise<void> => {
     const v = await expiresForm.validateFields().catch(() => null);
@@ -158,176 +174,243 @@ export function SystemTenantDetailPage(): ReactElement {
     }
   };
 
-  // 防自锁：code='system' 的初始租户禁用/启用按钮都禁
   const isSystemTenant = data.code === 'system';
 
   return (
     <div>
-      <Space style={{ marginBottom: 16 }}>
-        <Button onClick={() => navigate('/system/tenants')}>← 返回列表</Button>
-        <Title level={3} style={{ margin: 0 }}>
-          租户 {data.code}
-        </Title>
-        <Tag color={PLAN_COLOR[data.plan] ?? 'default'}>{data.plan}</Tag>
-        <Tag color={data.status === 'active' ? 'success' : 'error'}>
-          {data.status === 'active' ? '启用' : '已禁用'}
-        </Tag>
-        {data.expires_at === null ? (
-          <Tag color="default">永不过期</Tag>
-        ) : dayjs(data.expires_at).isBefore(dayjs()) ? (
-          <Tag color="red">已到期 {dayjs(data.expires_at).format('YYYY-MM-DD')}</Tag>
-        ) : (
-          <Tag color="blue">{dayjs(data.expires_at).format('YYYY-MM-DD HH:mm')} 到期</Tag>
-        )}
-      </Space>
-
-      <Card title="基本资料" style={{ marginBottom: 16 }}>
-        <Descriptions column={2} size="small">
-          <Descriptions.Item label="租户 ID">{data.id}</Descriptions.Item>
-          <Descriptions.Item label="租户号">{data.code}</Descriptions.Item>
-          <Descriptions.Item label="名称">{data.name}</Descriptions.Item>
-          <Descriptions.Item label="套餐">
-            <Tag color={PLAN_COLOR[data.plan] ?? 'default'}>{data.plan}</Tag>
-          </Descriptions.Item>
-          <Descriptions.Item label="状态">
-            <Tag color={data.status === 'active' ? 'success' : 'error'}>
+      <PageHeader
+        title={
+          <Space size={12}>
+            <span>{data.code}</span>
+            <Tag color={PLAN_COLOR[data.plan] ?? 'default'} style={{ fontWeight: 500 }}>
+              {PLAN_LABEL[data.plan] ?? data.plan}
+            </Tag>
+            <Tag
+              color={data.status === 'active' ? 'success' : 'error'}
+              style={{ fontWeight: 500 }}
+            >
               {data.status === 'active' ? '启用' : '已禁用'}
             </Tag>
-          </Descriptions.Item>
-          <Descriptions.Item label="到期时间">
-            {data.expires_at === null
-              ? '永不过期'
-              : `${dayjs(data.expires_at).format('YYYY-MM-DD HH:mm')}${
-                  dayjs(data.expires_at).isBefore(dayjs()) ? '（已过期）' : ''
-                }`}
-          </Descriptions.Item>
-          <Descriptions.Item label="创建时间">
-            {new Date(data.created_at).toLocaleString()}
-          </Descriptions.Item>
-          <Descriptions.Item label="更新时间">
-            {new Date(data.updated_at).toLocaleString()}
-          </Descriptions.Item>
-        </Descriptions>
-      </Card>
+          </Space>
+        }
+        subtitle={data.name}
+        extra={
+          <Button
+            icon={<ArrowLeftOutlined />}
+            onClick={() => navigate('/system/tenants')}
+          >
+            返回列表
+          </Button>
+        }
+      />
 
-      <Card title="改基本资料" style={{ marginBottom: 16 }}>
-        <Form
-          layout="inline"
-          initialValues={{ name: data.name, plan: data.plan }}
-          onFinish={onPatch}
-        >
-          <Form.Item name="name" label="名称" rules={[{ min: 1, max: 200 }]}>
-            <Input style={{ width: 240 }} />
-          </Form.Item>
-          <Form.Item name="plan" label="套餐">
-            <Select
-              style={{ width: 160 }}
-              options={[
-                { value: 'free', label: 'free' },
-                { value: 'pro', label: 'pro' },
-                { value: 'enterprise', label: 'enterprise' },
-              ]}
-            />
-          </Form.Item>
-          <Form.Item>
-            <Button type="primary" htmlType="submit">
-              保存
-            </Button>
-          </Form.Item>
-        </Form>
-      </Card>
-
-      {/* F2：启停 + 到期时间 */}
-      <Card title="租户启停与到期（F2）" style={{ marginBottom: 16 }}>
-        <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-          <Descriptions column={1} size="small">
-            <Descriptions.Item label="状态">
-              <Space>
-                <Tag color={data.status === 'active' ? 'success' : 'error'}>
+      <Row gutter={[16, 16]}>
+        <Col xs={24} lg={14}>
+          <Card title="基本资料" style={{ borderRadius: 12 }}>
+            <Descriptions column={2} size="small">
+              <Descriptions.Item label="租户 ID" span={2}>
+                <Text code>{data.id}</Text>
+              </Descriptions.Item>
+              <Descriptions.Item label="租户号">{data.code}</Descriptions.Item>
+              <Descriptions.Item label="名称">{data.name}</Descriptions.Item>
+              <Descriptions.Item label="套餐">
+                <Tag color={PLAN_COLOR[data.plan] ?? 'default'}>
+                  {PLAN_LABEL[data.plan] ?? data.plan}
+                </Tag>
+              </Descriptions.Item>
+              <Descriptions.Item label="状态">
+                <Tag
+                  color={data.status === 'active' ? 'success' : 'error'}
+                  style={{ fontWeight: 500 }}
+                >
                   {data.status === 'active' ? '启用' : '已禁用'}
                 </Tag>
-                <Popconfirm
-                  title={
-                    data.status === 'active'
-                      ? `确认禁用租户 ${data.code}？该租户下所有 admin / customer 账号将无法登录`
-                      : `确认启用租户 ${data.code}？`
-                  }
-                  okText="确认"
-                  cancelText="取消"
-                  onConfirm={() => void onToggleStatus()}
-                >
-                  <Button danger={data.status === 'active'} disabled={isSystemTenant}>
-                    {data.status === 'active' ? '禁用' : '启用'}
-                  </Button>
-                </Popconfirm>
-                {isSystemTenant && (
-                  <Paragraph type="secondary" style={{ margin: 0 }}>
-                    系统初始租户禁止禁用（防 SaaS 平台方自锁）
-                  </Paragraph>
-                )}
-              </Space>
-            </Descriptions.Item>
-            <Descriptions.Item label="到期时间">
-              <Space>
+              </Descriptions.Item>
+              <Descriptions.Item label="到期时间" span={2}>
                 {data.expires_at === null
                   ? '永不过期'
                   : `${dayjs(data.expires_at).format('YYYY-MM-DD HH:mm')}${
                       dayjs(data.expires_at).isBefore(dayjs()) ? '（已过期）' : ''
                     }`}
-                <Button
-                  onClick={() => {
-                    expiresForm.setFieldsValue({
-                      expires_at: data.expires_at === null ? null : dayjs(data.expires_at),
-                    });
-                    setExpiresOpen(true);
-                  }}
-                >
-                  改到期
-                </Button>
-              </Space>
-            </Descriptions.Item>
-          </Descriptions>
-          <Paragraph type="secondary" style={{ margin: 0 }}>
-            启停或改到期后立即生效（不需要重启服务）；所有改动都会写入 audit_logs。
-          </Paragraph>
-        </Space>
-      </Card>
-
-      <Card title="初始 admin 账号">
-        {data.admin === null ? (
-          <Paragraph type="danger">该租户没有 admin 账号（异常状态）</Paragraph>
-        ) : (
-          <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-            <Descriptions column={2} size="small">
-              <Descriptions.Item label="admin ID">{data.admin.id}</Descriptions.Item>
-              <Descriptions.Item label="邮箱">{data.admin.email}</Descriptions.Item>
-              <Descriptions.Item label="角色">
-                <Tag color="red">{data.admin.role}</Tag>
               </Descriptions.Item>
-              <Descriptions.Item label="状态">
-                {data.admin.must_change_password ? (
-                  <Tag color="orange">登录后待改密</Tag>
-                ) : (
-                  <Tag color="green">正常</Tag>
-                )}
+              <Descriptions.Item label="创建时间">
+                {new Date(data.created_at).toLocaleString()}
               </Descriptions.Item>
-              <Descriptions.Item label="最后登录">
-                {data.admin.last_login_at !== null
-                  ? new Date(data.admin.last_login_at).toLocaleString()
-                  : '从未登录'}
+              <Descriptions.Item label="更新时间">
+                {new Date(data.updated_at).toLocaleString()}
               </Descriptions.Item>
             </Descriptions>
-            <Space>
-              <Button danger onClick={() => setResetOpen(true)}>
-                重置 admin 密码
-              </Button>
-              <Paragraph type="secondary" style={{ margin: 0 }}>
-                重置后 admin 重新登录会被强制改密（must_change_password=true）
-              </Paragraph>
+          </Card>
+        </Col>
+
+        <Col xs={24} lg={10}>
+          <Card title="改基本资料" style={{ borderRadius: 12, marginBottom: 16 }}>
+            <Form
+              layout="vertical"
+              initialValues={{ name: data.name, plan: data.plan }}
+              onFinish={onPatch}
+            >
+              <Form.Item name="name" label="名称" rules={[{ min: 1, max: 200 }]}>
+                <Input placeholder="租户显示名" />
+              </Form.Item>
+              <Form.Item name="plan" label="套餐">
+                <Select
+                  options={[
+                    { value: 'free', label: 'Free' },
+                    { value: 'pro', label: 'Pro' },
+                    { value: 'enterprise', label: 'Enterprise' },
+                  ]}
+                />
+              </Form.Item>
+              <Form.Item style={{ marginBottom: 0 }}>
+                <Button type="primary" htmlType="submit" block>
+                  保存
+                </Button>
+              </Form.Item>
+            </Form>
+          </Card>
+
+          <Card title="启停 & 到期" style={{ borderRadius: 12 }}>
+            <Space direction="vertical" size={16} style={{ width: '100%' }}>
+              <div>
+                <Text type="secondary" style={{ fontSize: 13 }}>
+                  状态
+                </Text>
+                <div style={{ marginTop: 8 }}>
+                  <Space wrap>
+                    <Tag
+                      color={data.status === 'active' ? 'success' : 'error'}
+                      style={{ fontWeight: 500 }}
+                    >
+                      {data.status === 'active' ? '启用' : '已禁用'}
+                    </Tag>
+                    <Popconfirm
+                      title={
+                        data.status === 'active'
+                          ? `确认禁用租户 ${data.code}？该租户下所有 admin / customer 账号将无法登录`
+                          : `确认启用租户 ${data.code}？`
+                      }
+                      okText="确认"
+                      cancelText="取消"
+                      okButtonProps={data.status === 'active' ? { danger: true } : { type: 'primary' }}
+                      onConfirm={() => void onToggleStatus()}
+                    >
+                      <Button
+                        danger={data.status === 'active'}
+                        type={data.status === 'active' ? 'default' : 'primary'}
+                        icon={
+                          data.status === 'active' ? (
+                            <PauseCircleOutlined />
+                          ) : (
+                            <PlayCircleOutlined />
+                          )
+                        }
+                        disabled={isSystemTenant}
+                      >
+                        {data.status === 'active' ? '禁用' : '启用'}
+                      </Button>
+                    </Popconfirm>
+                    {isSystemTenant && (
+                      <Text type="secondary" style={{ fontSize: 12 }}>
+                        系统初始租户禁止禁用
+                      </Text>
+                    )}
+                  </Space>
+                </div>
+              </div>
+
+              <div>
+                <Text type="secondary" style={{ fontSize: 13 }}>
+                  到期时间
+                </Text>
+                <div style={{ marginTop: 8 }}>
+                  <Space wrap>
+                    <span>
+                      {data.expires_at === null
+                        ? '永不过期'
+                        : `${dayjs(data.expires_at).format('YYYY-MM-DD HH:mm')}${
+                            dayjs(data.expires_at).isBefore(dayjs()) ? '（已过期）' : ''
+                          }`}
+                    </span>
+                    <Button
+                      icon={<CalendarOutlined />}
+                      onClick={() => {
+                        expiresForm.setFieldsValue({
+                          expires_at: data.expires_at === null ? null : dayjs(data.expires_at),
+                        });
+                        setExpiresOpen(true);
+                      }}
+                    >
+                      改到期
+                    </Button>
+                  </Space>
+                </div>
+              </div>
+
+              <Text type="secondary" style={{ fontSize: 12, display: 'block' }}>
+                启停或改到期立即生效（无需重启）；所有改动都会写入 audit_logs。
+              </Text>
             </Space>
-          </Space>
-        )}
-      </Card>
+          </Card>
+        </Col>
+
+        <Col xs={24}>
+          <Card title="初始 admin 账号" style={{ borderRadius: 12 }}>
+            {data.admin === null ? (
+              <Alert type="error" showIcon message="该租户没有 admin 账号（异常状态）" />
+            ) : (
+              <Row gutter={[16, 16]}>
+                <Col xs={24} md={16}>
+                  <Descriptions column={2} size="small">
+                    <Descriptions.Item label="admin ID" span={2}>
+                      <Text code>{data.admin.id}</Text>
+                    </Descriptions.Item>
+                    <Descriptions.Item label="邮箱" span={2}>
+                      {data.admin.email}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="角色">
+                      <Tag color="red" style={{ fontWeight: 500 }}>
+                        {data.admin.role === 'admin' ? '后台管理员' : '前台用户'}
+                      </Tag>
+                    </Descriptions.Item>
+                    <Descriptions.Item label="状态">
+                      {data.admin.must_change_password ? (
+                        <Tag color="orange" style={{ fontWeight: 500 }}>
+                          登录后待改密
+                        </Tag>
+                      ) : (
+                        <Tag color="success" style={{ fontWeight: 500 }}>
+                          正常
+                        </Tag>
+                      )}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="最后登录" span={2}>
+                      {data.admin.last_login_at !== null
+                        ? new Date(data.admin.last_login_at).toLocaleString()
+                        : '从未登录'}
+                    </Descriptions.Item>
+                  </Descriptions>
+                </Col>
+                <Col xs={24} md={8}>
+                  <Space direction="vertical" size={8}>
+                    <Button
+                      danger
+                      block
+                      icon={<KeyOutlined />}
+                      onClick={() => setResetOpen(true)}
+                    >
+                      重置 admin 密码
+                    </Button>
+                    <Text type="secondary" style={{ fontSize: 12 }}>
+                      重置后 admin 重新登录会被强制改密（must_change_password=true）
+                    </Text>
+                  </Space>
+                </Col>
+              </Row>
+            )}
+          </Card>
+        </Col>
+      </Row>
 
       <Modal
         open={resetOpen}
@@ -352,7 +435,6 @@ export function SystemTenantDetailPage(): ReactElement {
         </Form>
       </Modal>
 
-      {/* F2：到期时间 Modal */}
       <Modal
         open={expiresOpen}
         title={`修改 ${data.code} 的到期时间`}

@@ -1,11 +1,11 @@
 import type { ReactElement } from 'react';
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Alert, Button, Card, Form, Input, Typography } from 'antd';
+import { Alert, Button, Form, Input, Tag } from 'antd';
+import { LockOutlined, MailOutlined, ControlOutlined } from '@ant-design/icons';
 import { systemApi } from '../../lib/systemApi';
 import { setToken } from '../../lib/apiFactory';
-
-const { Title, Paragraph } = Typography;
+import { AuthShell } from '../../components/shell/AuthShell';
 
 interface FormValues {
   email: string;
@@ -13,10 +13,7 @@ interface FormValues {
 }
 
 /**
- * P-L1 · 系统端登录（SaaS 平台方）
- * 路由：/system/login
- * 调：POST /api/v1/system/login
- * 详见 docs/04-UI需求.md §3 / docs/16-需求技术对照表 A4
+ * P-L1 · 系统端登录（SaaS 平台方）—— 详见 docs/04-b-ui-登录与聊天挂件.md §3.1
  */
 export function SystemLoginPage(): ReactElement {
   const navigate = useNavigate();
@@ -39,21 +36,66 @@ export function SystemLoginPage(): ReactElement {
   };
 
   return (
-    <Card style={{ maxWidth: 400, margin: '64px auto' }}>
-      <Title level={3}>平台管理登录</Title>
-      <Paragraph type="secondary">SaaS 平台方账号（建租户 / 跨租户运营）</Paragraph>
-      {errMsg !== null && <Alert type="error" message={errMsg} style={{ marginBottom: 16 }} />}
-      <Form<FormValues> layout="vertical" onFinish={onFinish} disabled={loading}>
-        <Form.Item name="email" label="邮箱" rules={[{ required: true, type: 'email' }]}>
-          <Input autoComplete="email" />
+    <AuthShell
+      roleLabel="system 子系统 · SaaS 平台方"
+      title="平台管理登录"
+      description="SaaS 平台方账号 · 跨租户运营"
+      badge={
+        <Tag color="magenta" style={{ margin: 0, fontWeight: 500 }}>
+          <ControlOutlined style={{ marginRight: 4 }} />
+          system
+        </Tag>
+      }
+    >
+      {errMsg !== null && (
+        <Alert
+          type="error"
+          showIcon
+          message={errMsg}
+          style={{ marginBottom: 18 }}
+        />
+      )}
+
+      <Form<FormValues>
+        layout="vertical"
+        onFinish={onFinish}
+        disabled={loading}
+        requiredMark={false}
+        size="large"
+      >
+        <Form.Item
+          name="email"
+          label="邮箱"
+          rules={[
+            { required: true, message: '请输入邮箱' },
+            { type: 'email', message: '邮箱格式不正确' },
+          ]}
+        >
+          <Input
+            prefix={<MailOutlined style={{ color: 'rgba(0,0,0,0.45)' }} />}
+            placeholder="你的邮箱"
+            autoComplete="email"
+          />
         </Form.Item>
-        <Form.Item name="password" label="密码" rules={[{ required: true }]}>
-          <Input.Password autoComplete="current-password" />
+
+        <Form.Item
+          name="password"
+          label="密码"
+          rules={[{ required: true, message: '请输入密码' }]}
+        >
+          <Input.Password
+            prefix={<LockOutlined style={{ color: 'rgba(0,0,0,0.45)' }} />}
+            placeholder="密码"
+            autoComplete="current-password"
+          />
         </Form.Item>
-        <Button type="primary" htmlType="submit" loading={loading} block>
-          登录
-        </Button>
+
+        <Form.Item style={{ marginBottom: 0 }}>
+          <Button type="primary" htmlType="submit" loading={loading} block size="large">
+            登录
+          </Button>
+        </Form.Item>
       </Form>
-    </Card>
+    </AuthShell>
   );
 }

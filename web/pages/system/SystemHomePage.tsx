@@ -1,42 +1,33 @@
 import type { ReactElement } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { Button, Card, Space, Typography } from 'antd';
-import { logout, getCurrentUser } from '../../lib/auth';
-import { JwtInspector } from '../../components/JwtInspector';
-import { systemApi } from '../../lib/systemApi';
+import { Card, Typography } from 'antd';
+import { RightOutlined, ShopOutlined } from '@ant-design/icons';
+import { Link } from 'react-router-dom';
+import { getCurrentUser } from '../../lib/auth';
+import { PageHeader } from '../../components/shell/PageHeader';
 
-const { Title, Paragraph } = Typography;
+const { Text } = Typography;
 
-/**
- * system 子系统首页（Step 3 占位）—— SaaS 平台方登录后的着陆页
- * 路由：/system
- * 业务页面在 Step 13+ 落
- */
 export function SystemHomePage(): ReactElement {
-  const navigate = useNavigate();
   const user = getCurrentUser();
+
   return (
-    <div style={{ maxWidth: 720 }}>
-      <Card>
-        <Title level={3}>平台管理</Title>
-        <Paragraph>
-          欢迎，<code>{user?.sub}</code>
-        </Paragraph>
-        <Paragraph type="secondary">
-          SaaS 平台方的工作台（建租户 / 跨租户运营）—— 业务页面在 Step 13+ 落地。
-        </Paragraph>
-        <Space>
-          <Button
-            onClick={() => {
-              logout();
-              navigate('/system/login');
-            }}
-          >
-            登出
-          </Button>
-        </Space>
-      </Card>
-      <JwtInspector api={systemApi} mePath="/me" />
+    <div>
+      <PageHeader
+        title="平台管理"
+        subtitle={<>欢迎，<Text strong>{user?.email ?? user?.sub}</Text></>}
+      />
+      <Link to="/system/tenants" style={{ display: 'block', maxWidth: 420 }}>
+        <Card hoverable styles={{ body: { padding: '18px 20px' } }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8 }}>
+            <ShopOutlined style={{ color: '#2f54eb', fontSize: 18 }} />
+            <Text strong style={{ fontSize: 15, flex: 1 }}>
+              租户管理
+            </Text>
+            <RightOutlined style={{ color: 'rgba(0,0,0,0.45)' }} />
+          </div>
+          <Text type="secondary">创建租户、修改到期时间、启用或禁用。</Text>
+        </Card>
+      </Link>
     </div>
   );
 }

@@ -4,7 +4,6 @@ import {
   Alert,
   Button,
   Card,
-  Empty,
   Input,
   InputNumber,
   List,
@@ -13,9 +12,12 @@ import {
   Typography,
   message,
 } from 'antd';
+import { ExperimentOutlined, SearchOutlined } from '@ant-design/icons';
 import { searchKnowledge, type SearchHit } from '../../lib/adminKnowledge';
+import { PageHeader } from '../../components/shell/PageHeader';
+import { EmptyState } from '../../components/shell/EmptyState';
 
-const { Title, Paragraph, Text } = Typography;
+const { Text, Paragraph } = Typography;
 
 const SCORE_COLOR = (s: number): string => {
   if (s >= 0.8) return 'green';
@@ -24,11 +26,8 @@ const SCORE_COLOR = (s: number): string => {
 };
 
 /**
- * /admin/knowledge/test —— 检索测试（Step 4 仅向量检索；BM25 / rerank 留给 Step 5）
+ * /admin/knowledge/test —— 检索测试
  * 详见 docs/04-c §5.3 + docs/16-c §C1
- *
- * 跟 04-c UI 草图的差异（Step 4 边界）：
- *  - 只显示 top 5 命中片段，不附带 AI 回答（Step 6 才接 LLM）
  */
 export function KnowledgeSearchPage(): ReactElement {
   const [query, setQuery] = useState('');
@@ -73,40 +72,53 @@ export function KnowledgeSearchPage(): ReactElement {
 
   return (
     <div>
-      <Space style={{ marginBottom: 16, justifyContent: 'space-between', display: 'flex' }}>
-        <Title level={3} style={{ margin: 0 }}>
-          检索测试
-        </Title>
-      </Space>
-      <Paragraph type="secondary">
-        输入问句 → 向量召回 top 5 命中文档块（按当前租户的知识库）。BM25 + 重排序后续 Step 5 落。
-      </Paragraph>
+      <PageHeader
+        title="检索测试"
+        subtitle="输入问句，查看当前租户知识库里最相近的文档块。"
+      />
 
       {errMsg !== null && (
-        <Alert type="error" showIcon message={errMsg} style={{ marginBottom: 16 }} />
+        <Alert
+          type="error"
+          showIcon
+          message={errMsg}
+          style={{ marginBottom: 16 }}
+        />
       )}
 
-      <Card style={{ marginBottom: 16 }}>
-        <Space.Compact style={{ width: '100%' }}>
-          <Input
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="输入测试问句（如：年假怎么算？）"
-            onPressEnter={() => void doSearch()}
-            allowClear
-            size="large"
-          />
-          <Button type="primary" size="large" loading={searching} onClick={() => void doSearch()}>
-            🔍 检索
-          </Button>
-        </Space.Compact>
-        <Space style={{ marginTop: 12 }}>
+      <Card style={{ marginBottom: 16, borderRadius: 12 }} styles={{ body: { padding: 20 } }}>
+        <Input.Search
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="输入测试问句（如：年假怎么算？）"
+          onSearch={() => void doSearch()}
+          enterButton={
+            <Space>
+              <SearchOutlined />
+              检索
+            </Space>
+          }
+          size="large"
+          loading={searching}
+          allowClear
+        />
+        <Space wrap size={20} style={{ marginTop: 16 }}>
           <span>
-            <Text type="secondary">topK：</Text>
-            <InputNumber min={1} max={50} value={topK} onChange={(v) => setTopK(Number(v ?? 5))} />
+            <Text type="secondary" style={{ marginRight: 8 }}>
+              topK
+            </Text>
+            <InputNumber
+              min={1}
+              max={50}
+              value={topK}
+              onChange={(v) => setTopK(Number(v ?? 5))}
+              style={{ width: 90 }}
+            />
           </span>
           <span>
-            <Text type="secondary">分数阈值：</Text>
+            <Text type="secondary" style={{ marginRight: 8 }}>
+              分数阈值
+            </Text>
             <InputNumber
               min={0}
               max={1}
@@ -114,40 +126,61 @@ export function KnowledgeSearchPage(): ReactElement {
               value={threshold}
               onChange={(v) => setThreshold(v === null ? null : Number(v))}
               placeholder="0-1，留空不过滤"
+              style={{ width: 140 }}
             />
           </span>
         </Space>
       </Card>
 
-      <Card title={lastQuery === null ? '命中片段' : `命中片段 · "${lastQuery}"`}>
+      <Card
+        title={
+          <Space>
+            <ExperimentOutlined style={{ color: '#2f54eb' }} />
+            {lastQuery === null ? '命中片段' : `命中片段 · "${lastQuery}"`}
+          </Space>
+        }
+        style={{ borderRadius: 12 }}
+      >
         {hits === null ? (
-          <Empty description="还没有检索结果" />
+          <EmptyState description="还没有检索结果；试试在上面的输入框问一句。" />
         ) : hits.length === 0 ? (
-          <Empty description="没有命中任何内容（试着调整 topK / 阈值，或先上传文档）" />
+          <EmptyState
+            title="没有命中"
+            description="试着调整 topK / 阈值，或先上传文档。"
+          />
         ) : (
           <List
             dataSource={hits}
             renderItem={(hit, idx) => (
-              <List.Item key={`${hit.doc_id}-${hit.chunk_index}`}>
-                <Space direction="vertical" size={4} style={{ width: '100%' }}>
-                  <Space>
-                    <Text strong>{idx + 1}.</Text>
+              <List.Item
+                key={`${hit.doc_id}-${hit.chunk_index}`}
+                style={{ padding: '14px 0' }}
+              >
+                <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                  <Space wrap size={8} align="center">
+                    <Text strong style={{ fontSize: 14, color: '#2f54eb' }}>
+                      #{idx + 1}
+                    </Text>
                     <Tag color="blue">{hit.source}</Tag>
-                    <Tag color={SCORE_COLOR(hit.score)}>相似度 {hit.score.toFixed(3)}</Tag>
+                    <Tag color={SCORE_COLOR(hit.score)} style={{ fontWeight: 500 }}>
+                      相似度 {hit.score.toFixed(3)}
+                    </Tag>
                     <Text type="secondary" style={{ fontSize: 12 }}>
                       chunk #{hit.chunk_index}
                     </Text>
                   </Space>
                   <Paragraph
-                    type="secondary"
                     style={{
                       marginBottom: 0,
-                      background: '#fafafa',
-                      padding: 8,
-                      borderRadius: 4,
+                      background: '#fafbfc',
+                      padding: '10px 14px',
+                      borderRadius: 8,
+                      border: '1px solid #f0f0f0',
                       whiteSpace: 'pre-wrap',
                       maxHeight: 240,
                       overflow: 'auto',
+                      fontSize: 13,
+                      lineHeight: 1.6,
                     }}
                   >
                     {hit.text}

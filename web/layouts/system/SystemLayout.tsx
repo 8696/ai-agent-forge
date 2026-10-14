@@ -1,80 +1,61 @@
-import type { ReactElement, ReactNode } from 'react';
-import { Layout, Menu, Space, Typography } from 'antd';
-import { Link, Outlet, useLocation } from 'react-router-dom';
-import { getCurrentUser } from '../../lib/auth';
-import { setToken } from '../../lib/apiFactory';
-import { ActiveModelsFooter } from '../../components/ActiveModelsFooter';
-
-const { Header, Content, Footer } = Layout;
-const { Text, Title } = Typography;
+import type { ReactElement } from 'react';
+import { Navigate, Outlet, useLocation } from 'react-router-dom';
+import { SharedShellLayout } from '../SharedShellLayout';
+import type { SidebarItem } from '../SharedShellLayout';
+import { DashboardOutlined, ShopOutlined } from '@ant-design/icons';
 
 /**
  * system 子系统 Layout（SaaS 平台方后台）
- * - role=system 才能进，否则 401 重定向
- * - 菜单：租户管理 / 平台设置（具体业务等 Step 13+ 落）
- * - 详见 docs/03-技术栈与规范.md §B.5
+ * - role=system 才能进
+ * - 只放已经落地的菜单
  */
-export function SystemLayout({ children }: { children?: ReactNode }): ReactElement {
+const SIDEBAR: SidebarItem[] = [
+  { key: '/system', icon: <DashboardOutlined />, label: '总览', to: '/system' },
+  {
+    key: '/system/tenants',
+    icon: <ShopOutlined />,
+    label: '租户',
+    to: '/system/tenants',
+  },
+];
+
+export function SystemLayout(): ReactElement {
   const location = useLocation();
 
-  // system 端点（如 login 页面）不走 auth guard
   if (location.pathname === '/system/login') {
-    return <>{children ?? <Outlet />}</>;
+    return <Outlet />;
   }
 
-  const user = getCurrentUser();
-  if (user === null) {
-    window.location.href = '/system/login';
-    return <></>;
-  }
-  if (user.role !== 'system') {
-    window.location.href = '/';
-    return <></>;
+  if (typeof window !== 'undefined') {
+    const token = window.localStorage.getItem('agent_platform_token');
+    if (token === null) {
+      return <Navigate to="/system/login" replace />;
+    }
+    const roleFromToken = readRoleFromToken(token);
+    if (roleFromToken !== null && roleFromToken !== 'system') {
+      return <Navigate to="/" replace />;
+    }
   }
 
   return (
-    <Layout style={{ minHeight: '100vh' }}>
-      <Header style={{ display: 'flex', alignItems: 'center', background: '#1f1f1f' }}>
-        <Title level={4} style={{ color: '#fff', margin: 0, marginRight: 32 }}>
-          AgentForge · 平台管理
-        </Title>
-        <Menu
-          theme="dark"
-          mode="horizontal"
-          selectedKeys={[location.pathname]}
-          items={[
-            { key: '/system', label: <Link to="/system">首页</Link> },
-            { key: '/system/tenants', label: <Link to="/system/tenants">租户管理</Link> },
-          ]}
-          style={{ flex: 1, minWidth: 0, background: '#1f1f1f' }}
-        />
-        <Space>
-          <Text style={{ color: '#fff' }}>{user.email ?? `system#${user.sub.slice(0, 8)}`}</Text>
-          <a
-            style={{ color: '#69b1ff' }}
-            onClick={(e) => {
-              e.preventDefault();
-              setToken(null);
-              window.location.href = '/system/login';
-            }}
-          >
-            登出
-          </a>
-        </Space>
-      </Header>
-      <Content style={{ padding: 32, background: '#f5f5f5' }}>{children ?? <Outlet />}</Content>
-      <Footer
-        style={{
-          textAlign: 'center',
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
-          gap: 6,
-        }}
-      >
-        <Text type="secondary">system 子系统 · SaaS 平台方</Text>
-        <ActiveModelsFooter />
-      </Footer>
-    </Layout>
+    <SharedShellLayout
+      role="system"
+      brandLabel="平台管理"
+      roleHint="平台管理"
+      sidebarItems={SIDEBAR}
+    >
+      <Outlet />
+    </SharedShellLayout>
   );
+}
+
+function readRoleFromToken(token: string): string | null {
+  try {
+    const parts = token.split('.');
+    if (parts.length !== 3) return null;
+    const payload = JSON.parse(atob(parts[1] ?? '')) as { role?: unknown };
+    return typeof payload.role === 'string' ? payload.role : null;
+  } catch {
+    return null;
+  }
 }

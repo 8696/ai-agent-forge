@@ -1,6 +1,6 @@
 import type { ReactElement } from 'react';
 import { useEffect, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import {
   Alert,
   Button,
@@ -10,6 +10,7 @@ import {
   Input,
   Modal,
   Popconfirm,
+  Select,
   Space,
   Table,
   Tag,
@@ -17,19 +18,18 @@ import {
   message,
 } from 'antd';
 import type { TableColumnsType } from 'antd';
+import { PlusOutlined, ReloadOutlined } from '@ant-design/icons';
 import dayjs, { type Dayjs } from 'dayjs';
 import { systemApi } from '../../lib/systemApi';
-
-const { Title, Paragraph } = Typography;
+import { PageHeader } from '../../components/shell/PageHeader';
+import { EmptyState } from '../../components/shell/EmptyState';
 
 interface TenantRow {
   id: string;
   code: string;
   name: string;
   plan: 'free' | 'pro' | 'enterprise';
-  /** F2 */
   status: 'active' | 'disabled';
-  /** F2；后端序列化 → ISO 字符串（也可能为 null） */
   expires_at: string | null;
   created_at: string;
   admin: { id: string; email: string; must_change_password: boolean } | null;
@@ -41,21 +41,22 @@ const PLAN_COLOR: Record<string, string> = {
   enterprise: 'gold',
 };
 
-/**
- * 渲染到期时间。
- *  - null    → 灰色「永不过期」
- *  - 已到期  → 红色 + 具体日期
- *  - 未到期  → 正常显示
- */
+const PLAN_LABEL: Record<string, string> = {
+  free: 'Free',
+  pro: 'Pro',
+  enterprise: 'Enterprise',
+};
+
 function renderExpiresAt(iso: string | null): ReactElement {
   if (iso === null) {
-    return <Tag color="default">永不过期</Tag>;
+    return <span>永不过期</span>;
   }
   const d = dayjs(iso);
+  const text = d.format('MM-DD HH:mm');
   if (d.isBefore(dayjs())) {
-    return <Tag color="red">{d.format('YYYY-MM-DD HH:mm')}（已到期）</Tag>;
+    return <span style={{ color: '#cf1322' }}>{text} 已到期</span>;
   }
-  return <span>{d.format('YYYY-MM-DD HH:mm')}</span>;
+  return <span>{text}</span>;
 }
 
 /**
@@ -67,12 +68,11 @@ export function SystemTenantsPage(): ReactElement {
   const [rows, setRows] = useState<TenantRow[] | null>(null);
   const [errMsg, setErrMsg] = useState<string | null>(null);
 
-  // F2 状态筛选 / 编辑操作涉及的 modal
+  // F2
   const [editingRow, setEditingRow] = useState<TenantRow | null>(null);
   const [expiresForm] = Form.useForm<{ expires_at: Dayjs | null }>();
 
-  // A2：建租户（system 前端入口，后端在 src/gateway/system/tenant-routes.ts:38）
-  // 字段集严格对齐后端 createTenantSchema（src/lib/validators.ts §36-41）
+  // A2 建租户
   const [creatingOpen, setCreatingOpen] = useState(false);
   interface CreateTenantForm {
     code: string;
@@ -97,9 +97,6 @@ export function SystemTenantsPage(): ReactElement {
     void load();
   }, []);
 
-  // ===== F2 actions =====
-
-  /** 把 expires_at 写成 ISO 字符串（null = 永不过） */
   const toIsoOrNull = (v: Dayjs | null | undefined): string | null =>
     v === undefined || v === null ? null : v.toDate().toISOString();
 
@@ -133,9 +130,6 @@ export function SystemTenantsPage(): ReactElement {
     }
   };
 
-  // ===== A2：创建租户 =====
-
-  /** 提交后端 createTenantSchema 形如 { code, name, admin_email, admin_password } */
   const submitCreate = async (): Promise<void> => {
     const v = await createForm.validateFields().catch(() => null);
     if (v === null) return;
@@ -154,7 +148,7 @@ export function SystemTenantsPage(): ReactElement {
       const status = (e as { response?: { status?: number } }).response?.status;
       const data = (e as { response?: { data?: { message?: string } } }).response?.data;
       if (status === 400 && data?.message !== undefined) {
-        message.error(data.message); // 后端原样返（如「租户号已被使用」）
+        message.error(data.message);
       } else if (status === 401) {
         message.error('鉴权失败（需 system 角色）');
       } else {
@@ -168,39 +162,73 @@ export function SystemTenantsPage(): ReactElement {
       title: '租户号',
       dataIndex: 'code',
       key: 'code',
-      render: (code: string, row) => <Link to={`/system/tenants/${row.id}`}>{code}</Link>,
+      width: 120,
+      ellipsis: true,
+      render: (code: string, row) => (
+        <span
+          onClick={() => navigate(`/system/tenants/${row.id}`)}
+          style={{
+            color: '#2f54eb',
+            cursor: 'pointer',
+            fontWeight: 500,
+          }}
+        >
+          {code}
+        </span>
+      ),
     },
-    { title: '名称', dataIndex: 'name', key: 'name' },
+    { title: '名称', dataIndex: 'name', key: 'name', ellipsis: true },
     {
       title: '套餐',
       dataIndex: 'plan',
       key: 'plan',
-      render: (plan: string) => <Tag color={PLAN_COLOR[plan] ?? 'default'}>{plan}</Tag>,
+      width: 88,
+      render: (plan: string) => (
+        <Tag color={PLAN_COLOR[plan] ?? 'default'} style={{ fontWeight: 500 }}>
+          {PLAN_LABEL[plan] ?? plan}
+        </Tag>
+      ),
     },
     {
       title: '状态',
       dataIndex: 'status',
       key: 'status',
+      width: 80,
       render: (s: TenantRow['status']) =>
-        s === 'active' ? <Tag color="success">启用</Tag> : <Tag color="error">已禁用</Tag>,
+        s === 'active' ? (
+          <Tag color="success" style={{ fontWeight: 500 }}>
+            启用
+          </Tag>
+        ) : (
+          <Tag color="error" style={{ fontWeight: 500 }}>
+            已禁用
+          </Tag>
+        ),
     },
     {
       title: '到期时间',
       dataIndex: 'expires_at',
       key: 'expires_at',
+      width: 156,
+      ellipsis: true,
       render: (iso: TenantRow['expires_at']) => renderExpiresAt(iso),
     },
     {
       title: '初始 admin',
       dataIndex: 'admin',
       key: 'admin',
+      ellipsis: true,
       render: (admin: TenantRow['admin']) =>
         admin === null ? (
           <Tag color="red">无</Tag>
         ) : (
           <Space direction="vertical" size={0}>
-            <span>{admin.email}</span>
-            {admin.must_change_password && <Tag color="orange">待改密</Tag>}
+            <span style={{ fontWeight: 500 }}>{admin.email}</span>
+            {admin.must_change_password && (
+              <Tag color="orange" style={{ marginInlineEnd: 0 }}>
+                待改密
+              </Tag>
+            )}
           </Space>
         ),
     },
@@ -208,15 +236,18 @@ export function SystemTenantsPage(): ReactElement {
       title: '创建时间',
       dataIndex: 'created_at',
       key: 'created_at',
+      width: 156,
+      ellipsis: true,
       render: (t: string) => new Date(t).toLocaleString(),
     },
     {
       title: '操作',
       key: 'actions',
-      // 行点击进详情时，操作列要 stopPropagation，避免误触发 navigate
+      width: 132,
       render: (_: unknown, row) => (
-        <Space onClick={(e) => e.stopPropagation()}>
+        <Space size={0} onClick={(e) => e.stopPropagation()}>
           <Button
+            type="link"
             size="small"
             onClick={() => {
               expiresForm.setFieldsValue({
@@ -235,22 +266,17 @@ export function SystemTenantsPage(): ReactElement {
             }
             okText="确认"
             cancelText="取消"
+            okButtonProps={row.status === 'active' ? { danger: true } : { type: 'primary' }}
             onConfirm={() => void onToggleStatus(row)}
           >
-            {row.code === 'system' ? (
-              // 防自锁：SaaS 平台方自己的初始租户禁止禁用
-              <Button size="small" disabled>
-                {row.status === 'active' ? '禁用' : '启用'}
-              </Button>
-            ) : (
-              <Button
-                size="small"
-                danger={row.status === 'active'}
-                type={row.status === 'active' ? 'default' : 'primary'}
-              >
-                {row.status === 'active' ? '禁用' : '启用'}
-              </Button>
-            )}
+            <Button
+              type="link"
+              size="small"
+              danger={row.status === 'active'}
+              disabled={row.code === 'system'}
+            >
+              {row.status === 'active' ? '禁用' : '启用'}
+            </Button>
           </Popconfirm>
         </Space>
       ),
@@ -259,31 +285,43 @@ export function SystemTenantsPage(): ReactElement {
 
   return (
     <div>
-      <Space style={{ marginBottom: 16, justifyContent: 'space-between', display: 'flex' }}>
-        <Title level={3} style={{ margin: 0 }}>
-          租户管理
-        </Title>
-        <Space>
-          <Button type="primary" onClick={() => setCreatingOpen(true)}>
-            + 创建租户
-          </Button>
-          <Button onClick={() => void load()}>刷新</Button>
-        </Space>
-      </Space>
-      <Paragraph type="secondary">
-        SaaS 平台方：列出所有租户、查看基本资料、重置租户 admin 密码、修改到期时间、启用 /
-        禁用租户。
-      </Paragraph>
+      <PageHeader
+        title="租户管理"
+        subtitle="查看租户、修改到期时间、启用或禁用。"
+        extra={
+          <>
+            <Button icon={<ReloadOutlined />} onClick={() => void load()}>
+              刷新
+            </Button>
+            <Button
+              type="primary"
+              icon={<PlusOutlined />}
+              onClick={() => setCreatingOpen(true)}
+            >
+              创建租户
+            </Button>
+          </>
+        }
+      />
+
       {errMsg !== null && (
-        <Alert type="error" showIcon message={errMsg} style={{ marginBottom: 16 }} />
+        <Alert
+          type="error"
+          showIcon
+          message={errMsg}
+          style={{ marginBottom: 16 }}
+        />
       )}
-      <Card>
+
+      <Card styles={{ body: { padding: 16, overflow: 'hidden' } }}>
         <Table
           rowKey="id"
           columns={columns}
           dataSource={rows ?? []}
           loading={rows === null}
           pagination={false}
+          tableLayout="fixed"
+          locale={{ emptyText: rows === null ? '加载中…' : <EmptyState description="还没有租户" /> }}
           onRow={(row) => ({
             onClick: () => navigate(`/system/tenants/${row.id}`),
             style: { cursor: 'pointer' },
@@ -291,7 +329,7 @@ export function SystemTenantsPage(): ReactElement {
         />
       </Card>
 
-      {/* F2：修改到期时间 */}
+      {/* F2 */}
       <Modal
         open={editingRow !== null}
         title={editingRow === null ? '' : `修改租户 ${editingRow.code} 的到期时间`}
@@ -320,13 +358,10 @@ export function SystemTenantsPage(): ReactElement {
           >
             <DatePicker showTime style={{ width: '100%' }} placeholder="留空表示永不过期" />
           </Form.Item>
-          <Paragraph type="secondary" style={{ marginTop: -8 }}>
-            所有改动都会写入 audit_logs（系统级日志），可在「审计日志」页面查询。
-          </Paragraph>
         </Form>
       </Modal>
 
-      {/* A2：创建租户（system 在 /system/tenants 的「+ 创建租户」入口；后端 POST /api/v1/system/tenants） */}
+      {/* A2 */}
       <Modal
         open={creatingOpen}
         title="创建租户"
@@ -344,13 +379,11 @@ export function SystemTenantsPage(): ReactElement {
           form={createForm}
           layout="vertical"
           preserve={false}
-          // 服务端是同步建库（事务），不传 plan / expires_at 走默认：plan='free' / expires_at=null
           initialValues={{ code: '', name: '', admin_email: '', admin_password: '' }}
         >
           <Form.Item
             name="code"
             label="租户号"
-            // 对齐 src/lib/validators.ts §tenantCodeSchema
             rules={[
               { required: true, message: '请输入租户号' },
               { pattern: /^[a-z0-9-]+$/, message: '只能包含小写字母 / 数字 / 连字符' },
@@ -390,9 +423,6 @@ export function SystemTenantsPage(): ReactElement {
           >
             <Input.Password placeholder="至少 8 字符" autoComplete="new-password" />
           </Form.Item>
-          <Paragraph type="secondary" style={{ marginTop: -8, marginBottom: 0 }}>
-            套餐 / 到期时间走默认值（free + 永不过期），建好之后可以用列表行上的「改到期」「启停」按钮后续调整。
-          </Paragraph>
         </Form>
       </Modal>
     </div>
