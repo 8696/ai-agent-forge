@@ -1,6 +1,9 @@
-# 05 · 数据模型
+# 05-a · 数据模型 · MySQL
 
-> MySQL 8.0，字符集 `utf8mb4_unicode_ci`。所有时间字段用 `DATETIME(6)`（微秒精度，便于 trace 分析），主键统一 `VARCHAR(36)`（UUID）。
+> **本文件是 `05-数据模型.md` 的 §5.1-§5.5 节**（原主文件已拆分为 05-a / 05-b 两份）。本份负责**MySQL 12 张核心表的 DDL + 索引策略 + 数据量估算 + 备份 + 迁移管理**。
+> 向量库 Qdrant 部分见 `05-b-数据模型-qdrant.md`。
+
+MySQL 8.0，字符集 `utf8mb4_unicode_ci`。所有时间字段用 `DATETIME(6)`（微秒精度，便于 trace 分析），主键统一 `VARCHAR(36)`（UUID）。
 
 ## 5.1 核心表
 
@@ -14,14 +17,19 @@ CREATE TABLE tenants (
   plan ENUM('free', 'pro', 'enterprise') DEFAULT 'free' COMMENT '套餐',
   settings JSON COMMENT '租户级配置（prompt_version / model / 限额）',
   api_key_hash VARCHAR(255) COMMENT '租户 API 密钥 bcrypt hash',
+  status ENUM('active', 'disabled') DEFAULT 'active' COMMENT '租户状态；F2 配套；disabled 禁止 admin/customer 登录',
+  expires_at DATETIME(6) NULL COMMENT '到期时间；F2 配套；NULL = 永不过期；到期后禁止 admin/customer 登录',
   created_at DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6) COMMENT '创建时间',
   updated_at DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6) COMMENT '更新时间',
   INDEX idx_code (code),
-  INDEX idx_plan (plan)
+  INDEX idx_plan (plan),
+  INDEX idx_status_expires (status, expires_at) COMMENT 'F2 配套：登录按 (status, expires_at) 复合索引过滤'
 ) COMMENT '租户主表';
 ```
 
 > **code 字段是登录和挂件 URL 的入口**：邮箱 + 密码 + 租户号 三件套才能登；缺租户号则无法区分跨租户的同名邮箱。
+>
+> **status / expires_at（F2 字段语义）**：`status='active'` 且 `expires_at` 未到（NULL 视为永远不过）才允许 `admin/login` + `customer/login`。任一条件不满足 → 401「租户不可用」（**响应体跟「邮箱或密码错」完全一致**，防账号枚举）。`code='system'` 的初始租户禁止被禁用（防 SaaS 平台方自锁）。
 
 ### 用户表（users）
 
@@ -258,7 +266,7 @@ CREATE TABLE system_users (
   email VARCHAR(255) NOT NULL UNIQUE COMMENT '系统级管理员邮箱（唯一）',
   password_hash VARCHAR(255) NOT NULL COMMENT 'bcrypt hash',
   name VARCHAR(100) COMMENT '显示名',
-  role ENUM('super_admin') DEFAULT 'super_admin' COMMENT '唯一角色：super_admin',
+  role ENUM('system') DEFAULT 'system' COMMENT '唯一角色：system（SaaS 平台方）',
   failed_login_count INT DEFAULT 0 COMMENT '登录失败计数',
   locked_until DATETIME(6) NULL COMMENT '账号锁定截止时间',
   last_login_at DATETIME(6) NULL COMMENT '最后登录时间',
@@ -268,6 +276,8 @@ CREATE TABLE system_users (
 ```
 
 > 第一个 `system_users` 用 SQL 手工建（不需要 system_users 自己建自己的功能）。
+>
+> **注**：本系统不引入 `agent`（租户客服坐席）角色——AI 客服直接接待客户。`users.role` ENUM 仍保留 `('admin', 'agent', 'customer')` 是因为历史 schema 已存在，代码层面拒收 agent 登录。Step 13+ 决定要不要把 ENUM 收紧成 `('admin', 'customer')`。
 
 ### 租户 API 密钥表（api_keys · 外部系统接入）
 
@@ -347,22 +357,22 @@ CREATE TABLE evaluation_run_items (
 
 ## 5.3 数据量估算（按 1000 DAU）
 
-| 表 | 日增量 | 年增量 | 总占用（含索引） |
-|----|--------|--------|------------------|
-| system_users | 0 | 1~5 | < 1 KB |
-| tenants | 0 | ~10 | < 1 MB |
-| users | ~5 | ~2000 | ~500 KB |
-| sessions | ~3000 | ~110 万 | ~150 MB |
-| messages | ~30000 | ~1100 万 | ~3 GB |
-| documents | ~50 | ~2 万 | ~200 MB |
-| evaluation_datasets / evaluation_items | ~1 条/月 | ~2000 | ~50 MB |
-| evaluation_runs | 4 | ~1500 | ~1 MB |
-| evaluation_run_items | ~800 | ~30 万 | ~80 MB |
-| traces | ~3000 | ~110 万 | ~800 MB |
-| spans | ~30000 | ~1100 万 | ~5 GB |
-| api_keys | < 1 | ~10 | < 1 MB |
-| prompt_versions | < 1 | ~20 | < 1 MB |
-| audit_logs | ~300 | ~10 万 | ~50 MB |
+| 表                                     | 日增量   | 年增量   | 总占用（含索引） |
+| -------------------------------------- | -------- | -------- | ---------------- |
+| system_users                           | 0        | 1~5      | < 1 KB           |
+| tenants                                | 0        | ~10      | < 1 MB           |
+| users                                  | ~5       | ~2000    | ~500 KB          |
+| sessions                               | ~3000    | ~110 万  | ~150 MB          |
+| messages                               | ~30000   | ~1100 万 | ~3 GB            |
+| documents                              | ~50      | ~2 万    | ~200 MB          |
+| evaluation_datasets / evaluation_items | ~1 条/月 | ~2000    | ~50 MB           |
+| evaluation_runs                        | 4        | ~1500    | ~1 MB            |
+| evaluation_run_items                   | ~800     | ~30 万   | ~80 MB           |
+| traces                                 | ~3000    | ~110 万  | ~800 MB          |
+| spans                                  | ~30000   | ~1100 万 | ~5 GB            |
+| api_keys                               | < 1      | ~10      | < 1 MB           |
+| prompt_versions                        | < 1      | ~20      | < 1 MB           |
+| audit_logs                             | ~300     | ~10 万   | ~50 MB           |
 
 向量数据存 Qdrant，不占 MySQL 空间。**messages** 和 **spans** 是增长主力，要按月份分区（PARTITION BY RANGE）以控制单表大表查询性能。
 
@@ -379,138 +389,3 @@ CREATE TABLE evaluation_run_items (
 - 模型定义在 `src/models/`（`sequelize-typescript` 装饰器风格），迁移文件在 `src/migrations/`
 - 重大变更（删字段、改字段类型）走 PR 评审 + staging 验证 + 灰度
 - 文档归档：每个发版记录 schema 变更日志，写在 `docs/changelog/db.md`
-
----
-
-## 5.6 向量库 Qdrant（不进 MySQL 的那部分）
-
-> **整个系统的数据 = MySQL（结构化）+ Qdrant（向量）两部分**。
-> 这节专门说 Qdrant 那边存什么、怎么存、怎么跟 MySQL 对上。
-
-### 5.6.1 为什么向量不存 MySQL
-
-| 维度 | MySQL | Qdrant |
-|------|-------|--------|
-| 数据类型 | 文本 / 数字 / JSON | 浮点数向量（1536 维）+ payload |
-| 索引 | B+ 树 | HNSW（近似最近邻 ANN） |
-| 检索 1 万条 | 全表扫描 → 秒级 | 向量索引 → 毫秒级 |
-| 适合 | 事务 / JOIN / 精确过滤 | 相似度搜索 / 语义检索 |
-
-> 1 个 1536 维 float 向量 ≈ 6 KB；1 万块 = 60 MB。MySQL 存这些字段 + 跑相似度查询 ≈ 性能灾难。Qdrant 专门干这个。
-
-### 5.6.2 Collection 设计
-
-```
-Collection: documents          (租户共享一个 collection)
-每条记录（vector + payload）= 一个文档块
-```
-
-**Vector（1536 维 float32）**：
-- 来自 Embedding API（OpenAI text-embedding-3-small 或 bge-m3）
-- 维度固定 1536，跨租户一致
-
-**Payload（JSON 元数据）**：
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `doc_id` | string | 关联 MySQL `documents.id` |
-| `chunk_index` | int | 块在文档中的位置（0-based） |
-| `text` | string | 块的原文（给 LLM 做引用） |
-| `tenant_id` | string | 租户隔离（搜索时强制过滤） |
-| `source` | string | 文档标题（UI 显示用） |
-| `department` | string? | 可选：部门（未来按部门过滤） |
-| `updated_at` | int (timestamp) | 文档更新时间 |
-
-> **关键**：搜索时**强制加 `tenant_id` 过滤**，避免跨租户泄露。这条在 `src/rag/search.ts` 写死，不让上层绕过。
-
-### 5.6.3 Collection 操作
-
-```typescript
-// 上传时（src/rag/ingest.ts）
-for (let i = 0; i < chunks.length; i++) {
-  await qdrant.upsert('documents', {
-    points: [{
-      id: `${docId}-${i}`,
-      vector: embeddings[i],
-      payload: {
-        doc_id: docId,
-        chunk_index: i,
-        text: chunks[i].text,
-        tenant_id: tenantId,
-        source: title,
-        updated_at: Date.now()
-      }
-    }]
-  });
-}
-
-// 搜索时（src/rag/search.ts）
-const results = await qdrant.search('documents', {
-  vector: queryEmbedding,
-  limit: topK,
-  filter: {
-    must: [
-      { key: 'tenant_id', match: { value: tenantId } },  // ← 强制租户隔离
-    ]
-  }
-});
-```
-
-### 5.6.4 跟 MySQL 的关联
-
-| Qdrant 字段 | 关联到 MySQL |
-|-------------|------------|
-| `payload.doc_id` | `documents.id` |
-| `payload.tenant_id` | `tenants.id`（也写进 `documents.tenant_id` 做冗余） |
-| `documents.chunk_count` | Qdrant 里这个文档对应的点数量 |
-| `documents.status` | `uploaded` / `indexing` / `ready` / `failed` |
-
-**没有 Qdrant 的数据**：MySQL 不直接存向量；只有元数据（doc_id、status、chunk_count）。
-**没有 MySQL 的数据**：Qdrant 不存租户名、用户信息、文档标题的详细元数据；只存搜索需要的 payload。
-
-### 5.6.5 备份与迁移
-
-- **Qdrant 数据备份**：`curl -X POST http://localhost:6333/collections/documents/snapshots`（导出快照文件）
-- **Qdrant 数据迁移**：快照文件可恢复到另一个 Qdrant 实例
-- **跟 MySQL 一起备份**：快照存 `./data/qdrant-snapshot/`，跟 `./backups/mysql-*.sql` 一起管理
-
-### 5.6.6 完整的 RAG 数据流（PDF 上传 → 检索回答）
-
-```
-[1] 用户上传 PDF
-    │
-    ▼
-[2] 后端 Koa 接收文件
-    │
-    ├─→ 写本地 ./data/uploads/{tenant_id}/{nanoid}.pdf
-    ├─→ 写 MySQL documents 表（status='indexing'）
-    │
-    ▼
-[3] 拆块：PDF → text → splitByChunk (800字/块, overlap=150)
-    │
-    ▼
-[4] Embedding API → 每个块得到 1536 维向量
-    │
-    ▼
-[5] 写 Qdrant
-    │  每个点：
-    │    vector: [0.012, ..., 0.567]   (1536 维)
-    │    payload: { doc_id, chunk_index, text, tenant_id, source }
-    │
-    ▼
-[6] 更新 MySQL documents.status='ready' + chunk_count=42
-    │
-    ▼
-[7] 用户在 P1 聊天问问题
-    │
-    ▼
-[8] RAG 检索（src/rag/search.ts）
-    │  query → embedding → Qdrant.search(filter: tenant_id)
-    │  → top 5 命中的 payload.text
-    │
-    ▼
-[9] 把命中片段塞进 LLM system prompt
-    │
-    ▼
-[10] Vercel AI SDK streamText() → 流式返回答案 + 引用卡片
-```

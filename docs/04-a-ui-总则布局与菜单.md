@@ -1,0 +1,214 @@
+# 04-a · UI 需求 · 设计总则、布局与菜单
+
+> **本文件是 `04-UI需求.md` 的 §0-§2 节**（原主文件已拆分为 04-a / 04-b / 04-c / 04-d 四份）。本份负责**设计总则 / 整体布局 / 菜单设计**。
+> 登录与聊天挂件见 `04-b-ui-登录与聊天挂件.md`；后台管理页面见 `04-c-ui-后台管理页面.md`；系统级与公共组件见 `04-d-ui-系统级与公共组件.md`。
+
+> 这份文档是**前端工程师照着就能做**的 UI 规范。读完后能完整搭建出本系统的所有页面。
+> 框架：**Ant Design 5**（React 18 + Vite）；不支持 Next.js、不用 Tailwind、不用 shadcn/ui。
+> 所有可见文案用**中文**（zh_CN locale）。
+
+---
+
+## 0. 设计总则
+
+### 0.1 技术选型
+
+| 项       | 选型                                              |
+| -------- | ------------------------------------------------- |
+| 组件库   | **Ant Design 5**                                  |
+| 样式     | AntD ConfigProvider + token 定制（不引 Tailwind） |
+| 路由     | React Router DOM 6                                |
+| 状态管理 | Zustand（按业务拆 store）                         |
+| HTTP     | Axios + 拦截器                                    |
+| 图表     | ECharts（`echarts-for-react`）                    |
+| Markdown | react-markdown + remark-gfm + highlight.js        |
+| 实时通信 | SSE（`fetch` + ReadableStream）                   |
+| 时间     | Day.js（AntD 配套）                               |
+| 图标     | `@ant-design/icons`                               |
+| 表单     | AntD Form + Zod 校验                              |
+| 错误兜底 | react-error-boundary                              |
+
+### 0.2 主题与色彩
+
+| Token          | 值         | 用途                |
+| -------------- | ---------- | ------------------- |
+| `colorPrimary` | `#1677ff`  | 主题蓝（AntD 默认） |
+| `colorSuccess` | `#52c41a`  | 成功 / 已索引       |
+| `colorWarning` | `#faad14`  | 警告 / 索引中       |
+| `colorError`   | `#ff4d4ef` | 错误 / 失败         |
+| `borderRadius` | `6`        | 通用圆角            |
+| `fontSize`     | `14`       | 基础字号            |
+
+- **支持深色模式**（AntD `theme.darkAlgorithm`），右上角切换
+- 浅色为默认
+
+> **整页不引用任何图片资源**。UI 装饰元素（icon / logo / avatar / 占位）一律用 **AntD 图标**（`@ant-design/icons`）替代。
+
+| 场景         | 不要                   | 改用                                                                                  |
+| ------------ | ---------------------- | ------------------------------------------------------------------------------------- |
+| 公司 Logo    | `image: 'logo.png'`    | `<Avatar shape="circle" style={{ background: '#1677ff' }}><RobotOutlined /></Avatar>` |
+| 用户头像     | `image: avatar.png`    | `<Avatar icon={<UserOutlined />} />`（无头像时）                                      |
+| 文件类型图标 | `image: file-icon.png` | `<FilePdfOutlined />` / `<FileWordOutlined />` / `<FileTextOutlined />`（按扩展名选） |
+| 占位插画     | `image: empty.png`     | AntD `<Empty />`（自带 SVG）                                                          |
+| 状态指示     | `image: success.png`   | AntD `<Badge status="success" />` / `<CheckCircleOutlined />`                         |
+| 操作按钮图标 | `image: button.png`    | AntD `icon` prop（如 `<Button icon={<DeleteOutlined />}>删除</Button>`）              |
+
+**例外（这些是真内容，不是 UI 装饰）**：
+
+- 用户上传的图片（聊天里发给 AI 看的）
+- AI 生成的图片（图像生成功能输出）
+- 用户上传的文档预览（PDF 第一页缩略图）
+
+> 例外里的图片用 `<img>` 标签或 AntD `<Image>` 组件展示；其余一律 AntD 图标。
+
+### 0.5 命名约定
+
+---
+
+## 1. 整体布局
+
+### 1.1 后台管理布局（`<AdminLayout />`）
+
+```
+┌─────────────────────────────────────────────────────────┐
+│ Header（高 56px）                                       │
+│ ☰ 折叠 / 展开 │ 租户名 │ [🔍] [🔔 3] [☀/🌙] [👤 用户菜单] │
+├──────────┬──────────────────────────────────────────────┤
+│ Sider    │ Content（铺满）                              │
+│ (240px)  │                                              │
+│ 折叠后 64│ ┌── 面包屑 ──┐                              │
+│ 菜单     │  当前位置                                     │
+│         │                                              │
+│ 📊 看板  │ ┌── 页面内容 ──┐                            │
+│ 📚 知识库 │                                               │
+│ 🤖 模型  │                                               │
+│ 🛠 工具  │                                               │
+│ 📈 评测  │                                               │
+│ 📊 观测  │                                               │
+│ 👥 用户  │                                               │
+│ ⚙ 设置  │                                               │
+└──────────┴──────────────────────────────────────────────┘
+```
+
+- **Header**：左 折叠按钮 + 租户名（admin 切租户时显示下拉）；中 全局搜索（占位：跳到 Trace 详情）；右 通知（红点 + Dropdown 列出最近告警）+ 主题切换 + 用户菜单
+- **Sider**：菜单固定项 + 折叠状态存 localStorage
+- **Content**：上方面包屑 + 主内容
+
+### 1.2 聊天挂件布局（`<WidgetLayout />`）
+
+```
+┌─────────────────────────────────┐
+│ 🏢 公司 Logo  客服 · 在线        │ ← Header（40px，可关闭）
+├─────────────────────────────────┤
+│ ┌─────┐ ┌─────────────────────┐ │
+│ │历史 │ │                      │ │
+│ │会话 │ │  消息列表             │ │
+│ │(可  │ │  （按时间倒序）       │ │
+│ │折叠)│ │                      │ │
+│ │     │ │  ▢ 思考模式 ✓         │ │
+│ │     │ │                      │ │
+│ │     │ │  [输入框] [📎] [🎤] [发送]│
+│ │     │ │  [思考] [图像] [文件]   │ ← 输入框上方 toggle
+│ └─────┘ └─────────────────────┘ │
+└─────────────────────────────────┘
+```
+
+- **紧凑模式**：边距更小、字号略小、AntD 主题 token 临时覆盖
+- **可隐藏历史侧栏**：默认隐藏，点了历史按钮展开
+- **可关闭整个挂件**：右上角 × 按钮（嵌入网页时使用）
+
+### 1.3 公开页面布局
+
+- 登录页：全屏居中卡片（白底，圆角 8，阴影 4）
+- 404 / 500：全屏居中 `<Result />` + 按钮
+
+---
+
+## 2. 菜单设计
+
+### 2.1 SaaS 平台方菜单（`/system/*`）
+
+```
+📊 总览
+  └─ 总览页 (KPI、租户数、告警)
+
+🏢 租户
+  └─ 租户列表
+       └─ 创建租户（弹窗 Drawer）
+
+⚙ 系统
+  └─ 平台方账号（改密码）
+```
+
+### 2.2 租户后台菜单（`/admin/*`）
+
+```
+📊 看板
+  └─ Dashboard（关键指标 + 异常告警）
+
+📚 知识库
+  ├─ 文档管理（P8 · 列表 + 上传 + 状态）
+  └─ 检索测试（输入问句，看 top 5 命中的片段）★ 关键
+       └─ 检索历史
+
+🤖 模型 & 提示词
+  ├─ 模型选择（C4 · 当前供应商 + 备选）
+  └─ 提示词配置（C3 · 文件编辑器 + 版本切换）
+
+🛠 工具
+  ├─ 工具列表（C2 / Phase 2）
+  └─ 工具调用日志（Phase 2）
+
+📈 评测
+  ├─ 评测集（P6 · 上传 + 列表）
+  └─ 评测结果（P7 · 分数 + 趋势 + 裁判理由）
+
+📊 观测
+  ├─ Trace 列表（P4 · 按时间 / 用户 / 状态筛选）
+  │   └─ Trace 详情（时间线 + 单步详情）
+  ├─ 成本分析（P5 · 按用户 / 场景 / 模型拆解）
+  └─ 告警规则
+
+👥 用户
+  ├─ 用户列表（P10 · 含创建 / 改 / 删 / 重置密码）
+  └─ 操作审计
+
+⚙ 设置
+  ├─ 租户配置（E2 · 限额 / 告警阈值）
+  ├─ 安全（D4 · 注入 / 审核 / 脱敏开关）
+  └─ API 密钥
+```
+
+> **预留菜单项**：未来要加的功能（比如「协作 / 团队管理 / 计费」）菜单位置已经留好，加新菜单项就行。
+
+### 2.3 前台聊天挂件（无菜单）
+
+公开挂件是单页面，不需要侧栏菜单：
+
+- 主区：聊天界面
+- 隐藏侧栏：会话历史列表（点了展开）
+- 用户头像菜单：登录 / 退出 / 历史记录
+
+### 2.4 AntD Menu 配置示例
+
+```typescript
+const adminMenuItems = [
+  { key: '/admin/dashboard', icon: <DashboardOutlined />, label: '看板' },
+  {
+    key: 'knowledge',
+    icon: <BookOutlined />,
+    label: '知识库',
+    children: [
+      { key: '/admin/knowledge/documents', label: '文档管理' },
+      { key: '/admin/knowledge/test', label: '检索测试' }
+    ]
+  },
+  { key: '/admin/model', icon: <RobotOutlined />, label: '模型 & 提示词' },
+  { key: '/admin/evaluation', icon: <BarChartOutlined />, label: '评测' },
+  { key: '/admin/observability', icon: <LineChartOutlined />, label: '观测' },
+  { key: '/admin/users', icon: <TeamOutlined />, label: '用户' },
+  { key: '/admin/settings', icon: <SettingOutlined />, label: '设置' }
+];
+```
+
+---

@@ -1,0 +1,322 @@
+# 04-d · UI 需求 · 系统级页面、公共组件与扩展
+
+> **本文件是 `04-UI需求.md` 的 §6-§13 节**（原主文件已拆分为 04-a / 04-b / 04-c / 04-d 四份）。本份负责**SaaS 平台方页面 / 公共组件 / 交互模式 / 主题 / 扩展点 / 验收 / 路由清单 / 与其他文档的关系**。
+> 设计总则 / 布局 / 菜单见 `04-a-ui-总则布局与菜单.md`；登录与聊天挂件见 `04-b-ui-登录与聊天挂件.md`；后台管理页面见 `04-c-ui-后台管理页面.md`。
+
+---
+
+## 6. 系统级页面（SaaS 平台方）
+
+### 6.1 租户列表 `/system/tenants`
+
+```
+┌────────────────────────────────────────────────────────────────┐
+│  租户管理                                  [+ 创建租户]          │
+│                                                                  │
+│  [搜索框]  [套餐筛选]  [状态筛选 active/disabled]                │
+│                                                                  │
+│  ┌──────────────────────────────────────────────────────────┐ │
+│  │ ☐ │ 租户号     │ 名称 │ 套餐 │ 状态      │ 到期时间      │ 用户数 │ 创建时间   │ 操作              │ │
+│  │ ☐ │ acme-corp  │ Acme │ pro  │ ✅ 启用   │ 2026-12-31   │ 12   │ 2024-01  │ 改到期 启停 删除     │ │
+│  │ ☐ │ globex     │ Glob │ free │ ✅ 启用   │ 永不过期     │ 3    │ 2024-02  │ 改到期 启停 删除     │ │
+│  │ ☐ │ wayne      │ Wayne│ ent  │ ⛔ 已禁用  │ 2025-08-01   │ 8    │ 2023-11  │ 改到期 启用 删除     │ │
+│  └──────────────────────────────────────────────────────────┘ │
+└────────────────────────────────────────────────────────────────┘
+```
+
+- 列表：租户号 / 名称 / 套餐 / **状态（F2：active / disabled，AntD Tag 着色 `success` / `error`）** / **到期时间（F2：用 Day.js 渲染 ISO8601；「永不过期」灰色文字；过期红色）** / 用户数 / 创建时间
+- 「创建租户」按钮：弹窗（租户号 / 名称 / 套餐 / **到期时间（可选，DatePicker，无填 = 永不过期）** / 初始管理员邮箱 + 密码）
+- 「**改到期**」按钮（行操作，F2）：弹窗 DatePicker，可选「不限」清空到期
+- 「**启停**」按钮（行操作，F2）：
+  - 当前 `status='active'` → 显示「禁用」按钮，点击 → 二次确认 Modal → `PATCH /tenants/:id/status {status:'disabled'}`
+  - 当前 `status='disabled'` → 显示「启用」按钮 → 二次确认 → `{status:'active'}`
+  - `code='system'` 的初始租户 → 该按钮 `disabled` + Tooltip「不能禁用系统初始租户」
+- 详情：租户的所有信息 + 该租户的统计 + 一键停用（F2 起改成「改到期」+「启停」两个独立按钮；删除独立 D5 流程）
+
+**F2 配套的交互要点**：
+
+- 状态变更（二次确认 Modal）：「**确认禁用租户 acme-corp？此租户下所有 admin / customer 账号将无法登录**」
+- 启停之间：所有 audit_logs 留痕（`/system/audit` 也能查）
+- 列表加载：默认按 `created_at DESC`，状态筛选支持单独显示 `disabled` 列表（无活跃租户运营只看历史）
+
+### 6.2 总览 `/system/dashboard`
+
+- 跨租户 KPI：总租户数 / 总用户数 / 总成本 / 总对话数
+- 趋势图
+- 异常租户告警（成本超阈值的租户）
+
+---
+
+## 7. 公共组件
+
+| 组件                    | 用途                               | 位置                               |
+| ----------------------- | ---------------------------------- | ---------------------------------- |
+| `<RequireAuth>`         | 路由守卫，未登录跳登录             | `web/components/RequireAuth.tsx`   |
+| `<ErrorBoundary>`       | 错误兜底，白屏防护                 | `web/components/ErrorBoundary.tsx` |
+| `<ChatMessage>`         | 单条消息气泡（用户 / AI / 工具）   | `web/components/ChatMessage.tsx`   |
+| `<Markdown>`            | Markdown 渲染（带代码高亮 + 复制） | `web/components/Markdown.tsx`      |
+| `<Chart>`               | ECharts 照本封装                   | `web/components/Chart.tsx`         |
+| `<TraceTimeline>`       | Trace 时间线                       | `web/components/TraceTimeline.tsx` |
+| `<Empty>` / `<Loading>` | 空状态 / 加载                      | AntD 自带                          |
+
+### 7.1 路由守卫
+
+```typescript
+// web/components/RequireAuth.tsx
+export function RequireAuth({ children }: { children: React.ReactNode }) {
+  const { user, loading } = useAuthStore();
+  const location = useLocation();
+  if (loading) return <Spin fullscreen />;
+  if (!user) return <Navigate to="/admin/login" state={{ from: location }} replace />;
+  return <>{children}</>;
+}
+```
+
+### 7.2 全局 Axios 拦截器
+
+```typescript
+// web/lib/api.ts（详见 14-a-前端代码-网络与表单.md）
+api.interceptors.request.use((config) => {
+  const token = localStorage.getItem('jwt');
+  if (token) config.headers.set('Authorization', `Bearer ${token}`);
+  return config;
+});
+
+api.interceptors.response.use(
+  (res) => res,
+  (err) => {
+    if (err.response?.status === 401) {
+      localStorage.removeItem('jwt');
+      window.location.href = '/admin/login';
+    }
+    return Promise.reject(err);
+  },
+);
+```
+
+### 7.3 Markdown 渲染
+
+```typescript
+// web/components/Markdown.tsx
+<ReactMarkdown
+  remarkPlugins={[remarkGfm]}
+  components={{
+    code({ inline, className, children }) {
+      const match = /language-(\w+)/.exec(className ?? '');
+      const code = String(children).replace(/\n$/, '');
+      if (!inline && match) {
+        return (
+          <div style={{ position: 'relative' }}>
+            <Button icon={<CopyOutlined />} onClick={() => navigator.clipboard.writeText(code)} />
+            <SyntaxHighlighter language={match[1]} style={oneDark}>{code}</SyntaxHighlighter>
+          </div>
+        );
+      }
+      return <code className={className}>{children}</code>;
+    }
+  }}
+>
+  {content}
+</ReactMarkdown>
+```
+
+---
+
+## 8. 交互模式
+
+### 8.1 新手引导
+
+- 首次进入 admin：显示「欢迎」对话框
+- 流程：上传文档 → 等索引 → 测试问句 → 创用户
+- 步骤 1 / 2 / 3 进度条，✅ 表示完成
+
+### 8.2 空状态
+
+- 知识库空：「还没有文档，上传第一份吧」+ [上传] 按钮
+- 评测集空：「还没有评测集，上传一份跑跑看」
+- 历史会话空：「还没有对话记录，开始聊天吧」
+
+### 8.3 加载状态
+
+- 全屏加载：`<Spin size="large" fullscreen />`
+- 局部加载：`<Skeleton />`（AntD 自带）
+- 按钮：`<Button loading>` + 禁用其他按钮防止重复提交
+
+### 8.4 错误状态
+
+- 网络错误：toast「网络异常，请稍后重试」
+- 401：跳登录
+- 403：toast「没有权限」
+- 500：toast「服务异常，已记录」+ Trace 链接
+
+### 8.5 确认弹窗
+
+- 删除 / 改密码等高风险操作：`<Modal>` 二次确认
+- 「**确认删除这条用户？此操作不可撤销**」+ 取消 / 确认按钮
+
+---
+
+## 9. 主题与样式
+
+### 9.1 AntD ConfigProvider
+
+```typescript
+// web/App.tsx
+<ConfigProvider
+  locale={zhCN}
+  theme={{
+    algorithm: themeMode === 'dark' ? antdTheme.darkAlgorithm : antdTheme.defaultAlgorithm,
+    token: {
+      colorPrimary: '#1677ff',
+      borderRadius: 6,
+      fontSize: 14
+    },
+    components: {
+      Button: { borderRadius: 6 },
+      Card: { borderRadiusLG: 8 }
+    }
+  }}
+>
+  <RouterProvider router={router} />
+</ConfigProvider>
+```
+
+### 9.2 响应式断点
+
+| 断点 | 宽度     | 处理                       |
+| ---- | -------- | -------------------------- |
+| xs   | < 576px  | 移动端（基本不用，但要做） |
+| sm   | ≥ 576px  | 小屏                       |
+| md   | ≥ 768px  | 平板（不太用）             |
+| lg   | ≥ 992px  | 桌面（主要使用）           |
+| xl   | ≥ 1200px | 大桌面（自动居中）         |
+| xxl  | ≥ 1600px | 巨屏（自动居中）           |
+
+- 主体目标：≥ 1280px 宽屏
+- 后台在 < 992px 自动折叠 Sider
+- 聊天挂件：嵌入网页后自适应宽度
+
+### 9.3 暗色模式
+
+- 右上角 ☀/🌙 按钮切换
+- AntD `theme.darkAlgorithm`
+- 持久化到 localStorage
+
+---
+
+## 10. 扩展性设计
+
+> 未来要加新功能时，**菜单 + 路由**留好位置；不重写已有结构。
+
+### 10.1 菜单的扩展点
+
+- **业务面新功能**：在对应模块的 children 加菜单项
+- **新业务模块**：在 Sider 顶层加一级菜单
+- **未来可预见的**（菜单先占位 + 灰显）：
+  - 「语音 / 视频通话」
+  - 「AI 工作流编排」
+  - 「团队协作 / 多人会话」
+  - 「API 开发者门户」
+  - 「数据导出 / 报表」
+  - 「计费 / 套餐管理」（多套餐时）
+
+### 10.2 聊天功能的扩展点
+
+| 现在的           | 未来加                                   |
+| ---------------- | ---------------------------------------- |
+| 文字 + 图片理解  | 语音输入 / 输出、视频理解、文件理解      |
+| 思考模式         | 多模态思考（带图片推理）                 |
+| 联网（占位）     | 真实联网检索                             |
+| 图像生成（占位） | DALL-E / Stable Diffusion / 智谱 CogView |
+| 文件上传到知识库 | 文件直接发给 AI（不索引）                |
+| 历史会话列表     | 会话标签 / 收藏夹 / 共享会话             |
+
+### 10.3 后台功能的扩展点
+
+- 评测现在是大模型当裁判 → 未来加「人工标注」「A/B 测试」
+- Trace 现在是单条 → 未来加「对比两条 trace」「trace 重放」
+- 成本现在按月 → 未来加「按部门 / 按项目」拆解
+
+### 10.4 插件机制（v2 考虑）
+
+- 工具 = 插件（已通过 MCP 实现雏形）
+- 提示词 = 模板库（v1 是文件 + 版本；v2 考虑模板引擎）
+- 评测场景 = 插件（不同行业有不同评测集）
+
+---
+
+## 11. 验收标准
+
+### 11.1 视觉 / 体验
+
+- [ ] Ant Design 5 组件库（不混用其他 UI 库）
+- [ ] 中文 locale 全栈一致
+- [ ] 浅色 / 深色模式都能用
+- [ ] 响应式：≥ 1280px 桌面 + ≥ 992px 平板 + < 992px 移动
+- [ ] 加载 / 空 / 错误 三态都覆盖
+- [ ] 所有按钮 / 输入框 / 表单 有 disabled / loading / 错误 状态
+
+### 11.2 功能完整
+
+- [ ] 3 个登录页（system / admin / account）可走通
+- [ ] 聊天挂件：文字 / 思考模式 / 引用卡片 / 反馈 都能用
+- [ ] 管理后台 12 个菜单项（含子菜单）都能进
+- [ ] 检索测试：输问句 → 看到 top 5 命中片段
+- [ ] Trace 详情：时间线 + 单步详情
+- [ ] 成本分析：4 个 Tab 都能切
+
+### 11.3 性能 / 健壮
+
+- [ ] 首屏 < 2 秒
+- [ ] 路由切换 < 500ms
+- [ ] 错误边界兜底（白屏防护）
+- [ ] SSE 断流重连
+- [ ] JWT 过期自动跳登录
+
+### 11.4 国际化 / 扩展
+
+- [ ] 主题切换持久化
+- [ ] 菜单留好未来扩展点
+- [ ] 文案抽到 `web/locales/zh_CN.json`（v1 可选）
+
+---
+
+## 12. 完整页面 / 路由清单
+
+| 路由                              | 页面         | 角色              |
+| --------------------------------- | ------------ | ----------------- |
+| `/system/login`                   | 系统级登录   | SaaS 平台方       |
+| `/system/dashboard`               | 系统总览     | SaaS 平台方       |
+| `/system/tenants`                 | 租户列表     | SaaS 平台方       |
+| `/admin/login`                    | 租户后台登录 | 后台用户          |
+| `/admin/dashboard`                | 看板         | 后台用户          |
+| `/admin/knowledge/documents`      | 文档管理     | 后台用户（admin） |
+| `/admin/knowledge/test`           | 检索测试 ★   | 后台用户          |
+| `/admin/model`                    | 模型选择     | 后台用户（admin） |
+| `/admin/model/prompt`             | 提示词配置   | 后台用户（admin） |
+| `/admin/tools`                    | 工具管理     | 后台用户（admin） |
+| `/admin/evaluation/datasets`      | 评测集       | 后台用户（admin） |
+| `/admin/evaluation/runs`          | 评测结果     | 后台用户（admin） |
+| `/admin/observability/traces`     | Trace 列表   | 后台用户（admin） |
+| `/admin/observability/traces/:id` | Trace 详情   | 后台用户（admin） |
+| `/admin/observability/cost`       | 成本分析     | 后台用户（admin） |
+| `/admin/observability/alerts`     | 告警规则     | 后台用户（admin） |
+| `/admin/users`                    | 用户管理     | 后台用户（admin） |
+| `/admin/audit`                    | 审计日志     | 后台用户（admin） |
+| `/admin/settings`                 | 租户设置     | 后台用户（admin） |
+| `/customer/login`                 | 前台用户登录 | 前台用户          |
+| `/customer/chat`                  | 聊天主页     | 前台用户          |
+| `/widget/:tenantCode`             | 公开聊天挂件 | 匿名 / 前台用户   |
+
+**共 23 个路由**（3 个登录 + 3 个 system + 15 个 admin + 2 个 account/widget）。
+
+---
+
+## 13. 与其他文档的关系
+
+- **数据模型**：`05-a-数据模型-mysql.md` + `05-b-数据模型-qdrant.md` —— 哪些字段需要在 UI 上展示
+- **API 接口**：`06-API接口.md` —— UI 调哪些端点
+- **需求 ↔ 技术**：`16-*-需求技术对照表`（已拆 16-a..16-e）—— 每条 UI 需求用什么技术
+- **代码示例**：`14-*-前端代码`（已拆 14-a..14-d）—— UI 组件怎么写
+
+> 这份 UI 文档**只描述**长什么样 + 怎么交互；**不重复**讲数据模型 / API / 技术。
