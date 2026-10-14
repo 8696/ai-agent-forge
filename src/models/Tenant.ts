@@ -17,6 +17,15 @@ import { nanoid } from 'nanoid';
 export type TenantPlan = 'free' | 'pro' | 'enterprise';
 
 /**
+ * 租户启停状态（F2 配套）
+ *  - active    默认；允许 admin/customer 登录
+ *  - disabled  被 SaaS 平台方手动禁用，admin/customer 登录一律 401
+ *
+ * 防自锁：code='system' 的初始租户禁止被改成 disabled（否则 SaaS 平台方自己也登不进）。
+ */
+export type TenantStatus = 'active' | 'disabled';
+
+/**
  * tenants.settings JSON 列内允许存放的键（运行时会保持 forward-compat，多余键透传）
  */
 export interface TenantSettings {
@@ -29,9 +38,10 @@ export interface TenantSettings {
 }
 
 /**
- * 租户主表（DDL 见 docs/05-数据模型.md §5.1）
+ * 租户主表（DDL 见 docs/05-a-数据模型-mysql.md §5.1）
  * - 租户号 `code` 全局唯一，是登录 + 挂件 URL 的入口
  * - `settings` 用 MySQL JSON 列存租户级配置（提示词版本、模型、限额等）
+ * - `status` / `expires_at`（F2 配套）：任一不满足「active 且未到期」→ admin/customer/login 401
  */
 @Table({ tableName: 'tenants' })
 export class Tenant extends Model {
@@ -55,6 +65,15 @@ export class Tenant extends Model {
 
   @Column({ type: DataType.STRING(255) })
   declare api_key_hash: string | null;
+
+  /** F2：租户启停状态。active=正常；disabled=SaaS 平台方手动禁用 */
+  @Default('active')
+  @Column({ type: DataType.ENUM('active', 'disabled') })
+  declare status: TenantStatus;
+
+  /** F2：到期时间。NULL = 永不过期；已到期的租户禁止 admin/customer 登录 */
+  @Column({ type: DataType.DATE(6), allowNull: true })
+  declare expires_at: Date | null;
 
   @CreatedAt
   @Column({ type: DataType.DATE(6) })

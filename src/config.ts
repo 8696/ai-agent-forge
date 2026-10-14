@@ -54,17 +54,17 @@ const envSchema = z.object({
   // 智谱（https://open.bigmodel.cn/api/anthropic）
   ZHIPU_API_KEY: optionalStr,
   ZHIPU_ANTHROPIC_BASE_URL: optionalUrl,
-  ZHIPU_ANTHROPIC_MODEL: z.string().default('glm-4.5'),
+  ZHIPU_ANTHROPIC_MODEL: z.string().default('glm-5.3'),
 
   // DeepSeek（https://api.deepseek.com/anthropic）
   DEEPSEEK_API_KEY: optionalStr,
   DEEPSEEK_ANTHROPIC_BASE_URL: optionalUrl,
-  DEEPSEEK_ANTHROPIC_MODEL: z.string().default('deepseek-v3'),
+  DEEPSEEK_ANTHROPIC_MODEL: z.string().default('deepseek-v4-pro'),
 
   // 千问（https://dashscope.aliyuncs.com/apps/anthropic）
   QWEN_API_KEY: optionalStr,
   QWEN_ANTHROPIC_BASE_URL: optionalUrl,
-  QWEN_ANTHROPIC_MODEL: z.string().default('qwen3-max'),
+  QWEN_ANTHROPIC_MODEL: z.string().default('qwen3.8-max'),
 
   // 自定义网关（用户自有 Anthropic-兼容代理）
   CUSTOM_API_KEY: optionalStr,
@@ -127,9 +127,23 @@ function pick(
     provider,
     protocol: 'anthropic',
     apiKey,
-    baseUrl,
+    baseUrl: normalizeAnthropicBaseUrl(baseUrl),
     model,
   };
+}
+
+/**
+ * Vercel AI SDK v1 的 @ai-sdk/anthropic 把 baseURL 当作 "messages 端点的前缀"，
+ * 拼出 `${baseURL}/messages`（不附 /v1）。default baseURL 是 `https://api.anthropic.com/v1`，
+ * 隐含约定：用户填的 baseURL 必须以 `/v1` 结尾。
+ *
+ * 各网关文档给的 "Anthropic 兼容端点" 通常是 `…/anthropic`（不带 /v1），
+ * 实际消息路径是 `…/anthropic/v1/messages`。这里把 baseURL 规范化成 SDK 期望的形式。
+ * 已经以 /v1 结尾的不重复加。
+ */
+export function normalizeAnthropicBaseUrl(url: string): string {
+  const trimmed = url.replace(/\/+$/, '');
+  return trimmed.endsWith('/v1') ? trimmed : `${trimmed}/v1`;
 }
 
 export function resolveLlm(provider: LlmProvider = env.LLM_PROVIDER): LlmConfig {

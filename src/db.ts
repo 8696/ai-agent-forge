@@ -4,6 +4,9 @@ import { config } from './config';
 import { logger } from './logger';
 import { Tenant } from './models/Tenant';
 import { User } from './models/User';
+import { SystemUser } from './models/SystemUser';
+import { ApiKey } from './models/ApiKey';
+import { AuditLog } from './models/AuditLog';
 
 /**
  * Sequelize 实例（单例）。
@@ -35,7 +38,7 @@ function buildSequelize(): SequelizeType {
   });
 
   // 注册模型：每加一个 model 在此注册（以后会更多）
-  instance.addModels([Tenant, User]);
+  instance.addModels([Tenant, User, SystemUser, ApiKey, AuditLog]);
   return instance;
 }
 

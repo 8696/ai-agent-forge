@@ -10,7 +10,7 @@
   },
   "scripts": {
     "dev": "concurrently -n backend,frontend -c blue,green \"yarn dev:backend\" \"yarn dev:frontend\"",
-    "dev:backend": "tsx watch src/server.ts",
+    "dev:backend": "yarn migrate && tsx watch src/server.ts",
     "dev:frontend": "vite",
     "build": "yarn build:backend && yarn build:frontend",
     "build:backend": "tsc",
@@ -100,5 +100,8 @@
     "*.{json,md}": [
       "prettier --write"
     ]
+  },
+  "resolutions": {
+    "@types/koa": "2.15.2"
   }
 }

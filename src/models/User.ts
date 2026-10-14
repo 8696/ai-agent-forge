@@ -20,7 +20,7 @@ import { Tenant } from './Tenant';
  * - agent 后台客服坐席
  * - customer 前台用户
  */
-export type UserRole = 'admin' | 'agent' | 'customer';
+export type UserRole = 'admin' | 'customer';
 
 /**
  * 用户偏好（JSON 列），存长期记忆

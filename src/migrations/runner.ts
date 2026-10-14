@@ -4,6 +4,10 @@ import { getSequelize } from '../db';
 import { logger } from '../logger';
 import * as m001 from './001-create-tenants';
 import * as m002 from './002-create-users';
+import * as m003 from './003-create-system-users';
+import * as m004 from './004-create-api-keys';
+import * as m005 from './005-add-tenant-status-expires';
+import * as m006 from './006-create-audit-logs';
 
 /**
  * umzug 迁移 runner（详见 docs/03-技术栈与规范.md §B.2）
@@ -33,6 +37,26 @@ export function buildMigrator(): Umzug<QueryInterface> {
         name: '002-create-users',
         up: (params) => m002.up(params),
         down: (params) => m002.down(params),
+      },
+      {
+        name: '003-create-system-users',
+        up: (params) => m003.up(params),
+        down: (params) => m003.down(params),
+      },
+      {
+        name: '004-create-api-keys',
+        up: (params) => m004.up(params),
+        down: (params) => m004.down(params),
+      },
+      {
+        name: '005-add-tenant-status-expires',
+        up: (params) => m005.up(params),
+        down: (params) => m005.down(params),
+      },
+      {
+        name: '006-create-audit-logs',
+        up: (params) => m006.up(params),
+        down: (params) => m006.down(params),
       },
     ],
   });

@@ -5,7 +5,16 @@ import cors from '@koa/cors';
 import { config } from './config';
 import { logger } from './logger';
 import { initDatabase } from './db';
-import { errorHandler, healthRouter } from './gateway';
+import {
+  errorHandler,
+  healthRouter,
+  devProbeRouter,
+  systemTenantRouter,
+  systemAuthRouter,
+  adminUserRouter,
+  adminAuthRouter,
+  customerAuthRouter,
+} from './gateway';
 
 /**
  * 后端入口 —— 详见 docs/15-开发进度计划.md Step 1 + 02-系统架构与目录.md §2.1
@@ -28,6 +37,16 @@ async function bootstrap(): Promise<void> {
 
   // 健康检查
   app.use(healthRouter.routes()).use(healthRouter.allowedMethods());
+
+  // Dev-only 探活路由（生产环境内部 404，仅本地调试用）
+  app.use(devProbeRouter.routes()).use(devProbeRouter.allowedMethods());
+
+  // 业务路由（3 子系统各自独立，auth 自闭环）
+  app.use(systemTenantRouter.routes()).use(systemTenantRouter.allowedMethods()); // systems 子系统
+  app.use(systemAuthRouter.routes()).use(systemAuthRouter.allowedMethods()); // systems login + me + change-password
+  app.use(adminUserRouter.routes()).use(adminUserRouter.allowedMethods()); // admin 业务（用户管理）
+  app.use(adminAuthRouter.routes()).use(adminAuthRouter.allowedMethods()); // admin login + me + change-password
+  app.use(customerAuthRouter.routes()).use(customerAuthRouter.allowedMethods()); // customer login + me + change-password
 
   // 数据库初始化（缺配置 + 启动 DB 失败都不让起来）
   await initDatabase();
