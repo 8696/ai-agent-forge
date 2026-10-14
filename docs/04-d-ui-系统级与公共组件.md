@@ -57,6 +57,7 @@
 | `<Markdown>`            | Markdown 渲染（带代码高亮 + 复制） | `web/components/Markdown.tsx`      |
 | `<Chart>`               | ECharts 照本封装                   | `web/components/Chart.tsx`         |
 | `<TraceTimeline>`       | Trace 时间线                       | `web/components/TraceTimeline.tsx` |
+| `<ActiveModelsFooter>`  | 页脚展示当前激活 LLM / Embedding   | `web/components/ActiveModelsFooter.tsx` |
 | `<Empty>` / `<Loading>` | 空状态 / 加载                      | AntD 自带                          |
 
 ### 7.1 路由守卫
@@ -119,6 +120,25 @@ api.interceptors.response.use(
   {content}
 </ReactMarkdown>
 ```
+
+### 7.4 页脚激活模型展示
+
+3 个子系统的 Layout（`SystemLayout` / `AdminLayout` / `CustomerLayout`）的 `<Footer>` 末尾
+挂一个 `<ActiveModelsFooter>`，显示当前生效的 LLM / Embedding 模型，让运营方随时
+确认 `LLM_PROVIDER` 切到对的地方。
+
+```
+┌─ Footer ────────────────────────────────────────────────┐
+│  system 子系统 · SaaS 平台方                              │
+│  LLM · minimax · MiniMax-M3   Embedding · embo-01 · 1024d │
+└──────────────────────────────────────────────────────────┘
+```
+
+- **数据来源**：`GET /api/v1/active-config`（公共元信息端点，详见 `06-API接口.md §6.5`）
+- **样式**：AntD `<Space size={16}>` + `<Text type="secondary">` + `<Text code>`，灰色小字，不抢主内容视觉
+- **取不到数据**：静默显示「—」（譬如后端 503），不弹 toast，不影响页脚其他元素
+- **登录页**：不走 Layout，**不**展示（按当前实现 login 页裸返回，无 Footer）
+- **多租户期**：Step 9 落地 `tenants.settings.model` 后，**该展示保持「当前进程级 LLM」**——不展示每租户覆盖；运营方关注「底层接的是哪家」，租户级 model 切到对应「模型 & 提示词」配置页（见 `04-c-ui-后台管理页面.md`）
 
 ---
 

@@ -3,6 +3,7 @@ import { Layout, Menu, Space, Typography } from 'antd';
 import { Link, Outlet, useLocation } from 'react-router-dom';
 import { getCurrentUser } from '../../lib/auth';
 import { setToken } from '../../lib/apiFactory';
+import { ActiveModelsFooter } from '../../components/ActiveModelsFooter';
 
 const { Header, Content, Footer } = Layout;
 const { Text, Title } = Typography;
@@ -69,8 +70,17 @@ export function AdminLayout({ children }: { children?: ReactNode }): ReactElemen
         </Space>
       </Header>
       <Content style={{ padding: 32, background: '#f5f5f5' }}>{children ?? <Outlet />}</Content>
-      <Footer style={{ textAlign: 'center' }}>
+      <Footer
+        style={{
+          textAlign: 'center',
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          gap: 6,
+        }}
+      >
         <Text type="secondary">admin 子系统 · 租户 {user.tenant_id?.slice(0, 6)}…</Text>
+        <ActiveModelsFooter />
       </Footer>
     </Layout>
   );

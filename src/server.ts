@@ -10,6 +10,7 @@ import { initDatabase } from './db';
 import {
   errorHandler,
   healthRouter,
+  activeConfigRouter,
   devProbeRouter,
   systemTenantRouter,
   systemAuthRouter,
@@ -40,6 +41,9 @@ async function bootstrap(): Promise<void> {
 
   // 健康检查
   app.use(healthRouter.routes()).use(healthRouter.allowedMethods());
+
+  // 公共「当前激活配置」端点（页脚展示 LLM / Embedding 模型用，无鉴权）
+  app.use(activeConfigRouter.routes()).use(activeConfigRouter.allowedMethods());
 
   // Dev-only 探活路由（生产环境内部 404，仅本地调试用）
   app.use(devProbeRouter.routes()).use(devProbeRouter.allowedMethods());

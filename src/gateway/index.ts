@@ -10,10 +10,11 @@
  * 每个子系统 auth 自闭环（login / me / change-password 全在自己桶里）；
  * 没有跨子系统的共享 auth namespace。
  *
- * 公共：errorHandler / healthRouter / devProbeRouter / jwtAuth
+ * 公共：errorHandler / healthRouter / activeConfigRouter / devProbeRouter / jwtAuth
  */
 export { errorHandler } from './error-handler';
 export { healthRouter } from './health-routes';
+export { activeConfigRouter } from './active-config-routes';
 export { devProbeRouter } from './dev-probe-routes';
 export { jwtAuth } from './jwt-base';
 

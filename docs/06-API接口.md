@@ -92,8 +92,10 @@
 | POST | `/api/v1/admin/eval/datasets`    | 上传评测集（JSONL）                  | requireAdmin |
 | POST | `/api/v1/admin/eval/runs`        | 触发评测                             | requireAdmin |
 | GET  | `/api/v1/admin/eval/runs/:id`    | 评测结果                             | requireAdmin |
-| GET  | `/api/v1/admin/knowledge`        | 文档列表                             | requireAdmin |
-| POST | `/api/v1/admin/knowledge/upload` | 上传文档（PDF / Word / MD / TXT）    | requireAdmin |
+| GET  | `/api/v1/admin/knowledge`        | 文档列表（仅本租户，按上传时间倒序）       | requireAdmin |
+| POST | `/api/v1/admin/knowledge/upload` | 上传文档（**PDF / MD / TXT**，multipart，field=file） | requireAdmin |
+| DELETE | `/api/v1/admin/knowledge/:id`  | 删除文档 + 同步删 Qdrant points + 写 audit_logs | requireAdmin |
+| POST | `/api/v1/admin/knowledge/test`  | 检索测试（top 5 命中片段，仅向量检索，**Step 5 落 BM25 + rerank**） | requireAdmin |
 | GET  | `/api/v1/admin/tools`            | 工具列表                             | requireAdmin |
 | GET  | `/api/v1/admin/users`            | 用户列表（CRUD，**已 Step 2 实现**） | requireAdmin |
 
@@ -104,7 +106,22 @@
 | GET  | `/api/health` | 服务存活（已 Step 1 实现）       |
 | GET  | `/api/ready`  | 服务就绪（数据库 / Qdrant 都通） |
 
-## 6.5 Dev-only（生产 404）
+## 6.5 公共元信息（页脚展示用，无鉴权）
+
+| 方法 | 路径                    | 用途                                                                                                                                  |
+| ---- | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| GET  | `/api/v1/active-config` | 返回当前激活的 LLM / Embedding 配置：`{ provider, llmModel, embedModel, embedDimensions }`；3 个子系统页脚共用；**不挂 token**（公共） |
+
+> **响应示例**：
+>
+> ```json
+> { "provider": "minimax", "llmModel": "MiniMax-M3", "embedModel": "embo-01", "embedDimensions": 1024 }
+> ```
+>
+> `embedModel` / `embedDimensions` 在 provider 不提供 Embedding 时（当前仅 `deepseek`）为空 / 0；前端展示「—」。
+> 该端点 `LLM_PROVIDER` 切换或 `LLM_MODEL` / `LLM_EMBEDDING_MODEL` override 后需重启后端生效；前端用「挂载时拉一次」即可，不做轮询（避免无谓的请求）。
+
+## 6.6 Dev-only（生产 404）
 
 | 方法 | 路径                  | 用途                                                                      |
 | ---- | --------------------- | ------------------------------------------------------------------------- |
