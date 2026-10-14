@@ -1,6 +1,7 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { App } from './App';
+import 'antd/dist/reset.css';
 
 const rootEl = document.getElementById('root');
 if (rootEl === null) {
