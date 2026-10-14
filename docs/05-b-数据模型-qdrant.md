@@ -28,10 +28,15 @@ Collection: documents          (租户共享一个 collection)
 每条记录（vector + payload）= 一个文档块
 ```
 
-**Vector（1536 维 float32）**：
+**Vector（维度按 Embedding provider 实际输出）**：
 
-- 来自 Embedding API（OpenAI text-embedding-3-small 或 bge-m3）
-- 维度固定 1536，跨租户一致
+- 来自 Embedding API（OpenAI / 智谱 / 千问 / MiniMax 等 OpenAI 兼容 provider）
+- 维度按 provider / model 而定，**与 `src/config.ts:resolveEmbedding().dimensions` 一致**：
+  - OpenAI text-embedding-3-small：1536
+  - 智谱 embedding-3：2048（默认；支持 1024 / 768 / 512）
+  - 千问 text-embedding-v3：1024
+  - MiniMax embo-01：1024
+- 改 Embedding provider 或 model 时必须 **删 Qdrant collection 重建**（collection 维度在创建时定死）
 
 **Payload（JSON 元数据）**：
 
