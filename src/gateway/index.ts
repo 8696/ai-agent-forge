@@ -19,5 +19,10 @@ export { devProbeRouter } from './dev-probe-routes';
 export { jwtAuth } from './jwt-base';
 
 export { systemTenantRouter, systemAuthRouter, requireSystemUser } from './system';
-export { adminUserRouter, adminAuthRouter, adminKnowledgeRouter, requireAdmin } from './admin';
-export { customerAuthRouter, requireCustomer } from './customer';
+export { adminUserRouter, adminAuthRouter, adminKnowledgeRouter, adminSessionsRouter, requireAdmin } from './admin';
+export { customerAuthRouter } from './customer';
+// Step 6：对外 chat API（API Key 鉴权；不走 JWT）
+export { chatRouter } from './chat-routes';
+export { chatStreamRouter } from './chat-stream-routes';
+// Step 7：对外 session 查询（API Key 鉴权）
+export { sessionsRouter } from './sessions-routes';

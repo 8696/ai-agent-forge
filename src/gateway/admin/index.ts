@@ -7,4 +7,5 @@
 export { adminUserRouter } from './user-routes';
 export { adminAuthRouter } from './auth-routes';
 export { adminKnowledgeRouter } from './knowledge-routes';
+export { adminSessionsRouter } from './sessions-routes';
 export { requireAdmin } from './middleware';

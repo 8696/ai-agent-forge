@@ -1,7 +1,6 @@
 import Router from '@koa/router';
 import { z } from 'zod';
-import { User } from '../../models';
-import { Tenant } from '../../models';
+import { User, Tenant } from '../../models';
 import {
   verifyPassword,
   AuthError,
@@ -9,22 +8,17 @@ import {
   recordFailedLogin,
   recordSuccessfulLogin,
   throwIfLocked,
-  hashPassword,
-  NotFoundError,
   assertTenantAccessible,
 } from '../../lib';
-import { jwtAuth } from '../jwt-base';
-import { requireCustomer } from './middleware';
 import type { TenantUserJwtPayload } from '../../lib/jwt';
 
 /**
- * customer 子系统（租户前台）：完整 auth 自闭环
- * 详见 docs/16-需求技术对照表 A4
+ * customer 子系统登录（docs/16-需求技术对照表 A4）
  *
  * 路由（都挂在 /api/v1/customer 下）：
- *   POST /login             {email, password, tenant_code}
- *   GET  /me                当前用户视图
- *   POST /change-password   {old_password, new_password}
+ *   POST /login    {email, password, tenant_code}  → role=customer
+ *
+ * 其他 customer 功能（me / change-password / chat / sessions）已清空。
  */
 export const customerAuthRouter = new Router({ prefix: '/api/v1/customer' });
 
@@ -36,11 +30,6 @@ const CustomerLoginBody = z.object({
     .min(3)
     .max(32)
     .regex(/^[a-z0-9-]+$/),
-});
-
-const ChangePasswordBody = z.object({
-  old_password: z.string().min(1),
-  new_password: z.string().min(8, '新密码至少 8 字符'),
 });
 
 customerAuthRouter.post('/login', async (ctx) => {
@@ -77,44 +66,5 @@ customerAuthRouter.post('/login', async (ctx) => {
   ctx.body = { token };
 });
 
-customerAuthRouter.get('/me', jwtAuth, requireCustomer, async (ctx) => {
-  const u = ctx.state.customerUser as TenantUserJwtPayload;
-  const user = await User.findOne({
-    where: { id: u.sub, tenant_id: u.tenant_id, role: 'customer' },
-    attributes: ['id', 'email', 'role', 'must_change_password', 'last_login_at'],
-  });
-  if (user === null) {
-    throw new NotFoundError('用户');
-  }
-  ctx.body = {
-    id: user.id,
-    email: user.email,
-    role: user.role,
-    tenant_id: u.tenant_id,
-    must_change_password: user.must_change_password,
-    last_login_at: user.last_login_at,
-  };
-});
-
-customerAuthRouter.post('/change-password', jwtAuth, requireCustomer, async (ctx) => {
-  const u = ctx.state.customerUser as TenantUserJwtPayload;
-  const input = ChangePasswordBody.parse(ctx.request.body);
-
-  const user = await User.findOne({
-    where: { id: u.sub, tenant_id: u.tenant_id, role: 'customer' },
-  });
-  if (user === null) {
-    throw new NotFoundError('用户');
-  }
-  if (user.password_hash === null) {
-    throw new AuthError('账号未设置密码（异常状态）');
-  }
-  const ok = await verifyPassword(input.old_password, user.password_hash);
-  if (!ok) {
-    throw new AuthError('原密码错误');
-  }
-  user.password_hash = await hashPassword(input.new_password);
-  user.must_change_password = false;
-  await user.save();
-  ctx.body = { ok: true };
-});
+// 防止 unused import 警告
+void ({} as TenantUserJwtPayload);

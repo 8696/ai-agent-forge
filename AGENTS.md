@@ -248,6 +248,79 @@ yarn tsx scripts/test-step15.ts                                       # 跑回�
 - 代码示例用 TypeScript（前后端统一）
 - 文案用完整中文，**不用黑话、不用缩写**
 
+### 6.4 自动化测试硬约束（**违反即测试跑不起来**）
+
+> **目标**：让 Agent 写测试时只能照行业标准（vitest + testing pyramid），不能 freestyle。
+> **完整流程规范**：[18-测试流程规范.md](./docs/18-测试流程规范.md)（何时写、改、删测试）。
+> 技术细节：[16-d-需求-运维稳定.md §D6](./docs/16-d-需求-运维稳定.md)。
+
+**目录硬约定**：
+
+- 测试代码**必须**放在 `tests/` 下（`unit/` / `integration/` / `e2e/` / `fixtures/` / `helpers/`）
+- **禁止**把测试代码放 `scripts/`（scripts/ 是运维脚本：migrate / probe / sync-env）
+- **禁止**在 `web/e2e/` 放非浏览器测试（前端 E2E 用 Playwright，放 `tests/e2e/`）
+
+**命名硬约定**（vitest 标准）：
+
+- 新写的集成测试**必须**用 `*.test.ts` 后缀 + `describe/it/expect` 写法
+- **禁止**手写 `check()` + `console.log` + `process.exit(1)`（老 `test-stepN.ts` 是兼容层，新写**禁止**照抄）
+- **禁止**命名 `test-stepN.ts` / `test-f1.ts` 之类"按 Step 编号"的命名（按**功能**命名，如 `tenants-crud.test.ts`）
+
+**入口硬约定**（package.json scripts）：
+
+- 测试 entry point **必须**从这 4 个命令进入：
+  - `yarn test:fixtures` — 一键 seed + login
+  - `yarn test:unit` — vitest 单测
+  - `yarn test:integration` — vitest 集成测试（含 globalSetup 自动 fixture）
+  - `yarn test:e2e` — Playwright（未来）
+- **禁止** Agent 自己造 `yarn my-test` / `npx tsx .../my-test.ts` 命令
+
+**鉴权硬约定**（杜绝"老报 401"问题）：
+
+- 测试脚本**必须**从 `tests/helpers` import `loginSystem/loginAdmin/loginCustomer` 或 `allHttpFromTokensFile`
+- **禁止**再手写 `axios.post('/api/v1/admin/login', ...)` 或 `bcrypt.hash(...)` 在测试脚本里
+- 鉴权客户端**必须**从 `.e2e-tokens.json` 读现成 JWT（`yarn test:fixtures` 已生成）
+
+**凭据硬约定**：
+
+- 测试凭据**必须**来自 `tests/fixtures/fixtures.json`（system + 2 租户 + admin/customer/API key）
+- **禁止**在脚本里硬编码邮箱 / 密码 / API key
+- 测试租户用固定 `code = 'acme' / 'globex'`，**禁止** `Date.now()` 后缀
+- `.e2e-tokens.json` 在 `.gitignore`（短期凭据，不入库）
+
+**vitest 配置硬约束**（Agent 绕过不了）：
+
+- `vitest.config.ts` 白名单 `tests/**/*.test.ts` —— 老 standalone 脚本 `tests/integration/*.ts` 不会被 vitest 自动跑，必须自己 `tsx`
+- `pool: 'forks', singleFork: true` —— 强制单 worker，避免并发 seed 互覆盖
+- `globalSetup: ['./tests/setup.ts']` —— 跑任何 `.test.ts` 前自动 fixture 就绪
+
+**违规示例**（禁止）：
+
+- ❌ 把测试代码放 `scripts/test-my-feature.ts`
+- ❌ 在测试脚本里 `import bcrypt from 'bcrypt'; await bcrypt.hash(...)` 自己 hash 密码
+- ❌ 在测试脚本里 `await axios.post('${BASE}/api/v1/admin/login', ...)` 自己登录
+- ❌ 写 `function check(label: string, ok: boolean): void { console.log(...) }` 自造断言
+- ❌ 命名 `test-step9.ts` / `test-featureX.ts`（按 Step 编号 / 功能编号）
+- ❌ 改 `vitest.config.ts` 把 `include` 放宽去跑老 standalone 脚本
+
+### 6.5 跑哪些测试 · 决策表（**改完必查**）
+
+> 详细决策表：[18-测试流程规范.md §18.4.1](./docs/18-测试流程规范.md)。下面是速记（4 句话）：
+
+| 改了… | 跑… |
+|---|---|
+| 1 个 it() / 1 个 .test.ts | 那 1 个文件（`yarn vitest run tests/<dir>/<file>.test.ts`） |
+| 1 个路由 / 1 个 lib | 那 1 个对应 `.test.ts`（按 docs/18 §18.3.1 表格 1-to-1 找） |
+| middleware / 基建 / 基础设施 / 新增 .test.ts | **全套**（`yarn test:integration` 或 `yarn test`） |
+| 前端 `.tsx` 不动 API | 只 `yarn typecheck` |
+
+**反例（禁止）**：
+
+- ❌ 改了 1 个 it() 跑全套（浪费时间）
+- ❌ 改了 `src/lib/jwt.ts` 只跑 jwt.test.ts 而不跑引用 jwt 的路由测试（漏验集成）
+- ❌ 改了 `tests/setup.ts`（globalSetup）只跑那 1 个文件（其他文件 setup 行为没验）
+- ❌ 改了前端 .tsx 跑全套 integration（没意义）
+
 ---
 
 ## 7. 不要做的事（**绝对禁止**）

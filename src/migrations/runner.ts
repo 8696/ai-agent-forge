@@ -9,6 +9,8 @@ import * as m004 from './004-create-api-keys';
 import * as m005 from './005-add-tenant-status-expires';
 import * as m006 from './006-create-audit-logs';
 import * as m007 from './007-create-documents';
+import * as m008 from './008-create-sessions';
+import * as m009 from './009-create-messages';
 
 /**
  * umzug 迁移 runner（详见 docs/03-技术栈与规范.md §B.2）
@@ -63,6 +65,16 @@ export function buildMigrator(): Umzug<QueryInterface> {
         name: '007-create-documents',
         up: (params) => m007.up(params),
         down: (params) => m007.down(params),
+      },
+      {
+        name: '008-create-sessions',
+        up: (params) => m008.up(params),
+        down: (params) => m008.down(params),
+      },
+      {
+        name: '009-create-messages',
+        up: (params) => m009.up(params),
+        down: (params) => m009.down(params),
       },
     ],
   });

@@ -8,6 +8,8 @@ import { SystemUser } from './models/SystemUser';
 import { ApiKey } from './models/ApiKey';
 import { AuditLog } from './models/AuditLog';
 import { Document } from './models/Document';
+import { Session } from './models/Session';
+import { Message } from './models/Message';
 
 /**
  * Sequelize 实例（单例）。
@@ -39,7 +41,7 @@ function buildSequelize(): SequelizeType {
   });
 
   // 注册模型：每加一个 model 在此注册（以后会更多）
-  instance.addModels([Tenant, User, SystemUser, ApiKey, AuditLog, Document]);
+  instance.addModels([Tenant, User, SystemUser, ApiKey, AuditLog, Document, Session, Message]);
   return instance;
 }
 

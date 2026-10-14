@@ -1,8 +1,6 @@
 /**
  * customer 子系统 barrel（租户前台：customer 角色）
  *
- * 路由前缀：/api/v1/customer/*
- * 鉴权：customer 角色（requireCustomer）
+ * 当前只暴露 auth（POST /login），其他 customer 功能（me / chat / sessions）已清空。
  */
 export { customerAuthRouter } from './auth-routes';
-export { requireCustomer } from './middleware';

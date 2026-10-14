@@ -17,7 +17,11 @@ import {
   adminUserRouter,
   adminAuthRouter,
   adminKnowledgeRouter,
+  adminSessionsRouter,
   customerAuthRouter,
+  chatRouter,
+  chatStreamRouter,
+  sessionsRouter,
 } from './gateway';
 
 /**
@@ -54,7 +58,13 @@ async function bootstrap(): Promise<void> {
   app.use(adminUserRouter.routes()).use(adminUserRouter.allowedMethods()); // admin 业务（用户管理）
   app.use(adminKnowledgeRouter.routes()).use(adminKnowledgeRouter.allowedMethods()); // admin 知识库（Step 4）
   app.use(adminAuthRouter.routes()).use(adminAuthRouter.allowedMethods()); // admin login + me + change-password
-  app.use(customerAuthRouter.routes()).use(customerAuthRouter.allowedMethods()); // customer login + me + change-password
+  app.use(adminSessionsRouter.routes()).use(adminSessionsRouter.allowedMethods()); // admin sessions 列表/详情（Step 7）
+  app.use(customerAuthRouter.routes()).use(customerAuthRouter.allowedMethods()); // customer login（其他 customer 功能已清空）
+  // Step 6：对外 chat API（API Key 鉴权；不走 JWT）
+  app.use(chatRouter.routes()).use(chatRouter.allowedMethods()); // POST /api/v1/chat
+  app.use(chatStreamRouter.routes()).use(chatStreamRouter.allowedMethods()); // POST /api/v1/chat/stream
+  // Step 7：对外 session 查询（API Key 鉴权）
+  app.use(sessionsRouter.routes()).use(sessionsRouter.allowedMethods()); // GET /api/v1/sessions/:id
 
   // 数据库初始化（缺配置 + 启动 DB 失败都不让起来）
   await initDatabase();

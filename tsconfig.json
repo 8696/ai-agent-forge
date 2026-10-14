@@ -27,5 +27,5 @@
     },
     "baseUrl": "."
   },
-  "include": ["src/**/*", "scripts/**/*", "shared/**/*"]
+  "include": ["src/**/*", "scripts/**/*", "shared/**/*", "tests/**/*"]
 }

@@ -1,10 +1,12 @@
 import type { Context, Next } from 'koa';
+import { ZodError } from 'zod';
 import { AppError } from '@/lib/errors';
 import { logger } from '../logger';
 
 /**
  * Koa 统一错误处理中间件 —— 详见 docs/03-技术栈与规范.md §A.13
  * - 业务错误（AppError 子类）走对应状态码
+ * - ZodError → 400 + 校验失败详情
  * - 未知错误走 500 + 控制台日志，**绝不** 把内部消息直接抛给客户端
  */
 export async function errorHandler(ctx: Context, next: Next): Promise<void> {
@@ -17,6 +19,15 @@ export async function errorHandler(ctx: Context, next: Next): Promise<void> {
         code: err.code,
         message: err.message,
         ...(err.details !== undefined ? { details: err.details } : {}),
+      };
+      return;
+    }
+    if (err instanceof ZodError) {
+      ctx.status = 400;
+      ctx.body = {
+        code: 'VALIDATION_ERROR',
+        message: '参数校验失败',
+        details: err.flatten(),
       };
       return;
     }

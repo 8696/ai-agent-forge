@@ -15,7 +15,7 @@ import {
   KnowledgeDocumentsPage,
   KnowledgeSearchPage,
 } from './pages/admin';
-import { CustomerLoginPage, CustomerHomePage } from './pages/customer';
+import { CustomerLoginPage } from './pages/customer';
 import { SystemLayout } from './layouts/system/SystemLayout';
 import { AdminLayout } from './layouts/admin/AdminLayout';
 import { CustomerLayout } from './layouts/customer/CustomerLayout';
@@ -69,7 +69,7 @@ const routes: RouteObject[] = [
     path: '/customer',
     element: <CustomerLayout />,
     children: [
-      { index: true, element: <CustomerHomePage /> },
+      // 当前只暴露 login；其他 customer 功能（home / chat / sessions）已清空
       { path: 'login', element: <CustomerLoginPage /> },
     ],
   },

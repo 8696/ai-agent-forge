@@ -1,0 +1,42 @@
+{
+  "_comment": "测试 fixture 单源真相（docs/16-d §D6 测试基建契约）。scripts/seed.ts 和 web/e2e/login-all.mjs 都从这里读。修改这里 → 两个入口自动生效。生产环境千万别用这套凭据。",
+  "system": {
+    "email": "platform-admin@local.test",
+    "password": "PlatformAdmin-123!",
+    "name": "平台方 admin（测试）"
+  },
+  "tenants": [
+    {
+      "code": "acme",
+      "name": "Acme Corp",
+      "plan": "pro",
+      "admin": {
+        "email": "admin@acme.test",
+        "password": "AcmeAdmin-123!",
+        "role": "admin"
+      },
+      "customer": {
+        "email": "alice@acme.test",
+        "password": "AcmeCustomer-123!",
+        "role": "customer"
+      },
+      "apiKeyName": "acme-default"
+    },
+    {
+      "code": "globex",
+      "name": "Globex Inc",
+      "plan": "pro",
+      "admin": {
+        "email": "admin@globex.test",
+        "password": "GlobexAdmin-123!",
+        "role": "admin"
+      },
+      "customer": {
+        "email": "bob@globex.test",
+        "password": "GlobexCustomer-123!",
+        "role": "customer"
+      },
+      "apiKeyName": "globex-default"
+    }
+  ]
+}

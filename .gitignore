@@ -73,3 +73,7 @@ data/qdrant-snapshot/
 .claude/
 # 桌面 app Remote Control 写入的临时文件（不同次会话后缀会变）
 .uuremote_*
+
+# ─── 测试基建产物 ───────────────────────────────────
+# E2E 登录拿到的 JWT / API key 落盘（docs/16-d §D6 测试基建契约）
+.e2e-tokens.json
