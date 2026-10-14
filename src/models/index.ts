@@ -11,3 +11,5 @@ export type { SystemUserRole } from './SystemUser';
 export { ApiKey } from './ApiKey';
 export { AuditLog } from './AuditLog';
 export type { AuditAction } from './AuditLog';
+export { Document } from './Document';
+export type { DocumentStatus, DocumentMetadata } from './Document';

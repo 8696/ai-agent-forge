@@ -65,6 +65,10 @@ coverage/
 # 文档项目不需要 node_modules 和构建产物,
 # 但保留 .DS_Store 在根目录被忽略即可
 
+# ─── 数据 / 上传文件（不入库） ─────────────
+data/
+data/qdrant-snapshot/
+
 # ─── Claude Desktop 本地配置（不入库） ──────────────────
 .claude/
 # 桌面 app Remote Control 写入的临时文件（不同次会话后缀会变）

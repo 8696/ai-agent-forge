@@ -44,18 +44,18 @@ devProbeRouter.post('/probe/llm', async (ctx) => {
 
   try {
     const cfg = resolveLlm(provider);
-    const client = createAnthropic({ apiKey: cfg.apiKey, baseURL: cfg.baseUrl });
+    const client = createAnthropic({ apiKey: cfg.llmApiKey, baseURL: cfg.llmBaseUrl });
     const t0 = Date.now();
     const res = await generateText({
-      model: client(cfg.model),
+      model: client(cfg.llmModel),
       prompt: 'reply with the single word: pong',
       maxTokens: 32,
     });
     const body: ProbeResult = {
       ok: true,
       provider: cfg.provider,
-      model: cfg.model,
-      baseUrl: cfg.baseUrl,
+      model: cfg.llmModel,
+      baseUrl: cfg.llmBaseUrl,
       text: res.text,
       usage: res.usage,
       durationMs: Date.now() - t0,

@@ -7,3 +7,5 @@
 export { AdminLoginPage } from './AdminLoginPage';
 export { AdminHomePage } from './AdminHomePage';
 export { AdminUsersPage } from './UsersPage';
+export { KnowledgeDocumentsPage } from './KnowledgeDocumentsPage';
+export { KnowledgeSearchPage } from './KnowledgeSearchPage';

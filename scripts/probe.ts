@@ -60,15 +60,15 @@ async function probeLlm(provider: LlmProvider): Promise<void> {
   const t0 = Date.now();
   try {
     const cfg = resolveLlm(provider);
-    const client = createAnthropic({ apiKey: cfg.apiKey, baseURL: cfg.baseUrl });
+    const client = createAnthropic({ apiKey: cfg.llmApiKey, baseURL: cfg.llmBaseUrl });
     const res = await generateText({
-      model: client(cfg.model),
+      model: client(cfg.llmModel),
       prompt: 'reply with the single word: pong',
       maxTokens: 32,
     });
     const dur = Date.now() - t0;
     console.log(
-      `  ✓ ${dur}ms | model=${cfg.model} | base=${cfg.baseUrl} | text=${JSON.stringify(res.text)} | usage=${JSON.stringify(res.usage)}`,
+      `  ✓ ${dur}ms | model=${cfg.llmModel} | base=${cfg.llmBaseUrl} | text=${JSON.stringify(res.text)} | usage=${JSON.stringify(res.usage)}`,
     );
   } catch (err: unknown) {
     console.log(`  ✗ ${err instanceof Error ? err.message : String(err)}`);

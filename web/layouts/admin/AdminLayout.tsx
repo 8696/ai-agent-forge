@@ -43,10 +43,10 @@ export function AdminLayout({ children }: { children?: ReactNode }): ReactElemen
           items={[
             { key: '/admin', label: <Link to="/admin">首页</Link> },
             {
-              key: '/admin/knowledge',
-              label: <Link to="/admin/knowledge">知识库</Link>,
-              disabled: true,
+              key: '/admin/knowledge/documents',
+              label: <Link to="/admin/knowledge/documents">知识库</Link>,
             },
+            { key: '/admin/knowledge/test', label: <Link to="/admin/knowledge/test">检索测试</Link> },
             { key: '/admin/users', label: <Link to="/admin/users">用户</Link> },
             { key: '/admin/eval', label: <Link to="/admin/eval">评测</Link>, disabled: true },
             { key: '/admin/traces', label: <Link to="/admin/traces">Trace</Link>, disabled: true },

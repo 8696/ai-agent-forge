@@ -2,6 +2,8 @@ import 'reflect-metadata';
 import Koa from 'koa';
 import bodyParser from 'koa-bodyparser';
 import cors from '@koa/cors';
+import { promises as fs } from 'fs';
+import path from 'path';
 import { config } from './config';
 import { logger } from './logger';
 import { initDatabase } from './db';
@@ -13,6 +15,7 @@ import {
   systemAuthRouter,
   adminUserRouter,
   adminAuthRouter,
+  adminKnowledgeRouter,
   customerAuthRouter,
 } from './gateway';
 
@@ -45,11 +48,16 @@ async function bootstrap(): Promise<void> {
   app.use(systemTenantRouter.routes()).use(systemTenantRouter.allowedMethods()); // systems 子系统
   app.use(systemAuthRouter.routes()).use(systemAuthRouter.allowedMethods()); // systems login + me + change-password
   app.use(adminUserRouter.routes()).use(adminUserRouter.allowedMethods()); // admin 业务（用户管理）
+  app.use(adminKnowledgeRouter.routes()).use(adminKnowledgeRouter.allowedMethods()); // admin 知识库（Step 4）
   app.use(adminAuthRouter.routes()).use(adminAuthRouter.allowedMethods()); // admin login + me + change-password
   app.use(customerAuthRouter.routes()).use(customerAuthRouter.allowedMethods()); // customer login + me + change-password
 
   // 数据库初始化（缺配置 + 启动 DB 失败都不让起来）
   await initDatabase();
+
+  // Step 4：知识库本地目录自举（koa-body multipart 落盘 + 上传文件落 ./data/uploads）
+  await fs.mkdir(path.resolve(config.DATA_DIR, 'tmp'), { recursive: true });
+  await fs.mkdir(path.resolve(config.DATA_DIR, 'uploads'), { recursive: true });
 
   const server = app.listen(config.PORT, () => {
     logger.info({ port: config.PORT, env: config.NODE_ENV }, '🚀 AgentPlatform 后端启动');

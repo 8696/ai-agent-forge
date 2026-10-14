@@ -18,5 +18,5 @@ export { devProbeRouter } from './dev-probe-routes';
 export { jwtAuth } from './jwt-base';
 
 export { systemTenantRouter, systemAuthRouter, requireSystemUser } from './system';
-export { adminUserRouter, adminAuthRouter, requireAdmin } from './admin';
+export { adminUserRouter, adminAuthRouter, adminKnowledgeRouter, requireAdmin } from './admin';
 export { customerAuthRouter, requireCustomer } from './customer';
