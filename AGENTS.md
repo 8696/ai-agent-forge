@@ -204,7 +204,7 @@ yarn tsx scripts/test-step15.ts                                       # 跑回�
 **已选**（[03-技术栈与规范.md](./docs/03-a-技术栈-工程化规范.md)：已拆 03-a 工程化 / 03-b 后端栈 / 03-c 前端栈）：
 
 - 后端：Node 22 + TypeScript 5.6 + Koa + **Vercel AI SDK**（`ai` + `@ai-sdk/anthropic`）+ `@anthropic-ai/sdk`（传递依赖）+ Sequelize + MySQL 8.0 + Qdrant + Pino
-- 前端：Vite + React 18 + TypeScript + **Ant Design 5** + `@ai-sdk/react`（useChat）
+- 前端：Vite + React 18 + TypeScript + **Ant Design 6**（v6.6.6，**不是 v4/v5**）+ `@ai-sdk/react`（useChat）
 - 工程化：yarn 1.22 + ESLint 9 + Prettier 3 + Husky + lint-staged + commitlint + vitest
 
 **不引**（除非用户明确同意）：
@@ -214,6 +214,23 @@ yarn tsx scripts/test-step15.ts                                       # 跑回�
 - ❌ Next.js / Tailwind / shadcn/ui（用 Vite + AntD）
 - ❌ WebSocket（用 SSE）
 - ❌ 任何云服务 / 部署平台
+
+> ⚠ **AntD v6 API 跟 v4/v5 不一样，不要凭印象写老代码**：
+> - `Upload` 组件的 `onChange`：当 `beforeUpload: () => false` 时，v6 传给 `info.file` 的是 `new File([originFileObj], ...)` 的 **clone**（普通 `File` 对象），**没有 `originFileObj` 字段**——v4/v5 的 `info.file.originFileObj` 永远是 `undefined`
+> - 兼容写法：
+>   ```ts
+>   onChange: (info) => {
+>     const wrapped = info.file as unknown as { originFileObj?: File };
+>     const file: File | undefined =
+>       wrapped.originFileObj instanceof File
+>         ? wrapped.originFileObj
+>         : info.file instanceof File ? info.file : undefined;
+>     if (file === undefined) return;
+>     // ... doUpload(file)
+>   }
+>   ```
+> - 写新组件前先看 `node_modules/antd/es/<component>/` 下的 .d.ts / .js（权威实现），不要只信 docs.ant.design（有时滞后）
+> - 不确定就 `yarn typecheck`（tsc 按 v6 类型检查能挡住大部分误用）
 
 ### 6.2 UI 不引图片
 
@@ -281,8 +298,8 @@ yarn tsx scripts/test-step15.ts                                       # 跑回�
 - 用 Conventional Commits（`feat:` / `fix:` / `docs:` / `refactor:` / `chore:` 等）
 - commit 信息用中文
 - 大改前先看 17 §17.8.2 变更检查清单
-- **commit 节奏：以「逻辑单元」为单位**（完成一个 Step / 一次重构 / 一次 §17.8 同步），**不要**每改一个文件、每修一处小 bug 就 commit。改完后只跑 `git status` / `git diff --stat` 让用户看进度，**由用户决定何时 commit**。
-  - 例外：用户明确说「提交 / commit 一下 / push」等动词时才主动 commit
+- **不要自动 commit，也不要问用户「要不要 commit」**。改完代码只跑 `git status` / `git diff --stat` 给用户看进度；commit 时机由用户自己决定。
+  - 唯一例外：用户明确说「提交 / commit 一下 / push」等动词时，按用户指示执行
   - 跨多文件的相关改动**一次 stage 全部**（`git add -A` 或按路径），不主动 `git push`
 - 不要把 `apps/` 之类的实现目录提交（当前是文档项目，没有实现目录；项目代码在另一个项目里）
 

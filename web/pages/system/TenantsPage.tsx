@@ -7,6 +7,7 @@ import {
   Card,
   DatePicker,
   Form,
+  Input,
   Modal,
   Popconfirm,
   Space,
@@ -70,6 +71,17 @@ export function SystemTenantsPage(): ReactElement {
   const [editingRow, setEditingRow] = useState<TenantRow | null>(null);
   const [expiresForm] = Form.useForm<{ expires_at: Dayjs | null }>();
 
+  // A2：建租户（system 前端入口，后端在 src/gateway/system/tenant-routes.ts:38）
+  // 字段集严格对齐后端 createTenantSchema（src/lib/validators.ts §36-41）
+  const [creatingOpen, setCreatingOpen] = useState(false);
+  interface CreateTenantForm {
+    code: string;
+    name: string;
+    admin_email: string;
+    admin_password: string;
+  }
+  const [createForm] = Form.useForm<CreateTenantForm>();
+
   const load = async (): Promise<void> => {
     setErrMsg(null);
     try {
@@ -118,6 +130,36 @@ export function SystemTenantsPage(): ReactElement {
       const status = (e as { response?: { status?: number } }).response?.status;
       const data = (e as { response?: { data?: { message?: string } } }).response?.data;
       message.error(status === 400 ? (data?.message ?? '不能执行此操作') : '启停失败');
+    }
+  };
+
+  // ===== A2：创建租户 =====
+
+  /** 提交后端 createTenantSchema 形如 { code, name, admin_email, admin_password } */
+  const submitCreate = async (): Promise<void> => {
+    const v = await createForm.validateFields().catch(() => null);
+    if (v === null) return;
+    try {
+      const res = await systemApi.post<{ tenant: { code: string }; admin: { email: string } }>(
+        '/tenants',
+        v,
+      );
+      message.success(
+        `租户 ${res.data.tenant.code} 已创建，初始 admin：${res.data.admin.email}（首次登录会强制改密）`,
+      );
+      setCreatingOpen(false);
+      createForm.resetFields();
+      await load();
+    } catch (e) {
+      const status = (e as { response?: { status?: number } }).response?.status;
+      const data = (e as { response?: { data?: { message?: string } } }).response?.data;
+      if (status === 400 && data?.message !== undefined) {
+        message.error(data.message); // 后端原样返（如「租户号已被使用」）
+      } else if (status === 401) {
+        message.error('鉴权失败（需 system 角色）');
+      } else {
+        message.error('创建租户失败');
+      }
     }
   };
 
@@ -222,6 +264,9 @@ export function SystemTenantsPage(): ReactElement {
           租户管理
         </Title>
         <Space>
+          <Button type="primary" onClick={() => setCreatingOpen(true)}>
+            + 创建租户
+          </Button>
           <Button onClick={() => void load()}>刷新</Button>
         </Space>
       </Space>
@@ -277,6 +322,76 @@ export function SystemTenantsPage(): ReactElement {
           </Form.Item>
           <Paragraph type="secondary" style={{ marginTop: -8 }}>
             所有改动都会写入 audit_logs（系统级日志），可在「审计日志」页面查询。
+          </Paragraph>
+        </Form>
+      </Modal>
+
+      {/* A2：创建租户（system 在 /system/tenants 的「+ 创建租户」入口；后端 POST /api/v1/system/tenants） */}
+      <Modal
+        open={creatingOpen}
+        title="创建租户"
+        okText="创建"
+        cancelText="取消"
+        width={520}
+        onOk={submitCreate}
+        onCancel={() => {
+          setCreatingOpen(false);
+          createForm.resetFields();
+        }}
+        destroyOnClose
+      >
+        <Form
+          form={createForm}
+          layout="vertical"
+          preserve={false}
+          // 服务端是同步建库（事务），不传 plan / expires_at 走默认：plan='free' / expires_at=null
+          initialValues={{ code: '', name: '', admin_email: '', admin_password: '' }}
+        >
+          <Form.Item
+            name="code"
+            label="租户号"
+            // 对齐 src/lib/validators.ts §tenantCodeSchema
+            rules={[
+              { required: true, message: '请输入租户号' },
+              { pattern: /^[a-z0-9-]+$/, message: '只能包含小写字母 / 数字 / 连字符' },
+              { min: 3, max: 32, message: '长度 3-32 字符' },
+            ]}
+            extra="登录、挂件 URL 都用这个号（如 acme-corp）。一旦创建不能改。"
+          >
+            <Input placeholder="例：acme-corp" autoComplete="off" />
+          </Form.Item>
+          <Form.Item
+            name="name"
+            label="租户名称"
+            rules={[{ required: true, max: 200, message: '请输入名称（最长 200 字符）' }]}
+            extra="租户显示名（用于列表 / 详情）"
+          >
+            <Input placeholder="例：Acme Corp" autoComplete="off" />
+          </Form.Item>
+          <Form.Item
+            name="admin_email"
+            label="初始管理员邮箱"
+            rules={[
+              { required: true, message: '请输入邮箱' },
+              { type: 'email', message: '邮箱格式不正确' },
+            ]}
+            extra="该租户下的第一个 admin（首次登录会被强制改密）"
+          >
+            <Input placeholder="例：admin@acme-corp.test" autoComplete="off" />
+          </Form.Item>
+          <Form.Item
+            name="admin_password"
+            label="初始管理员密码"
+            rules={[
+              { required: true, message: '请输入密码' },
+              { min: 8, message: '至少 8 字符' },
+            ]}
+            extra="服务端会 bcrypt 哈希入库；明文不落地。"
+          >
+            <Input.Password placeholder="至少 8 字符" autoComplete="new-password" />
+          </Form.Item>
+          <Paragraph type="secondary" style={{ marginTop: -8, marginBottom: 0 }}>
+            套餐 / 到期时间走默认值（free + 永不过期），建好之后可以用列表行上的「改到期」「启停」按钮后续调整。
           </Paragraph>
         </Form>
       </Modal>

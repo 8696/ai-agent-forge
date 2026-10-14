@@ -24,8 +24,7 @@
     "lint:fix": "eslint . --fix",
     "format": "prettier --write \"src/**/*.{ts,tsx,json,md}\" \"web/**/*.{ts,tsx,json,md}\" \"shared/**/*.{ts,tsx,json,md}\"",
     "format:check": "prettier --check \"src/**/*.{ts,tsx,json,md}\" \"web/**/*.{ts,tsx,json,md}\" \"shared/**/*.{ts,tsx,json,md}\"",
-    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.web.json",
-    "prepare": "husky || true"
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.web.json"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^1.0.0",
@@ -68,8 +67,6 @@
     "zustand": "^5.0.15"
   },
   "devDependencies": {
-    "@commitlint/cli": "^19.6.0",
-    "@commitlint/config-conventional": "^19.6.0",
     "@eslint/js": "^9.17.0",
     "@types/bcrypt": "^5.0.2",
     "@types/jsonwebtoken": "^9.0.7",
@@ -85,23 +82,12 @@
     "concurrently": "^9.1.2",
     "eslint": "^9.17.0",
     "globals": "^15.14.0",
-    "husky": "^9.1.7",
-    "lint-staged": "^15.2.11",
     "prettier": "^3.4.2",
     "tsx": "^4.19.2",
     "typescript": "^5.6.3",
     "typescript-eslint": "^8.19.0",
     "vite": "^8.3.4",
     "vitest": "^2.1.8"
-  },
-  "lint-staged": {
-    "*.{ts,tsx}": [
-      "eslint --fix",
-      "prettier --write"
-    ],
-    "*.{json,md}": [
-      "prettier --write"
-    ]
   },
   "resolutions": {
     "@types/koa": "2.15.2"

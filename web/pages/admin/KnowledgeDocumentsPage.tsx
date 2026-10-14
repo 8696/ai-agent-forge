@@ -88,16 +88,25 @@ export function KnowledgeDocumentsPage(): ReactElement {
   }, [rows, statusFilter]);
 
   // 上传 Dragger：beforeUpload=false 让 antd 不真发，由我们 axios 发（带拦截器 / token）
+  // antd v6 + beforeUpload=false 时，onChange 收到的 file 是 new File() clone（普通 File 对象，没有 originFileObj）；
+  // antd v4/v5 是包装对象才有 originFileObj。两种情况都兼容：
   const draggerProps: UploadProps = {
     name: 'file',
     multiple: false,
     accept: ACCEPT,
     showUploadList: false,
     beforeUpload: () => false, // 阻止 antd 默认上传
-    onChange: async (info) => {
-      const file = info.file.originFileObj;
+    onChange: (info) => {
+      // 兼容 v4/v5 包装对象 + v6 clone：先看 originFileObj，没有就当 info.file 本身是 File
+      const maybeWrapped = info.file as unknown as { originFileObj?: File };
+      const file: File | undefined =
+        maybeWrapped.originFileObj instanceof File
+          ? maybeWrapped.originFileObj
+          : info.file instanceof File
+            ? info.file
+            : undefined;
       if (file === undefined) return;
-      await doUpload(file);
+      void doUpload(file);
     },
   };
 
