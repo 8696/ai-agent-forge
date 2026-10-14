@@ -1,0 +1,404 @@
+import type { ReactElement } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import {
+  Alert,
+  Button,
+  Card,
+  Drawer,
+  Form,
+  Input,
+  Modal,
+  Popconfirm,
+  Select,
+  Space,
+  Table,
+  Tag,
+  Typography,
+  message,
+} from 'antd';
+import type { TableColumnsType } from 'antd';
+import { adminApi } from '../../lib/adminApi';
+import { getToken } from '../../lib/apiFactory';
+
+const { Title, Paragraph } = Typography;
+
+/**
+ * 用户角色 —— 跟 src/lib/validators.ts §roleSchema 一致（拒收 agent）
+ * 详见 docs/16-a-需求-多租户与登录.md §A3 + docs/04-c-ui-后台管理页面.md §5.8
+ */
+type UserRole = 'admin' | 'customer';
+
+interface UserRow {
+  id: string;
+  email: string;
+  role: UserRole;
+  must_change_password: boolean;
+  last_login_at: string | null;
+  created_at: string;
+}
+
+/**
+ * 从 adminApi 的 token 解出当前 admin 的 user id —— 用来在「删除」按钮上
+ * disable 掉自己（前端兜底；后端 src/gateway/admin/user-routes.ts:98 也防）
+ */
+function currentAdminId(): string | null {
+  const tok = getToken();
+  if (tok === null) return null;
+  try {
+    const payload = JSON.parse(atob(tok.split('.')[1] ?? '')) as { sub?: string };
+    return payload.sub ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * /admin/users —— 租户 admin 管本租户用户（Step 13 P10）
+ *
+ * 后端 4 个端点（docs/06-API接口.md §6.3 / src/gateway/admin/user-routes.ts）：
+ *   GET    /users           列表（本租户）
+ *   POST   /users           新建（任意 role；roleSchema 当前只收 admin/customer）
+ *   PATCH  /users/:id       改邮箱 / 重置密码（不支持改 role）
+ *   DELETE /users/:id       删除（不能删自己）
+ *
+ * UI 草图：docs/04-c-ui-后台管理页面.md §5.8
+ */
+export function AdminUsersPage(): ReactElement {
+  const [rows, setRows] = useState<UserRow[] | null>(null);
+  const [errMsg, setErrMsg] = useState<string | null>(null);
+
+  // 检索 / 筛选（client-side，后端 list 端点还没接 filter 参数）
+  const [search, setSearch] = useState('');
+  const [roleFilter, setRoleFilter] = useState<'all' | UserRole>('all');
+
+  // 创建 Modal
+  const [creatingOpen, setCreatingOpen] = useState(false);
+  const [createForm] = Form.useForm<{ email: string; role: UserRole; password: string }>();
+  const [createSubmitting, setCreateSubmitting] = useState(false);
+
+  // 编辑 Drawer（只覆盖邮箱 + 可选重置密码 —— updateUserSchema 不收 role）
+  const [editing, setEditing] = useState<UserRow | null>(null);
+  const [editForm] = Form.useForm<{ email: string; password?: string }>();
+  const [editSubmitting, setEditSubmitting] = useState(false);
+
+  const load = async (): Promise<void> => {
+    setErrMsg(null);
+    try {
+      const res = await adminApi.get<{ users: UserRow[] }>('/users');
+      setRows(res.data.users);
+    } catch (e: unknown) {
+      const status = (e as { response?: { status?: number } }).response?.status;
+      setErrMsg(status === 401 ? '鉴权失败（需 admin 角色）' : '加载失败');
+    }
+  };
+
+  useEffect(() => {
+    void load();
+  }, []);
+
+  // client-side filtered rows
+  const filtered = useMemo(() => {
+    const data = rows ?? [];
+    const q = search.trim().toLowerCase();
+    return data.filter((r) => {
+      if (roleFilter !== 'all' && r.role !== roleFilter) return false;
+      if (q !== '' && !r.email.toLowerCase().includes(q)) return false;
+      return true;
+    });
+  }, [rows, search, roleFilter]);
+
+  // ===== 创建 =====
+
+  const submitCreate = async (): Promise<void> => {
+    const v = await createForm.validateFields().catch(() => null);
+    if (v === null) return;
+    setCreateSubmitting(true);
+    try {
+      await adminApi.post('/users', v);
+      message.success(`已创建 ${v.role}：${v.email}`);
+      setCreatingOpen(false);
+      createForm.resetFields();
+      await load();
+    } catch (e) {
+      const status = (e as { response?: { status?: number } }).response?.status;
+      const data = (e as { response?: { data?: { message?: string } } }).response?.data;
+      if (status === 400 && data?.message !== undefined) {
+        message.error(data.message); // 「邮箱已存在」等
+      } else {
+        message.error('创建失败');
+      }
+    } finally {
+      setCreateSubmitting(false);
+    }
+  };
+
+  // ===== 编辑 =====
+
+  const openEdit = (row: UserRow): void => {
+    editForm.setFieldsValue({ email: row.email, password: '' });
+    setEditing(row);
+  };
+
+  const submitEdit = async (): Promise<void> => {
+    if (editing === null) return;
+    const v = await editForm.validateFields().catch(() => null);
+    if (v === null) return;
+    const body: { email?: string; password?: string } = {};
+    if (v.email !== editing.email) body.email = v.email;
+    if (v.password !== undefined && v.password !== '') body.password = v.password;
+    if (Object.keys(body).length === 0) {
+      message.info('没有改动');
+      setEditing(null);
+      return;
+    }
+    setEditSubmitting(true);
+    try {
+      await adminApi.patch(`/users/${editing.id}`, body);
+      message.success('已保存');
+      setEditing(null);
+      editForm.resetFields();
+      await load();
+    } catch (e) {
+      const status = (e as { response?: { status?: number } }).response?.status;
+      const data = (e as { response?: { data?: { message?: string } } }).response?.data;
+      message.error(status === 400 && data?.message !== undefined ? data.message : '保存失败');
+    } finally {
+      setEditSubmitting(false);
+    }
+  };
+
+  // ===== 删除 =====
+
+  const onDelete = async (row: UserRow): Promise<void> => {
+    try {
+      await adminApi.delete(`/users/${row.id}`);
+      message.success(`已删除 ${row.email}`);
+      await load();
+    } catch (e) {
+      const status = (e as { response?: { status?: number } }).response?.status;
+      const data = (e as { response?: { data?: { message?: string } } }).response?.data;
+      message.error(status === 400 && data?.message !== undefined ? data.message : '删除失败');
+    }
+  };
+
+  const selfId = currentAdminId();
+
+  const columns: TableColumnsType<UserRow> = [
+    {
+      title: '邮箱',
+      dataIndex: 'email',
+      key: 'email',
+      render: (email: string, row) => (
+        <Space size={4}>
+          <span>{email}</span>
+          {row.must_change_password && <Tag color="orange">待改密</Tag>}
+        </Space>
+      ),
+    },
+    {
+      title: '角色',
+      dataIndex: 'role',
+      key: 'role',
+      render: (r: UserRole) => <Tag color={r === 'admin' ? 'geekblue' : 'green'}>{r}</Tag>,
+    },
+    {
+      title: '最后登录',
+      dataIndex: 'last_login_at',
+      key: 'last_login_at',
+      render: (t: string | null) => (t === null ? '—' : new Date(t).toLocaleString()),
+    },
+    {
+      title: '创建时间',
+      dataIndex: 'created_at',
+      key: 'created_at',
+      render: (t: string) => new Date(t).toLocaleString(),
+    },
+    {
+      title: '操作',
+      key: 'actions',
+      render: (_: unknown, row) => {
+        const isSelf = selfId !== null && selfId === row.id;
+        return (
+          <Space>
+            <Button size="small" onClick={() => openEdit(row)}>
+              编辑
+            </Button>
+            <Popconfirm
+              title={
+                isSelf
+                  ? `不能删除自己（${row.email}）—— 后端也拒`
+                  : `确认删除 ${row.email}？此操作不可撤销`
+              }
+              okText="确认"
+              cancelText="取消"
+              disabled={isSelf}
+              {...(isSelf ? {} : { onConfirm: () => void onDelete(row) })}
+            >
+              <Button size="small" danger disabled={isSelf}>
+                删除
+              </Button>
+            </Popconfirm>
+          </Space>
+        );
+      },
+    },
+  ];
+
+  return (
+    <div>
+      <Space style={{ marginBottom: 16, justifyContent: 'space-between', display: 'flex' }}>
+        <Title level={3} style={{ margin: 0 }}>
+          用户管理
+        </Title>
+        <Space>
+          <Button type="primary" onClick={() => setCreatingOpen(true)}>
+            + 创建用户
+          </Button>
+          <Button onClick={() => void load()}>刷新</Button>
+        </Space>
+      </Space>
+      <Paragraph type="secondary">
+        列本租户所有用户（admin + customer），可创建、改邮箱 / 重置密码、删除。
+      </Paragraph>
+
+      {errMsg !== null && (
+        <Alert type="error" showIcon message={errMsg} style={{ marginBottom: 16 }} />
+      )}
+
+      <Card style={{ marginBottom: 16 }}>
+        <Space wrap>
+          <Input.Search
+            placeholder="按邮箱搜索"
+            allowClear
+            onSearch={(v) => setSearch(v)}
+            onChange={(e) => {
+              if (e.target.value === '') setSearch('');
+            }}
+            style={{ width: 240 }}
+          />
+          <Select
+            value={roleFilter}
+            onChange={(v) => setRoleFilter(v)}
+            style={{ width: 180 }}
+            options={[
+              { value: 'all', label: '全部角色' },
+              { value: 'admin', label: '仅 admin（后台）' },
+              { value: 'customer', label: '仅 customer（前台）' },
+            ]}
+          />
+        </Space>
+      </Card>
+
+      <Card>
+        <Table
+          rowKey="id"
+          columns={columns}
+          dataSource={filtered}
+          loading={rows === null}
+          pagination={false}
+          locale={{ emptyText: rows === null ? '加载中…' : '本租户还没有用户，去建一个吧' }}
+        />
+      </Card>
+
+      {/* 创建：email + role + 初始密码 */}
+      <Modal
+        open={creatingOpen}
+        title="创建用户"
+        okText="创建"
+        cancelText="取消"
+        confirmLoading={createSubmitting}
+        onOk={submitCreate}
+        onCancel={() => {
+          setCreatingOpen(false);
+          createForm.resetFields();
+        }}
+        destroyOnClose
+      >
+        <Form form={createForm} layout="vertical" preserve={false}>
+          <Form.Item
+            name="email"
+            label="邮箱"
+            rules={[
+              { required: true, message: '请输入邮箱' },
+              { type: 'email', message: '邮箱格式不正确' },
+            ]}
+            extra="本租户内唯一；同租户的 admin / customer 邮箱不能重"
+          >
+            <Input placeholder="例：alice@acme-corp.test" autoComplete="off" />
+          </Form.Item>
+          <Form.Item
+            name="role"
+            label="角色"
+            rules={[{ required: true, message: '请选择角色' }]}
+            extra="admin 走 /admin 入口；customer 走 /customer 入口"
+          >
+            <Select
+              options={[
+                { value: 'admin', label: 'admin（后台管理员）' },
+                { value: 'customer', label: 'customer（前台用户）' },
+              ]}
+            />
+          </Form.Item>
+          <Form.Item
+            name="password"
+            label="初始密码"
+            rules={[
+              { required: true, message: '请输入密码' },
+              { min: 8, message: '至少 8 字符' },
+            ]}
+            extra="服务端 bcrypt 哈希入库"
+          >
+            <Input.Password placeholder="至少 8 字符" autoComplete="new-password" />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      {/* 编辑：email + 可选重置密码（不支持改 role，跟后端 updateUserSchema 一致） */}
+      <Drawer
+        open={editing !== null}
+        title={editing === null ? '' : `编辑用户 ${editing.email}`}
+        width={420}
+        onClose={() => {
+          setEditing(null);
+          editForm.resetFields();
+        }}
+        destroyOnClose
+        extra={
+          <Space>
+            <Button onClick={() => setEditing(null)}>取消</Button>
+            <Button type="primary" loading={editSubmitting} onClick={submitEdit}>
+              保存
+            </Button>
+          </Space>
+        }
+      >
+        <Form form={editForm} layout="vertical" preserve={false}>
+          <Form.Item
+            name="email"
+            label="邮箱"
+            rules={[
+              { required: true, message: '请输入邮箱' },
+              { type: 'email', message: '邮箱格式不正确' },
+            ]}
+          >
+            <Input autoComplete="off" />
+          </Form.Item>
+          <Form.Item
+            name="password"
+            label="重置密码（不填则不改）"
+            rules={[{ min: 8, message: '至少 8 字符' }]}
+            extra="填写则覆盖该用户的 password_hash。"
+          >
+            <Input.Password placeholder="留空表示不动" autoComplete="new-password" />
+          </Form.Item>
+          {editing !== null && (
+            <Paragraph type="secondary" style={{ marginTop: -8 }}>
+              角色「{editing.role}」由创建决定，不可在编辑时变更（后端 updateUserSchema 不收
+              role）。
+            </Paragraph>
+          )}
+        </Form>
+      </Drawer>
+    </div>
+  );
+}

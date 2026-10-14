@@ -67,3 +67,5 @@ coverage/
 
 # ─── Claude Desktop 本地配置（不入库） ──────────────────
 .claude/
+# 桌面 app Remote Control 写入的临时文件（不同次会话后缀会变）
+.uuremote_*

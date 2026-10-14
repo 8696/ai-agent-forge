@@ -47,7 +47,7 @@ export function AdminLayout({ children }: { children?: ReactNode }): ReactElemen
               label: <Link to="/admin/knowledge">知识库</Link>,
               disabled: true,
             },
-            { key: '/admin/users', label: <Link to="/admin/users">用户</Link>, disabled: true },
+            { key: '/admin/users', label: <Link to="/admin/users">用户</Link> },
             { key: '/admin/eval', label: <Link to="/admin/eval">评测</Link>, disabled: true },
             { key: '/admin/traces', label: <Link to="/admin/traces">Trace</Link>, disabled: true },
             { key: '/admin/cost', label: <Link to="/admin/cost">成本</Link>, disabled: true },

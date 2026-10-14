@@ -6,3 +6,4 @@
  */
 export { AdminLoginPage } from './AdminLoginPage';
 export { AdminHomePage } from './AdminHomePage';
+export { AdminUsersPage } from './UsersPage';

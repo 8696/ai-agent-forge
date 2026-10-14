@@ -8,7 +8,7 @@ import {
   SystemTenantsPage,
   SystemTenantDetailPage,
 } from './pages/system';
-import { AdminLoginPage, AdminHomePage } from './pages/admin';
+import { AdminLoginPage, AdminHomePage, AdminUsersPage } from './pages/admin';
 import { CustomerLoginPage, CustomerHomePage } from './pages/customer';
 import { SystemLayout } from './layouts/system/SystemLayout';
 import { AdminLayout } from './layouts/admin/AdminLayout';
@@ -51,6 +51,7 @@ const routes: RouteObject[] = [
     children: [
       { index: true, element: <AdminHomePage /> },
       { path: 'login', element: <AdminLoginPage /> },
+      { path: 'users', element: <AdminUsersPage /> },
     ],
   },
 
