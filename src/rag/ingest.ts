@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { splitByChunk } from './chunk';
 import { embedBatch, EmbeddingError } from './embedding';
 import { getQdrant, ensureCollection, deleteDocumentPoints } from './qdrant';
+import { bm25Add } from './bm25';
 import { config } from '../config';
 import { logger } from '../logger';
 
@@ -55,7 +56,7 @@ export async function ingestDocument(params: IngestParams): Promise<IngestResult
         throw new EmbeddingError(`chunk ${i} embedding 缺失`);
       }
       return {
-        // id 用「docId-idx」字符串，保证唯一；Qdrant 支持 string ID
+        // id 用 randomUUID（Qdrant 1.x 只接受 unsigned integer / UUID）；关联走 payload.doc_id + chunk_index
         id: randomUUID(),
         vector: embedding,
         payload: {
@@ -76,6 +77,23 @@ export async function ingestDocument(params: IngestParams): Promise<IngestResult
         wait: true,
         points: points.slice(i, i + BATCH),
       });
+    }
+
+    // BM25 索引增量加入（Step 5 新增）
+    // BM25 是次要召回，挂了不影响 vector 路径；warn 即可，不抛错
+    try {
+      bm25Add({
+        tenantId: params.tenantId,
+        docId: params.documentId,
+        source: params.title,
+        chunks: chunks.map((c) => ({ index: c.index, text: c.text, source: params.title })),
+      });
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      logger.warn(
+        { docId: params.documentId, tenantId: params.tenantId, err: msg },
+        'BM25 索引增量加入失败（vector 路径不受影响）',
+      );
     }
 
     logger.info(

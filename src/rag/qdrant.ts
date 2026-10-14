@@ -7,7 +7,8 @@ import { logger } from '../logger';
  *
  * 设计要点：
  *  - Qdrant 走 REST 协议（@qdrant/js-client-rest），不引 OpenTelemetry
- *  - Collection 在首次调用时自举创建（id 用 `${docId}-${chunkIndex}`，避免跨文档冲突）
+ *  - Collection 在首次调用时自举创建
+ *  - point id 用 randomUUID（Qdrant 1.x 只接受 unsigned integer / UUID；关联走 payload.doc_id + chunk_index）
  *  - payload 必须含 `tenant_id`，搜索时强制按 tenant_id 过滤（防跨租户泄露）
  */
 

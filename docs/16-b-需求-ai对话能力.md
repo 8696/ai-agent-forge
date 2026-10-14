@@ -102,13 +102,14 @@ export async function hybridSearch(query: string, tenantId: string, topK = 10) {
     filter: { must: [{ key: 'tenant_id', match: { value: tenantId } }] },
   });
 
-  // 3. BM25 检索（用 lunr.js 或自建）
+  // 3. BM25 检索（用 nodejieba 切词 + 自建 BM25；详见 src/rag/bm25.ts）
   const bm25Results = await bm25.search(query, { tenantId, limit: topK * 2 });
 
   // 4. RRF 融合
   const fused = reciprocalRankFusion([vectorResults, bm25Results], { k: 60 });
 
-  // 5. 重排序
+  // 5. 重排序（本期跳过；Step 6+ 再加独立 HTTP 客户端调 bge-reranker-v2-m3）
+  //    — 避免引入 transformers.js / 独立 BGE 服务
   return await rerank(query, fused.slice(0, topK * 2), { model: 'bge-reranker-v2-m3', topK });
 }
 ```

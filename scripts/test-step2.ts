@@ -121,11 +121,11 @@ async function main(): Promise<void> {
   // 5) GET /api/v1/admin/users
   const list = await api('GET', '/api/v1/admin/users', undefined, adminToken);
   const listOk = list.status === 200;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const listBody = list.data as { users?: unknown[] } | undefined;
   logStep(
     'GET /api/v1/admin/users',
     listOk,
-    `status=${list.status} count=${(list.data as any)?.users?.length ?? '?'}`,
+    `status=${list.status} count=${listBody?.users?.length ?? '?'}`,
   );
 
   // 6) POST /api/v1/admin/users —— 创建 3 个前台 / 坐席用户

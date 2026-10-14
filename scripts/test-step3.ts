@@ -186,21 +186,19 @@ async function main(): Promise<void> {
 
   // ===== 3) GET /me（每个子系统自己的 /me 端点）=====
   const meAdmin = await api('GET', '/api/v1/admin/me', undefined, adminToken);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const meAdminBody = meAdmin.data as { role?: string } | undefined;
   check(
     'GET /api/v1/admin/me（admin token）',
-    meAdmin.status === 200 && (meAdmin.data as any).role === 'admin',
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    `status=${meAdmin.status} role=${(meAdmin.data as any).role}`,
+    meAdmin.status === 200 && meAdminBody?.role === 'admin',
+    `status=${meAdmin.status} role=${meAdminBody?.role ?? '?'}`,
   );
 
   const meCustomer = await api('GET', '/api/v1/customer/me', undefined, customerToken);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const meCustomerBody = meCustomer.data as { role?: string } | undefined;
   check(
     'GET /api/v1/customer/me（customer token）',
-    meCustomer.status === 200 && (meCustomer.data as any).role === 'customer',
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    `status=${meCustomer.status} role=${(meCustomer.data as any).role}`,
+    meCustomer.status === 200 && meCustomerBody?.role === 'customer',
+    `status=${meCustomer.status} role=${meCustomerBody?.role ?? '?'}`,
   );
 
   // system token 调 /admin/me 应该 401（system 不是 tenant user）

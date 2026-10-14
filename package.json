@@ -50,6 +50,7 @@
     "lru-cache": "^11.0.2",
     "mysql2": "^3.11.5",
     "nanoid": "^5.0.9",
+    "nodejieba": "^3.5.8",
     "pdf-parse": "1.1.1",
     "pino": "^9.5.0",
     "pino-pretty": "^11.3.0",

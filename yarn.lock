@@ -557,7 +557,7 @@
     koa-compose "^4.1.0"
     path-to-regexp "^6.3.0"
 
-"@mapbox/node-pre-gyp@^1.0.11":
+"@mapbox/node-pre-gyp@^1.0.10", "@mapbox/node-pre-gyp@^1.0.11":
   version "1.0.11"
   resolved "https://registry.npmmirror.com/@mapbox/node-pre-gyp/-/node-pre-gyp-1.0.11.tgz#417db42b7f5323d79e93b34a6d7a2a12c0df43fa"
   integrity sha512-Yhlar6v9WQgUp/He7BdgzOz8lqMQ8sU+jkCq7Wx8Myc5YFJLbEe7lgui/V7G1qB1DJykHSGwreceSaD60Y0PUQ==
@@ -4115,7 +4115,7 @@ negotiator@0.6.3:
   resolved "https://registry.npmmirror.com/negotiator/-/negotiator-0.6.3.tgz#58e323a72fedc0d6f9cd4d31fe49f51479590ccd"
   integrity sha512-+EUsqGPLsM+j/zdChZjsnX51g4XrHFOIXwfnCVPGlQk/k5giakcKsuxCObBRu6DSm9opw/O6slWbJdghQM4bBg==
 
-node-addon-api@^5.0.0:
+node-addon-api@^5.0.0, node-addon-api@^5.1.0:
   version "5.1.0"
   resolved "https://registry.npmmirror.com/node-addon-api/-/node-addon-api-5.1.0.tgz#49da1ca055e109a23d537e9de43c09cca21eb762"
   integrity sha512-eh0GgfEkpnoWDq+VY8OyvYhFEzBk6jIYbRKdIlyTiAXIVJ8PyBaKb0rp7oDtoddbdoHWhq8wwr+XZ81F1rpNdA==
@@ -4136,6 +4136,14 @@ node-fetch@^2.6.7:
   integrity sha512-c4FRfUm/dbcWZ7U+1Wq0AwCyFL+3nt2bEw05wfxSz+DWpWsitgmSgYmy2dQdWyKC1694ELPqMs/YzUSNozLt8A==
   dependencies:
     whatwg-url "^5.0.0"
+
+nodejieba@^3.5.8:
+  version "3.5.8"
+  resolved "https://registry.yarnpkg.com/nodejieba/-/nodejieba-3.5.8.tgz#b5343ce50ccc67fc56dc62ebd10041cac1125011"
+  integrity sha512-TFiDYgEVmBgQwAr1sVj7err3Cn21qxMxTLA+LTEVqKcGqgwJuonJEW0g6oH2+7FhMKJfkWsvlj1SaTrWXe1Q9w==
+  dependencies:
+    "@mapbox/node-pre-gyp" "^1.0.10"
+    node-addon-api "^5.1.0"
 
 nopt@^5.0.0:
   version "5.0.0"

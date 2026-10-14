@@ -11,7 +11,8 @@ import { requireAdmin } from './middleware';
 import { saveUpload } from '../../services/document-upload';
 import { extractText, type SupportedFileType } from '../../services/document-parse';
 import { ingestDocument } from '../../rag/ingest';
-import { vectorSearch } from '../../rag/search';
+import { hybridSearch, type HybridHit } from '../../rag/hybrid-search';
+import { bm25Remove } from '../../rag/bm25';
 import { deleteDocumentPoints } from '../../rag/qdrant';
 import { writeAuditLog } from '../../lib/audit-log';
 import { NotFoundError, ValidationError } from '../../lib/errors';
@@ -198,6 +199,15 @@ adminKnowledgeRouter.delete('/knowledge/:id', async (ctx) => {
       '删 Qdrant points 失败',
     );
   });
+  // 1b. 删 BM25 内存索引（Step 5 新增；进程内 Map 跟 Qdrant 同步）
+  try {
+    bm25Remove({ tenantId: u.tenant_id, docId: doc.id });
+  } catch (e: unknown) {
+    logger.warn(
+      { docId: doc.id, err: e instanceof Error ? e.message : String(e) },
+      '删 BM25 索引失败',
+    );
+  }
   // 2. 删磁盘文件
   if (doc.file_path !== null) {
     await fs.unlink(doc.file_path).catch((e: unknown) => {
@@ -224,29 +234,42 @@ adminKnowledgeRouter.delete('/knowledge/:id', async (ctx) => {
 });
 
 // ===== POST /knowledge/test · 检索测试 =====
-const TestBody = z.object({
-  query: z.string().min(1, '问句不能为空').max(2000),
-  top_k: z.number().int().min(1).max(50).optional(),
-  score_threshold: z.number().min(0).max(1).optional(),
-});
+// Step 5 起改走 hybridSearch（向量 + BM25 + RRF）
+//  - 响应里的 score 是 RRF 分（k=60），跟原 cosine similarity 不可比 → score_threshold 字段保留但忽略
+//    （前端还没实现，调用方基本没人传；传了就 warn 提示 deprecated）
+// 详见 docs/16-b §B2 + docs/15 §Step 5
+const TestBody = z
+  .object({
+    query: z.string().min(1, '问句不能为空').max(2000),
+    top_k: z.number().int().min(1).max(50).optional(),
+    /** @deprecated Step 5 起 hybridSearch 不再支持（RRF 分数阈值无意义）；保留字段为兼容老调用 */
+    score_threshold: z.number().min(0).max(1).optional(),
+  })
+  .passthrough();
 
 adminKnowledgeRouter.post('/knowledge/test', async (ctx) => {
   const u = ctx.state.adminUser as TenantUserJwtPayload;
   const input = TestBody.parse(ctx.request.body);
-  const points = await vectorSearch({
+  if (input.score_threshold !== undefined) {
+    logger.warn(
+      { tenantId: u.tenant_id, score_threshold: input.score_threshold },
+      'POST /knowledge/test · score_threshold 已废弃（hybridSearch 不再支持）',
+    );
+  }
+  const hits: HybridHit[] = await hybridSearch({
     query: input.query,
     tenantId: u.tenant_id,
     topK: input.top_k ?? 5,
-    ...(input.score_threshold !== undefined ? { scoreThreshold: input.score_threshold } : {}),
   });
   ctx.body = {
     query: input.query,
-    hits: points.map((p) => ({
-      doc_id: p.doc_id,
-      chunk_index: p.chunk_index,
-      source: p.source,
-      score: Number(p.score.toFixed(4)),
-      text: p.text,
+    hits: hits.map((h) => ({
+      doc_id: h.doc_id,
+      chunk_index: h.chunk_index,
+      source: h.source,
+      score: Number(h.score.toFixed(6)),
+      text: h.text,
+      sources: h.sources, // ['vector' | 'bm25']；多源说明两边都命中 → RRF 累加
     })),
   };
 });

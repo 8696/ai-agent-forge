@@ -95,7 +95,7 @@
 | GET  | `/api/v1/admin/knowledge`        | 文档列表（仅本租户，按上传时间倒序）       | requireAdmin |
 | POST | `/api/v1/admin/knowledge/upload` | 上传文档（**PDF / MD / TXT**，multipart，field=file） | requireAdmin |
 | DELETE | `/api/v1/admin/knowledge/:id`  | 删除文档 + 同步删 Qdrant points + 写 audit_logs | requireAdmin |
-| POST | `/api/v1/admin/knowledge/test`  | 检索测试（top 5 命中片段，仅向量检索，**Step 5 落 BM25 + rerank**） | requireAdmin |
+| POST | `/api/v1/admin/knowledge/test`  | 检索测试（**Step 5 起改走 hybridSearch**：向量 + BM25 + RRF；**rerank 暂跳**；返回的 `score` 是 RRF 分，跟原 cosine 不可比，`score_threshold` 字段已移除；额外返回 `sources: ['vector'\|'bm25']`） | requireAdmin |
 | GET  | `/api/v1/admin/tools`            | 工具列表                             | requireAdmin |
 | GET  | `/api/v1/admin/users`            | 用户列表（CRUD，**已 Step 2 实现**） | requireAdmin |
 
