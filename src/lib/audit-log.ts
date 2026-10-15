@@ -41,11 +41,18 @@ export async function writeAuditLog(params: WriteAuditLogParams): Promise<void> 
     });
   } catch (e: unknown) {
     // 表不存在（早期未跑 006 迁移）或字段不一致 —— 静默 downgrade，不阻塞业务
-    const err = e as { name?: string; message?: string };
-    logger.warn(
+    // "表不存在" 是已知早期状态（migration 未跑 / 测试 mock），降到 debug 不污染输出；
+    // 其他真异常（连接挂 / 约束冲突 / 权限错）保留 warn 以保可见性。
+    const err = e as { name?: string; message?: string; original?: { code?: string } };
+    const msg = err.message ?? String(e);
+    const isTableMissing =
+      err.original?.code === 'ER_NO_SUCH_TABLE' ||
+      /Table .*(doesn't|not) exist/i.test(msg);
+    const level = isTableMissing ? 'debug' : 'warn';
+    logger[level](
       {
         audit: params,
-        err: err.message ?? String(e),
+        err: msg,
         err_name: err.name ?? null,
       },
       'audit log write failed',
