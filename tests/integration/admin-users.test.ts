@@ -7,7 +7,7 @@ import { describe, it, expect, beforeAll } from 'vitest';
 import axios from 'axios';
 import { allHttpFromTokensFile, type AllHttp } from '../helpers';
 
-const BASE = `http://localhost:${process.env.PORT ?? '3000'}`;
+const BASE = `http://localhost:${process.env.PORT ?? '3099'}`;
 
 describe('admin-users-routes', () => {
   let http: AllHttp;
@@ -97,10 +97,13 @@ describe('admin-users-routes', () => {
 
   describe('DELETE /users/:id · 删用户', () => {
     it('400 不能删除自己', async () => {
-      // /me 拿自己 id
-      const me = await http.acmeAdmin.get('/me');
-      const id = (me.data as { id: string }).id;
-      const r = await http.acmeAdmin.delete(`/users/${id}`, { validateStatus: () => true });
+      // /me 已删除；用 /users 列表找到自己（登录的 admin 邮箱对应的 id 就是自己）
+      const list = await http.acmeAdmin.get('/users');
+      const me = (list.data as { users: Array<{ id: string; email: string }> }).users.find(
+        (u) => u.email === 'admin@acme.test',
+      );
+      if (me === undefined) throw new Error('找不到 admin@acme.test');
+      const r = await http.acmeAdmin.delete(`/users/${me.id}`, { validateStatus: () => true });
       expect(r.status).toBe(400);
     });
 

@@ -2,8 +2,6 @@ import 'reflect-metadata';
 import Koa from 'koa';
 import bodyParser from 'koa-bodyparser';
 import cors from '@koa/cors';
-import { promises as fs } from 'fs';
-import path from 'path';
 import { config } from './config';
 import { logger } from './logger';
 import { initDatabase } from './db';
@@ -16,12 +14,7 @@ import {
   systemAuthRouter,
   adminUserRouter,
   adminAuthRouter,
-  adminKnowledgeRouter,
-  adminSessionsRouter,
   customerAuthRouter,
-  chatRouter,
-  chatStreamRouter,
-  sessionsRouter,
 } from './gateway';
 
 /**
@@ -37,7 +30,6 @@ async function bootstrap(): Promise<void> {
     cors({
       origin: '*',
       credentials: true,
-      // SSE 需要长连接
       allowHeaders: ['Content-Type', 'Authorization'],
     }),
   );
@@ -53,25 +45,14 @@ async function bootstrap(): Promise<void> {
   app.use(devProbeRouter.routes()).use(devProbeRouter.allowedMethods());
 
   // 业务路由（3 子系统各自独立，auth 自闭环）
-  app.use(systemTenantRouter.routes()).use(systemTenantRouter.allowedMethods()); // systems 子系统
-  app.use(systemAuthRouter.routes()).use(systemAuthRouter.allowedMethods()); // systems login + me + change-password
-  app.use(adminUserRouter.routes()).use(adminUserRouter.allowedMethods()); // admin 业务（用户管理）
-  app.use(adminKnowledgeRouter.routes()).use(adminKnowledgeRouter.allowedMethods()); // admin 知识库（Step 4）
-  app.use(adminAuthRouter.routes()).use(adminAuthRouter.allowedMethods()); // admin login + me + change-password
-  app.use(adminSessionsRouter.routes()).use(adminSessionsRouter.allowedMethods()); // admin sessions 列表/详情（Step 7）
-  app.use(customerAuthRouter.routes()).use(customerAuthRouter.allowedMethods()); // customer login（其他 customer 功能已清空）
-  // Step 6：对外 chat API（API Key 鉴权；不走 JWT）
-  app.use(chatRouter.routes()).use(chatRouter.allowedMethods()); // POST /api/v1/chat
-  app.use(chatStreamRouter.routes()).use(chatStreamRouter.allowedMethods()); // POST /api/v1/chat/stream
-  // Step 7：对外 session 查询（API Key 鉴权）
-  app.use(sessionsRouter.routes()).use(sessionsRouter.allowedMethods()); // GET /api/v1/sessions/:id
+  app.use(systemTenantRouter.routes()).use(systemTenantRouter.allowedMethods()); // system 租户管理
+  app.use(systemAuthRouter.routes()).use(systemAuthRouter.allowedMethods()); // system login
+  app.use(adminUserRouter.routes()).use(adminUserRouter.allowedMethods()); // admin 用户管理
+  app.use(adminAuthRouter.routes()).use(adminAuthRouter.allowedMethods()); // admin login
+  app.use(customerAuthRouter.routes()).use(customerAuthRouter.allowedMethods()); // customer login
 
   // 数据库初始化（缺配置 + 启动 DB 失败都不让起来）
   await initDatabase();
-
-  // Step 4：知识库本地目录自举（koa-body multipart 落盘 + 上传文件落 ./data/uploads）
-  await fs.mkdir(path.resolve(config.DATA_DIR, 'tmp'), { recursive: true });
-  await fs.mkdir(path.resolve(config.DATA_DIR, 'uploads'), { recursive: true });
 
   const server = app.listen(config.PORT, () => {
     logger.info({ port: config.PORT, env: config.NODE_ENV }, '🚀 AgentPlatform 后端启动');
@@ -81,7 +62,7 @@ async function bootstrap(): Promise<void> {
   const shutdown = (signal: string): void => {
     logger.info({ signal }, '收到退出信号，正在关闭服务');
     server.close(() => {
-      logger.info('HTTP 服务已关闭');
+      logger.info('HTTP服务已关闭');
       process.exit(0);
     });
   };

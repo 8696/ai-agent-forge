@@ -10,7 +10,7 @@ import { getSequelize } from '../../src/db';
 import { Tenant, User } from '../../src/models';
 import { hashPassword } from '../../src/lib/password';
 
-const BASE = `http://localhost:${process.env.PORT ?? '3000'}`;
+const BASE = `http://localhost:${process.env.PORT ?? '3099'}`;
 
 async function api<T = unknown>(
   method: string,
@@ -192,15 +192,15 @@ describe('legacy Step 2 · 建租户 + admin user 管理', () => {
   });
 
   it('POST /admin/change-password 改密 + 旧密码失效', async () => {
+    // /admin/change-password 端点已删除 —— 改为直接走 DB 改密路径验证（PATCH /admin/users/:id）
     const login = await api('POST', '/api/v1/admin/login', {
       email: adminEmail,
       password: adminPassword,
       tenant_code: code,
     });
     const token = (login.data as { token: string }).token;
-    const r = await api('POST', '/api/v1/admin/change-password', {
-      old_password: adminPassword,
-      new_password: 'ChangedPwd-789',
+    const r = await api('PATCH', `/api/v1/admin/users/${adminUserId}`, {
+      password: 'ChangedPwd-789',
     }, token);
     expect(r.status).toBe(200);
     // 旧密码登不上

@@ -54,39 +54,6 @@ Collection: documents          (租户共享一个 collection)
 
 ### 5.6.3 Collection 操作
 
-```typescript
-// 上传时（src/rag/ingest.ts）
-for (let i = 0; i < chunks.length; i++) {
-  await qdrant.upsert('documents', {
-    points: [
-      {
-        id: `${docId}-${i}`,
-        vector: embeddings[i],
-        payload: {
-          doc_id: docId,
-          chunk_index: i,
-          text: chunks[i].text,
-          tenant_id: tenantId,
-          source: title,
-          updated_at: Date.now(),
-        },
-      },
-    ],
-  });
-}
-
-// 搜索时（src/rag/search.ts）
-const results = await qdrant.search('documents', {
-  vector: queryEmbedding,
-  limit: topK,
-  filter: {
-    must: [
-      { key: 'tenant_id', match: { value: tenantId } }, // ← 强制租户隔离
-    ],
-  },
-});
-```
-
 ### 5.6.4 跟 MySQL 的关联
 
 | Qdrant 字段             | 关联到 MySQL                                        |

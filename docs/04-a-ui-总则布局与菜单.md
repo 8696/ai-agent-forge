@@ -191,24 +191,4 @@
 
 ### 2.4 AntD Menu 配置示例
 
-```typescript
-const adminMenuItems = [
-  { key: '/admin/dashboard', icon: <DashboardOutlined />, label: '看板' },
-  {
-    key: 'knowledge',
-    icon: <BookOutlined />,
-    label: '知识库',
-    children: [
-      { key: '/admin/knowledge/documents', label: '文档管理' },
-      { key: '/admin/knowledge/test', label: '检索测试' }
-    ]
-  },
-  { key: '/admin/model', icon: <RobotOutlined />, label: '模型 & 提示词' },
-  { key: '/admin/evaluation', icon: <BarChartOutlined />, label: '评测' },
-  { key: '/admin/observability', icon: <LineChartOutlined />, label: '观测' },
-  { key: '/admin/users', icon: <TeamOutlined />, label: '用户' },
-  { key: '/admin/settings', icon: <SettingOutlined />, label: '设置' }
-];
-```
-
 ---

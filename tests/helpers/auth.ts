@@ -51,7 +51,7 @@ async function postLogin(path: string, body: unknown, apiBase: string): Promise<
 }
 
 function apiBase(): string {
-  return process.env.API_BASE ?? `http://localhost:${process.env.PORT ?? '3000'}`;
+  return process.env.API_BASE ?? `http://localhost:${process.env.PORT ?? '3099'}`;
 }
 
 export async function loginSystem(): Promise<string> {

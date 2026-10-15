@@ -24,7 +24,7 @@ const ROOT = path.resolve(__dirname, '..', '..'); // tests/helpers/ → 项目�
 const FIXTURES = path.resolve(ROOT, 'tests/fixtures/fixtures.json');
 const TOKENS_FILE = path.resolve(ROOT, '.e2e-tokens.json');
 
-const API_BASE = process.env.API_BASE ?? `http://localhost:${process.env.PORT ?? '3000'}`;
+const API_BASE = process.env.API_BASE ?? `http://localhost:${process.env.PORT ?? '3099'}`;
 
 const tenants = [
   { code: 'acme', label: { admin: 'acmeAdmin', customer: 'acmeCustomer' }, apiKeyLabel: 'acmeApiKey' },

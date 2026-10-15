@@ -10,7 +10,7 @@ import { Tenant, User, AuditLog } from '../../src/models';
 import { signToken } from '../../src/lib/jwt';
 import { hashPassword } from '../../src/lib/password';
 
-const BASE = `http://localhost:${process.env.PORT ?? '3000'}`;
+const BASE = `http://localhost:${process.env.PORT ?? '3099'}`;
 
 describe('legacy Step 15 / F2 · 租户启停 + 到期', () => {
   const testCode = `step15-${Date.now()}`;

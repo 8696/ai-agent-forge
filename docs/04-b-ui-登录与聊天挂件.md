@@ -238,57 +238,9 @@
 
 #### 4.10.3 后端关键代码（**5 行**）
 
-```typescript
-// src/gateway/chat-stream-routes.ts
-import { streamText } from 'ai';
-import { anthropic } from '@ai-sdk/anthropic';
-import { Readable } from 'node:stream';
-
-router.post('/api/v1/chat/stream', async (ctx) => {
-  const { messages } = chatInputSchema.parse(ctx.request.body);
-
-  const result = streamText({
-    model: anthropic('claude-sonnet-4-5'),
-    system: systemPrompt,
-    messages: convertToModelMessages(messages), // 转成 CoreMessage[]
-  });
-
-  // Vercel AI SDK 返回标准 Response 对象
-  const response = result.toDataStreamResponse();
-  ctx.status = response.status;
-  response.headers.forEach((v, k) => ctx.set(k, v));
-  ctx.body = response.body ? Readable.fromWeb(response.body) : null;
-});
-```
-
 **对比之前**：30 行（手写 Anthropic SDK 调用 + SSE 响应头 + event 循环）。**现在 5 行**。
 
 #### 4.10.4 前端关键代码（**1 hook**）
-
-```typescript
-// web/pages/widget/ChatPage.tsx
-import { useChat } from '@ai-sdk/react';
-
-export function ChatPage() {
-  const { messages, input, handleInputChange, handleSubmit, isLoading, stop, reload } = useChat({
-    api: '/api/v1/chat/stream',
-    id: sessionId,                           // 同一 session 维持上下文
-    initialMessages: historyFromServer,       // 加载历史
-    body: { tenant_id: tenantCode },           // 每次请求带租户号
-    onError: (err) => message.error(err.message)
-  });
-
-  return (
-    <>
-      {messages.map(m => <ChatMessage key={m.id} message={m} />)}
-      <form onSubmit={handleSubmit}>
-        <input value={input} onChange={handleInputChange} />
-        {isLoading && <Button onClick={stop}>停止</Button>}
-      </form>
-    </>
-  );
-}
-```
 
 **对比之前**：40 行（手写 SSE parser + 状态管理 + AbortController）。**现在 1 hook**。
 

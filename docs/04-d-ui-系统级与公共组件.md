@@ -62,64 +62,9 @@
 
 ### 7.1 路由守卫
 
-```typescript
-// web/components/RequireAuth.tsx
-export function RequireAuth({ children }: { children: React.ReactNode }) {
-  const { user, loading } = useAuthStore();
-  const location = useLocation();
-  if (loading) return <Spin fullscreen />;
-  if (!user) return <Navigate to="/admin/login" state={{ from: location }} replace />;
-  return <>{children}</>;
-}
-```
-
 ### 7.2 全局 Axios 拦截器
 
-```typescript
-// web/lib/api.ts（详见 14-a-前端代码-网络与表单.md）
-api.interceptors.request.use((config) => {
-  const token = localStorage.getItem('jwt');
-  if (token) config.headers.set('Authorization', `Bearer ${token}`);
-  return config;
-});
-
-api.interceptors.response.use(
-  (res) => res,
-  (err) => {
-    if (err.response?.status === 401) {
-      localStorage.removeItem('jwt');
-      window.location.href = '/admin/login';
-    }
-    return Promise.reject(err);
-  },
-);
-```
-
 ### 7.3 Markdown 渲染
-
-```typescript
-// web/components/Markdown.tsx
-<ReactMarkdown
-  remarkPlugins={[remarkGfm]}
-  components={{
-    code({ inline, className, children }) {
-      const match = /language-(\w+)/.exec(className ?? '');
-      const code = String(children).replace(/\n$/, '');
-      if (!inline && match) {
-        return (
-          <div style={{ position: 'relative' }}>
-            <Button icon={<CopyOutlined />} onClick={() => navigator.clipboard.writeText(code)} />
-            <SyntaxHighlighter language={match[1]} style={oneDark}>{code}</SyntaxHighlighter>
-          </div>
-        );
-      }
-      return <code className={className}>{children}</code>;
-    }
-  }}
->
-  {content}
-</ReactMarkdown>
-```
 
 ### 7.4 页脚激活模型展示
 
@@ -134,7 +79,7 @@ api.interceptors.response.use(
 └──────────────────────────────────────────────────────────┘
 ```
 
-- **数据来源**：`GET /api/v1/active-config`（公共元信息端点，详见 `06-API接口.md §6.5`）
+- **数据来源**：公共元信息端点（active-config），详见相关需求文档
 - **样式**：AntD `<Space size={16}>` + `<Text type="secondary">` + `<Text code>`，灰色小字，不抢主内容视觉
 - **取不到数据**：静默显示「—」（譬如后端 503），不弹 toast，不影响页脚其他元素
 - **登录页**：不走 Layout，**不**展示（按当前实现 login 页裸返回，无 Footer）
@@ -179,27 +124,6 @@ api.interceptors.response.use(
 ## 9. 主题与样式
 
 ### 9.1 AntD ConfigProvider
-
-```typescript
-// web/App.tsx
-<ConfigProvider
-  locale={zhCN}
-  theme={{
-    algorithm: themeMode === 'dark' ? antdTheme.darkAlgorithm : antdTheme.defaultAlgorithm,
-    token: {
-      colorPrimary: '#1677ff',
-      borderRadius: 6,
-      fontSize: 14
-    },
-    components: {
-      Button: { borderRadius: 6 },
-      Card: { borderRadiusLG: 8 }
-    }
-  }}
->
-  <RouterProvider router={router} />
-</ConfigProvider>
-```
 
 ### 9.2 响应式断点
 
@@ -335,8 +259,8 @@ api.interceptors.response.use(
 ## 13. 与其他文档的关系
 
 - **数据模型**：`05-a-数据模型-mysql.md` + `05-b-数据模型-qdrant.md` —— 哪些字段需要在 UI 上展示
-- **API 接口**：`06-API接口.md` —— UI 调哪些端点
-- **需求 ↔ 技术**：`16-*-需求技术对照表`（已拆 16-a..16-e）—— 每条 UI 需求用什么技术
-- **代码示例**：`14-*-前端代码`（已拆 14-a..14-d）—— UI 组件怎么写
+- **API 接口**：UI 调哪些端点（不在文档里列具体路径）
+- **需求 ↔ 技术**：`12-*-需求技术对照表`（已拆 12-a..12-e）—— 每条 UI 需求用什么技术
+- **代码示例**：UI 组件怎么写（不在文档里展示代码）
 
 > 这份 UI 文档**只描述**长什么样 + 怎么交互；**不重复**讲数据模型 / API / 技术。

@@ -10,7 +10,7 @@ import { describe, it, expect } from 'vitest';
 import axios from 'axios';
 import { loginCustomer } from '../helpers';
 
-const BASE = `http://localhost:${process.env.PORT ?? '3000'}`;
+const BASE = `http://localhost:${process.env.PORT ?? '3099'}`;
 
 describe('customer-auth-routes', () => {
   describe('POST /api/v1/customer/login', () => {

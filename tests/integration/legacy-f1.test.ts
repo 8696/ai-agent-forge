@@ -13,7 +13,7 @@ import { Tenant, User } from '../../src/models';
 import { signToken } from '../../src/lib/jwt';
 import { hashPassword } from '../../src/lib/password';
 
-const BASE = `http://localhost:${process.env.PORT ?? '3000'}`;
+const BASE = `http://localhost:${process.env.PORT ?? '3099'}`;
 
 describe('legacy F1 · system 端租户管理', () => {
   const testCode = `f1-${Date.now()}`;
@@ -111,14 +111,6 @@ describe('legacy F1 · system 端租户管理', () => {
       tenant_code: testCode,
     }, { validateStatus: () => true });
     expect(r.status).toBe(401);
-  });
-
-  it('admin token 调 /admin/me → 200（合法）', async () => {
-    const r = await axios.get(`${BASE}/api/v1/admin/me`, {
-      headers: { authorization: `Bearer ${adminToken}` },
-      validateStatus: () => true,
-    });
-    expect(r.status).toBe(200);
   });
 
   it('admin token 调 /system/tenants → 401（跨子系统防御）', async () => {

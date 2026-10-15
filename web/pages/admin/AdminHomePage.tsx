@@ -1,6 +1,6 @@
 import type { ReactElement } from 'react';
 import { Card, Col, Row, Typography } from 'antd';
-import { BookOutlined, ExperimentOutlined, RightOutlined, TeamOutlined } from '@ant-design/icons';
+import { TeamOutlined, RightOutlined } from '@ant-design/icons';
 import { Link } from 'react-router-dom';
 import { getCurrentUser } from '../../lib/auth';
 import { PageHeader } from '../../components/shell/PageHeader';
@@ -8,20 +8,6 @@ import { PageHeader } from '../../components/shell/PageHeader';
 const { Text } = Typography;
 
 const ENTRIES: Array<{ title: string; desc: string; to: string; icon: ReactElement; color: string }> = [
-  {
-    title: '文档管理',
-    desc: '上传 PDF、Markdown、TXT，写入本租户知识库。',
-    to: '/admin/knowledge/documents',
-    icon: <BookOutlined />,
-    color: '#2f54eb',
-  },
-  {
-    title: '检索测试',
-    desc: '输入问句，查看最相近的文档片段。',
-    to: '/admin/knowledge/test',
-    icon: <ExperimentOutlined />,
-    color: '#722ed1',
-  },
   {
     title: '用户管理',
     desc: '管理本租户的后台管理员和前台用户。',

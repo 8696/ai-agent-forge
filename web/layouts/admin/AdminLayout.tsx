@@ -2,12 +2,7 @@ import type { ReactElement } from 'react';
 import { Navigate, Outlet, useLocation } from 'react-router-dom';
 import { SharedShellLayout } from '../SharedShellLayout';
 import type { SidebarItem } from '../SharedShellLayout';
-import {
-  DashboardOutlined,
-  TeamOutlined,
-  BookOutlined,
-  ExperimentOutlined,
-} from '@ant-design/icons';
+import { DashboardOutlined, TeamOutlined } from '@ant-design/icons';
 
 /**
  * admin 子系统 Layout（租户后台）
@@ -16,18 +11,6 @@ import {
  */
 const SIDEBAR: SidebarItem[] = [
   { key: '/admin', icon: <DashboardOutlined />, label: '首页', to: '/admin' },
-  {
-    key: '/admin/knowledge/documents',
-    icon: <BookOutlined />,
-    label: '文档管理',
-    to: '/admin/knowledge/documents',
-  },
-  {
-    key: '/admin/knowledge/test',
-    icon: <ExperimentOutlined />,
-    label: '检索测试',
-    to: '/admin/knowledge/test',
-  },
   { key: '/admin/users', icon: <TeamOutlined />, label: '用户', to: '/admin/users' },
 ];
 

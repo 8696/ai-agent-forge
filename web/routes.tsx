@@ -12,8 +12,6 @@ import {
   AdminLoginPage,
   AdminHomePage,
   AdminUsersPage,
-  KnowledgeDocumentsPage,
-  KnowledgeSearchPage,
 } from './pages/admin';
 import { CustomerLoginPage } from './pages/customer';
 import { SystemLayout } from './layouts/system/SystemLayout';
@@ -58,9 +56,6 @@ const routes: RouteObject[] = [
       { index: true, element: <AdminHomePage /> },
       { path: 'login', element: <AdminLoginPage /> },
       { path: 'users', element: <AdminUsersPage /> },
-      // Step 4：知识库管理（P8）+ 检索测试
-      { path: 'knowledge/documents', element: <KnowledgeDocumentsPage /> },
-      { path: 'knowledge/test', element: <KnowledgeSearchPage /> },
     ],
   },
 

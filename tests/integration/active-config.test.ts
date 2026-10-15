@@ -6,7 +6,7 @@
 import { describe, it, expect } from 'vitest';
 import axios from 'axios';
 
-const BASE = `http://localhost:${process.env.PORT ?? '3000'}`;
+const BASE = `http://localhost:${process.env.PORT ?? '3099'}`;
 
 describe('active-config-routes', () => {
   describe('GET /api/v1/active-config', () => {

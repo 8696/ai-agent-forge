@@ -9,7 +9,7 @@ import { getSequelize } from '../../src/db';
 import { Tenant, User } from '../../src/models';
 import { hashPassword } from '../../src/lib/password';
 
-const BASE = `http://localhost:${process.env.PORT ?? '3000'}`;
+const BASE = `http://localhost:${process.env.PORT ?? '3099'}`;
 
 describe('legacy Step 3 · 三层登录 + 跨子系统防御', () => {
   const code = `step3-${Date.now()}`;
@@ -129,7 +129,8 @@ describe('legacy Step 3 · 三层登录 + 跨子系统防御', () => {
       const adminLogin = await postLogin('/api/v1/admin/login', {
         email: adminEmail, password: pwd, tenant_code: code,
       });
-      const r = await axios.get(`${BASE}/api/v1/system/me`, {
+      // 调一个受保护端点（/me 已删除，改用 /system/tenants 验证中间件拦 admin token）
+      const r = await axios.get(`${BASE}/api/v1/system/tenants`, {
         headers: { authorization: `Bearer ${adminLogin.token}` },
         validateStatus: () => true,
       });
@@ -140,7 +141,8 @@ describe('legacy Step 3 · 三层登录 + 跨子系统防御', () => {
       const custLogin = await postLogin('/api/v1/customer/login', {
         email: customerEmail, password: pwd, tenant_code: code,
       });
-      const r = await axios.get(`${BASE}/api/v1/admin/me`, {
+      // /admin/me 已删除，改用 /admin/users 验证中间件拒 customer token
+      const r = await axios.get(`${BASE}/api/v1/admin/users`, {
         headers: { authorization: `Bearer ${custLogin.token}` },
         validateStatus: () => true,
       });
@@ -151,7 +153,7 @@ describe('legacy Step 3 · 三层登录 + 跨子系统防御', () => {
       const custLogin = await postLogin('/api/v1/customer/login', {
         email: customerEmail, password: pwd, tenant_code: code,
       });
-      const r = await axios.get(`${BASE}/api/v1/system/me`, {
+      const r = await axios.get(`${BASE}/api/v1/system/tenants`, {
         headers: { authorization: `Bearer ${custLogin.token}` },
         validateStatus: () => true,
       });

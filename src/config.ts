@@ -28,7 +28,9 @@ const optionalUrl = z.preprocess(emptyToUndef, z.string().url().optional());
  */
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
-  PORT: z.coerce.number().int().positive().default(3000),
+  // PORT 默认值根据 NODE_ENV 派生（test → 3099，避免跟 dev/prod 的 3000 冲突）。
+  // 这里留 optional，派生在下面 .envSchema.safeParse() 之后做。
+  PORT: z.coerce.number().int().positive().optional(),
 
   // === MySQL ===
   MYSQL_HOST: z.string().min(1).default('localhost'),
@@ -111,7 +113,10 @@ if (!parsed.success) {
   process.exit(1);
 }
 
-const env = parsed.data;
+const env = {
+  ...parsed.data,
+  PORT: parsed.data.PORT ?? (parsed.data.NODE_ENV === 'test' ? 3099 : 3000),
+};
 
 export type LlmProvider = 'minimax' | 'zhipu' | 'deepseek' | 'qwen' | 'custom';
 

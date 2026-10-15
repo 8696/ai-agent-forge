@@ -11,16 +11,3 @@ export type { SystemUserRole } from './SystemUser';
 export { ApiKey } from './ApiKey';
 export { AuditLog } from './AuditLog';
 export type { AuditAction } from './AuditLog';
-export { Document } from './Document';
-export type { DocumentStatus, DocumentMetadata } from './Document';
-// Step 7：多轮对话
-export { Session } from './Session';
-export type { SessionChannel, SessionStatus, SessionMetadata } from './Session';
-export { Message } from './Message';
-export type {
-  MessageRole,
-  MessageStatus,
-  MessageUsage,
-  MessageToolCall,
-  MessageToolResult,
-} from './Message';

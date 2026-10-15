@@ -18,7 +18,7 @@ import {
 } from './auth';
 
 function apiBase(): string {
-  return process.env.API_BASE ?? `http://localhost:${process.env.PORT ?? '3000'}`;
+  return process.env.API_BASE ?? `http://localhost:${process.env.PORT ?? '3099'}`;
 }
 
 function withAuthHeader(token: string): Record<string, string> {

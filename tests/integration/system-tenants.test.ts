@@ -7,7 +7,7 @@ import { describe, it, expect, beforeAll } from 'vitest';
 import axios from 'axios';
 import { allHttpFromTokensFile, type AllHttp } from '../helpers';
 
-const BASE = `http://localhost:${process.env.PORT ?? '3000'}`;
+const BASE = `http://localhost:${process.env.PORT ?? '3099'}`;
 
 describe('system-tenants-routes', () => {
   let http: AllHttp;
