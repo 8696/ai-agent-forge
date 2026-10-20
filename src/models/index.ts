@@ -9,5 +9,7 @@ export type { UserRole, UserPreferences } from './User';
 export { SystemUser } from './SystemUser';
 export type { SystemUserRole } from './SystemUser';
 export { ApiKey } from './ApiKey';
+export { Document } from './Document';
+export type { DocumentStatus, DocumentFileType, DocumentMetadata } from './Document';
 export { AuditLog } from './AuditLog';
 export type { AuditAction } from './AuditLog';

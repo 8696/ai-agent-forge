@@ -14,8 +14,10 @@ import {
   systemAuthRouter,
   adminUserRouter,
   adminAuthRouter,
+  adminKnowledgeRouter,
   customerAuthRouter,
 } from './gateway';
+import { rebuildFromQdrant } from './rag/bm25';
 
 /**
  * 后端入口 —— 详见 docs/15-开发进度计划.md Step 1 + 02-系统架构与目录.md §2.1
@@ -49,6 +51,9 @@ async function bootstrap(): Promise<void> {
   app.use(systemAuthRouter.routes()).use(systemAuthRouter.allowedMethods()); // system login
   app.use(adminUserRouter.routes()).use(adminUserRouter.allowedMethods()); // admin 用户管理
   app.use(adminAuthRouter.routes()).use(adminAuthRouter.allowedMethods()); // admin login
+  app.use(
+    adminKnowledgeRouter.routes(),
+  ).use(adminKnowledgeRouter.allowedMethods()); // admin 知识库（文档 + 检索）
   app.use(customerAuthRouter.routes()).use(customerAuthRouter.allowedMethods()); // customer login
 
   // 数据库初始化（缺配置 + 启动 DB 失败都不让起来）
@@ -57,6 +62,11 @@ async function bootstrap(): Promise<void> {
   const server = app.listen(config.PORT, () => {
     logger.info({ port: config.PORT, env: config.NODE_ENV }, '🚀 AgentPlatform 后端启动');
   });
+
+  // BM25 索引只活在内存里，重启后从 Qdrant 的 payload 重建。
+  // 后台跑且不 await：Qdrant 不可用 / 数据量大时都不该拖住启动；
+  // 重建期间检索测试页只有向量一路结果，完成后自动变成混合检索。
+  void rebuildFromQdrant();
 
   // 优雅退出
   const shutdown = (signal: string): void => {

@@ -18,6 +18,15 @@ export { activeConfigRouter } from './active-config-routes';
 export { devProbeRouter } from './dev-probe-routes';
 export { jwtAuth } from './jwt-base';
 
-export { systemTenantRouter, systemAuthRouter, requireSystemUser } from './system';
-export { adminUserRouter, adminAuthRouter, requireAdmin } from './admin';
+export {
+  systemTenantRouter,
+  systemAuthRouter,
+  requireSystemUser,
+} from './system';
+export {
+  adminUserRouter,
+  adminAuthRouter,
+  adminKnowledgeRouter,
+  requireAdmin,
+} from './admin';
 export { customerAuthRouter } from './customer';

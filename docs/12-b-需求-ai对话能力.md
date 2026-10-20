@@ -31,24 +31,31 @@
 
 ---
 
-### B2 · RAG 检索
+### B2 · RAG 检索 ⚠️ 检索层已完成，对话层未接
 
 **需求**：AI 基于上传的文档回答，引用具体片段。
 
+**当前状态（2026-10-20）**：**检索层已完整落地**（向量 + BM25 + RRF），
+可由 `/admin/knowledge/test` 检索测试页独立验证。
+但**聊天对话接口本身还没实现**（chat 路由、sessions / messages 表都不在当前代码里），
+所以「AI 基于检索结果作答 + 引用片段」这半段要等 B1 落地后才能端到端跑通。
+
 **使用技术**：
 
-- Qdrant（向量库，存 embedding）
-- Embedding API（OpenAI `text-embedding-3-small` 或 bge-m3，**独立 REST 客户端，不走 Anthropic SDK**）
-- 关键词检索（BM25，本地内存索引）
-- 重排序（`bge-reranker-v2-m3`，独立 HTTP 服务或本地推理）
-- RRF（Reciprocal Rank Fusion）融合向量检索 + BM25 结果
-- 查询改写（可选，把口语化问题改写成检索友好形态）
+- Qdrant（向量库，存 embedding）—— ✅ 已实现
+- Embedding API（OpenAI 兼容 REST，**独立客户端，不走 Anthropic SDK**；
+  实际走哪个模型由 `.env` 的 `LLM_PROVIDER` 决定，dev 用智谱 embedding-3）—— ✅ 已实现
+- 关键词检索（BM25，进程内内存索引，启动时从 Qdrant 重建）—— ✅ 已实现
+- RRF（Reciprocal Rank Fusion，k=60）融合向量 + BM25 结果 —— ✅ 已实现
+- 重排序（`bge-reranker-v2-m3`）—— ⏳ 未实现，RRF 只用排名不用分数，语义判别力有限
+- 查询改写（可选，把口语化问题改写成检索友好形态）—— ⏳ 未实现
 
 **验收**：
 
-- 上传一个 .md 文档，内容里有「年假 5 天」这句话
-- 问「年假几天」→ AI 回答里出现「5 天」+ 引用了文档片段
-- 在管理后台问同样问题（用「检索测试」功能），能看到 top 5 命中的片段
+- ✅ 上传一个 .md 文档，内容里有「年假 5 天」这句话
+- ⏳ 问「年假几天」→ AI 回答里出现「5 天」+ 引用了文档片段（依赖 B1 聊天接口）
+- ✅ 在管理后台问同样问题（用「检索测试」功能），能看到 top N 命中的片段，
+  每条标出「语义第 N / 关键词第 N」
 
 ---
 

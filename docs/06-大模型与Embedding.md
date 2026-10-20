@@ -13,7 +13,7 @@
 |------|------|------|------|
 | 主对话 / 推理 | `LLM_PROVIDER=minimax` 走 MiniMax-M3 | zhipu / deepseek / qwen / custom | 一个 SDK 全搞定；切换供应商只改 `LLM_PROVIDER` |
 | Embedding | `LLM_PROVIDER=zhipu` 走 embedding-3 | minimax (embo-01) / qwen (text-embedding-v3) / custom | dev 偏好用智谱；切 LLM provider 时 Embedding 跟随 |
-| 重排序 | bge-reranker-v2-m3 | Cohere Rerank | 中文效果好（Step 5 落） |
+| 重排序 | bge-reranker-v2-m3 | Cohere Rerank | 中文效果好（⏳ 未实现，见 `07-c` 模块 09） |
 | 评测（裁判） | 跟主用 provider（`LLM_PROVIDER`） | — | 裁判要稳；用 `generateObject` + Zod schema 自动评分（Step 10 落） |
 | 内容审核 | 自建规则 + LLM（兜底） | — | 敏感审核要可控（Step 12 落） |
 
@@ -34,6 +34,12 @@
 > ```bash
 > curl -X DELETE http://<QDRANT_URL>/collections/documents
 > ```
+> **忘了删会怎样**：`src/rag/embedding.ts` 在拿到向量的那一刻就做维度校验，
+> 不一致直接抛错，错误信息里明确告诉你「换 embedding 模型 / provider 后必须重建 Qdrant collection」。
+> 这是刻意的——把故障拦在写入之前，而不是等 Qdrant 报一个更难懂的 dimension error。
+>
+> `LLM_EMBEDDING_MODEL` 可以只覆盖 model id 而不改 provider，此时维度表也要跟着对；
+> 智谱 `embedding-3` 支持 1024/768/512，显式指定这些变体时**必须同步改 `PROVIDER_EMBED_DIMENSIONS.zhipu`**。
 
 ### 6.1.3 全局 override
 

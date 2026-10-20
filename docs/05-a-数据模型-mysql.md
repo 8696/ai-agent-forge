@@ -111,6 +111,7 @@ CREATE TABLE documents (
   file_path VARCHAR(1000) COMMENT '完整磁盘路径（绝对路径）',
   status ENUM('uploaded', 'indexing', 'ready', 'failed') DEFAULT 'uploaded' COMMENT '索引状态',
   chunk_count INT DEFAULT 0 COMMENT '已分块的块数（索引完成后回填）',
+  error_message VARCHAR(1000) COMMENT '最近一次索引失败的错误摘要（完整堆栈只进日志）',
   metadata JSON COMMENT '元数据（标签 / 部门 / 业务字段）',
   uploaded_by VARCHAR(36) COMMENT '上传者 user_id',
   uploaded_at DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6) COMMENT '上传时间',
@@ -118,6 +119,14 @@ CREATE TABLE documents (
   INDEX idx_status (status)
 ) COMMENT '知识库文档元数据表（向量存 Qdrant）';
 ```
+
+> **建表迁移**：`src/migrations/007-create-documents.ts`。
+> `008-converge-documents-schema.ts` 是配套的**收敛迁移** —— 开发库上可能已经有更早版本建的
+> `documents` 表（字段更少），它逐列比对、缺哪补哪，保证新旧两种库都收敛到同一 schema。
+> 收敛迁移 `down()` 不删列（删列丢数据且无法从旧脚本可靠重建），回滚走 `yarn migrate:undo` + 备份恢复。
+>
+> **`file_type` 的 `'word'` 目前是预留值**：上传只放行 `pdf` / `markdown` / `txt`
+> （解析器没有引入 mammoth）。传 `.docx` 会被 400 挡掉，库里的 `file_type` 也就不会出现 `word`。
 
 ### 工具注册表（tools）
 
