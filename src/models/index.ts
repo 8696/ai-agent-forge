@@ -11,5 +11,19 @@ export type { SystemUserRole } from './SystemUser';
 export { ApiKey } from './ApiKey';
 export { Document } from './Document';
 export type { DocumentStatus, DocumentFileType, DocumentMetadata } from './Document';
+export { Session } from './Session';
+export type { SessionChannel, SessionStatus, SessionMetadata } from './Session';
+export { Message } from './Message';
+export type {
+  MessageRole,
+  MessageStatus,
+  MessageUsage,
+  MessageToolResults,
+  DataPartShape,
+} from './Message';
 export { AuditLog } from './AuditLog';
 export type { AuditAction } from './AuditLog';
+export { PromptVersion } from './PromptVersion';
+export type { PromptVersionStatus } from './PromptVersion';
+export { TenantModel } from './TenantModel';
+export { TenantSetting } from './TenantSetting';

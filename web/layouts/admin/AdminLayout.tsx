@@ -2,7 +2,10 @@ import type { ReactElement } from 'react';
 import { Navigate, Outlet, useLocation } from 'react-router-dom';
 import { SharedShellLayout } from '../SharedShellLayout';
 import type { SidebarItem } from '../SharedShellLayout';
-import { DashboardOutlined, FileSearchOutlined, TeamOutlined, UploadOutlined } from '@ant-design/icons';
+import { DashboardOutlined, FileSearchOutlined, TeamOutlined, UploadOutlined, SlidersOutlined,
+  EditOutlined,
+  SettingOutlined,
+} from '@ant-design/icons';
 
 /**
  * admin 子系统 Layout（租户后台）
@@ -23,6 +26,24 @@ const SIDEBAR: SidebarItem[] = [
     icon: <FileSearchOutlined />,
     label: '检索测试',
     to: '/admin/knowledge/test',
+  },
+  {
+    key: '/admin/models',
+    icon: <SlidersOutlined />,
+    label: '模型选择',
+    to: '/admin/models',
+  },
+  {
+    key: '/admin/prompts',
+    icon: <EditOutlined />,
+    label: '提示词配置',
+    to: '/admin/prompts',
+  },
+  {
+    key: '/admin/settings',
+    icon: <SettingOutlined />,
+    label: '租户设置',
+    to: '/admin/settings',
   },
 ];
 

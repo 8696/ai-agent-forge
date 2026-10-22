@@ -9,3 +9,6 @@ export { AdminHomePage } from './AdminHomePage';
 export { AdminUsersPage } from './UsersPage';
 export { KnowledgeDocumentsPage } from './KnowledgeDocumentsPage';
 export { KnowledgeSearchPage } from './KnowledgeSearchPage';
+export { ModelListPage } from './ModelListPage';
+export { SettingsPage } from './SettingsPage';
+export { PromptEditorPage } from './PromptEditorPage';

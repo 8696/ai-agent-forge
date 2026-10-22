@@ -51,6 +51,17 @@ export interface HybridSearchParams {
   query: string;
   tenantId: string;
   topK: number;
+  /**
+   * 可选：某一路召回失败时回调一次，带上失败原因。
+   *
+   * 为什么需要：两路各自 try/catch，**全挂时 hybridSearch 返回 [] 而不是抛错**。
+   * 对检索测试页来说这是对的（能看另一半结果），但对话链路光看返回值分不出
+   * 「库是空的」「查询太泛」「Qdrant 挂了」这三种情况 ——
+   * 少了这个回调，一次明显的故障在用户眼里就变成「AI 突然变无知了」，运营无从排查。
+   *
+   * 可选参数，不传就是原来的行为；admin 检索测试页不受影响。
+   */
+  onRecallFailure?: (source: RecallSource, err: unknown) => void;
 }
 
 export async function hybridSearch(params: HybridSearchParams): Promise<HybridHit[]> {
@@ -59,8 +70,8 @@ export async function hybridSearch(params: HybridSearchParams): Promise<HybridHi
   // 两路各自 try/catch：向量库挂了就只剩关键词召回，关键词索引没重建就只剩向量召回。
   // 检索测试页是管理员排查索引质量的地方，任何一路挂掉都应该还能看到另一半的结果。
   const [vectorHits, bm25Hits] = await Promise.all([
-    recallByVector(params.query, params.tenantId, candidateK),
-    recallByKeyword(params.query, params.tenantId, candidateK),
+    recallByVector(params.query, params.tenantId, candidateK, params.onRecallFailure),
+    recallByKeyword(params.query, params.tenantId, candidateK, params.onRecallFailure),
   ]);
 
   return fuse(vectorHits, bm25Hits, params.topK);
@@ -124,6 +135,7 @@ async function recallByVector(
   query: string,
   tenantId: string,
   topK: number,
+  onFailure?: (source: RecallSource, err: unknown) => void,
 ): Promise<VectorHit[]> {
   try {
     const vector = await embedOne(query);
@@ -133,11 +145,17 @@ async function recallByVector(
       { tenantId, err: err instanceof Error ? err.message : String(err) },
       '向量召回失败，本次只用 BM25 结果',
     );
+    onFailure?.('vector', err);
     return [];
   }
 }
 
-function recallByKeyword(query: string, tenantId: string, topK: number): Bm25Hit[] {
+function recallByKeyword(
+  query: string,
+  tenantId: string,
+  topK: number,
+  onFailure?: (source: RecallSource, err: unknown) => void,
+): Bm25Hit[] {
   try {
     return bm25Search({ tenantId, query, topK });
   } catch (err: unknown) {
@@ -145,6 +163,7 @@ function recallByKeyword(query: string, tenantId: string, topK: number): Bm25Hit
       { tenantId, err: err instanceof Error ? err.message : String(err) },
       'BM25 召回失败，本次只用向量结果',
     );
+    onFailure?.('bm25', err);
     return [];
   }
 }

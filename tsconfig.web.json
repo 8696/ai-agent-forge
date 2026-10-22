@@ -7,8 +7,7 @@
     "noEmit": true,
     "paths": {
       "@/*": ["./web/*"],
-      "@shared/*": ["./shared/*"],
-      "@ai-sdk-internal": ["./node_modules/@ai-sdk/react/node_modules/ai"]
+      "@shared/*": ["./shared/*"]
     }
   },
   "include": ["web/**/*", "shared/**/*"]

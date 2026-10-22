@@ -15,7 +15,9 @@ import {
   adminUserRouter,
   adminAuthRouter,
   adminKnowledgeRouter,
+  adminConfigRouter,
   customerAuthRouter,
+  customerChatRouter,
 } from './gateway';
 import { rebuildFromQdrant } from './rag/bm25';
 
@@ -54,7 +56,11 @@ async function bootstrap(): Promise<void> {
   app.use(
     adminKnowledgeRouter.routes(),
   ).use(adminKnowledgeRouter.allowedMethods()); // admin 知识库（文档 + 检索）
+  app.use(
+    adminConfigRouter.routes(),
+  ).use(adminConfigRouter.allowedMethods()); // admin 模型 & 提示词配置
   app.use(customerAuthRouter.routes()).use(customerAuthRouter.allowedMethods()); // customer login
+  app.use(customerChatRouter.routes()).use(customerChatRouter.allowedMethods()); // customer 对话（SSE）
 
   // 数据库初始化（缺配置 + 启动 DB 失败都不让起来）
   await initDatabase();

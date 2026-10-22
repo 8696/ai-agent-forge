@@ -65,6 +65,12 @@
 ## 4. 聊天挂件（P1 · 重点）
 
 > **这是产品最核心的 UI**，要做得精。
+>
+> **状态（2026-10-21）**：§4 的**对话能力**部分已落地，实现在
+> `web/pages/customer/ChatPage.tsx` + `src/gateway/customer/chat-routes.ts`，
+> 入口是 `/customer` 与 `/customer/chat`（**需要登录**，customer 角色）。
+> 本节里标 ⏳ 的是本期没做的：公开挂件（免登录，`/widget/:tenantId`）属于 E1 需求，下一轮；
+> 附件 / 图片上传、联网开关、收藏、点踩的原因弹窗也没做。
 
 ### 4.1 整体布局
 
@@ -95,19 +101,22 @@
 
 #### 用户消息
 
-- 右对齐，蓝色背景 `#1677ff`，白字
+- 右对齐，**主题色 `colorPrimary`（`#2f54eb`）**背景，白字
+  > 2026-10-21 校正：原规格写死 AntD 默认蓝 `#1677ff`，但本项目 `web/theme.ts` 的
+  > `colorPrimary` 是刻意选的极客蓝 `#2f54eb`，**theme 才是真理来源**，气泡跟主题走。
 - 圆角 12px（左下 4px，其他 12px）
 - 文本 + 图片缩略图（点开看大图）
 - 右上角小时间戳（hover 显示完整时间）
 
 #### AI 消息
 
-- 左对齐，浅灰背景 `#f5f5f5`，深字
+- 左对齐，浅灰背景 `#f5f7fa`（`colorBgLayout`），深字
 - 圆角 12px（右下 4px，其他 12px）
 - 内容：Markdown 渲染（含 GFM 表格 / 任务列表 / 代码高亮）
 - 附件缩略图（**例外**：用户上传的内容不是 UI 装饰）：图片用 `<img>`，PDF / Word 用对应 AntD 文件图标（`<FilePdfOutlined />` 等）+ 文件名
-- **思考模式**：上半部分可折叠 `<Collapse>` 「💭 思考过程」（默认折叠）
-- **引用片段卡片**：底部「来源：《文档名》[页码/段落]」+「查看原文」按钮
+- **思考模式**：上半部分可折叠 `<details>` 「💭 思考过程」（默认折叠）
+- **引用片段卡片**：气泡上方的文档名 + 段号 + 相关度 + 召回标签（语义 / 关键词），
+  正文可展开全文（≤3 行，`ellipsis={{ rows: 3, expandable: true }}`）
 - 工具调用：工具名 + 输入输出（`<Collapse>` 折叠）
 - 操作行：👍 / 👎 / 复制 / 🔄 重新生成 / 📌 收藏
 
@@ -183,12 +192,15 @@
 - 操作：点开 / 改名 / 删 / 收藏（⭐）
 - 顶部：「+ 新对话」按钮
 
-### 4.8 反馈
+### 4.8 反馈 ✅ 已落地（2026-10-21）
 
-- AI 消息底部：👍 / 👎 按钮
-- 点赞：写 `sessions.feedback = 1`
-- 点踩：弹窗让用户选「答错 / 答偏 / 有害 / 其他」+ 文本框
-- 后端：`POST /api/v1/sessions/:id/feedback`
+- AI 消息底部：👍 / 👎 按钮（再点一次取消，`feedback = null`）
+- 点赞：写 `messages.feedback = 1` + `feedback_at`
+- 点踩：写 `-1`；**「答错 / 答偏 / 有害 / 其他」的选择弹窗本期没做**，
+  只支持可选的 `feedback_text`（后端字段和端点都留好了）
+- 后端：`POST /api/v1/customer/messages/:id/feedback`
+  （原规格写的 `/api/v1/sessions/:id/feedback` 不对——反馈挂在**消息**上，不是会话上；
+  且路径要带 `customer` 前缀，前缀约定见 `03-b` §B.5.2）
 
 ### 4.9 特殊元素
 
@@ -268,25 +280,76 @@
 
 #### 4.10.7 库依赖清单（确认有 Vercel AI SDK）
 
-```json
-// package.json（后端）
-{
-  "dependencies": {
-    "ai": "^5.0.0",                  // ← Vercel AI SDK 核心
-    "@ai-sdk/anthropic": "^1.0.0",   // ← Anthropic provider
-    "@anthropic-ai/sdk": "^0.30.0"   // ← ai-sdk 内部也用，作为兜底
-  }
-}
+> ⚠️ 这份清单在 2026-10-21 B1 落地时**校正过**：原文档写的是 ai v5 / `@ai-sdk/*` v1，
+> 实际装的是 ai v7 + `@ai-sdk/*` v4（API 形态完全不同，下面是现装版本）。
 
-// web/package.json
+```json
+// package.json（前后端共用这一个）
 {
   "dependencies": {
-    "@ai-sdk/react": "^1.0.0",       // ← useChat hook
-    "ai": "^5.0.0"                   // ← 类型定义
+    "ai": "^7.0.140",                  // ← Vercel AI SDK 核心（streamText / createUIMessageStream）
+    "@ai-sdk/anthropic": "^4.0.79",   // ← Anthropic provider（createAnthropic 工厂）
+    "@ai-sdk/react": "^4.0.143",      // ← useChat hook
+    "@anthropic-ai/sdk": "^0.134.0"   // ← ai-sdk 的传递依赖；高级场景可直接调
   }
 }
 ```
 
-> Vercel AI SDK 是 `@ai-sdk/*` 系列的核心包。**`@anthropic-ai/sdk` 仍作为 ai-sdk 的传递依赖留着用**，需要时也能直接调（用于 Vercel AI SDK 暂不支持的高级场景）。
+> v4 的 `useChat` 用 `transport` 而不是 `api`：
+> `new DefaultChatTransport({ api, headers })`。**`headers` 必须手动带 Authorization**
+> —— `useChat` 内部走 `fetch`，完全绕过 `web/lib/apiShared.ts` 的 axios 拦截器，忘了带就是一路 401。
+>
+> 前端从 `'ai'` 直接 import `DefaultChatTransport`（v7 已 hoist 到顶层，前后端同一个实例）。
+> 原 `vite.config.ts` 里那个指向 `node_modules/@ai-sdk/react/node_modules/ai` 的
+> `@ai-sdk-internal` alias **指向的目录不存在**（yarn 把 ai 提升到了顶层），
+> 已在 B1 一并删掉——留着只会让下一个人 import 到解析失败。
+
+#### 4.10.8 Koa 下的 SSE 桥接（关键 · 别自己重写一遍）
+
+`createUIMessageStreamResponse()` 返回的是 **web 标准 `Response`**，塞进 Koa 要额外转换。
+用 AI SDK 自己给 Node handler 准备的 helper 更省事：
+
+```ts
+import { createUIMessageStream, pipeUIMessageStreamToResponse } from 'ai';
+
+ctx.respond = false; // @types/koa 明确支持：绕过 Koa 响应处理
+await pipeUIMessageStreamToResponse({
+  response: ctx.res,   // Koa 的 ctx.res 就是 Node ServerResponse
+  status: 200,
+  stream,
+  keepAliveMs: 15_000,  // 开流即发 `: stream-open`，之后按间隔发 `: keep-alive`
+});
+```
+
+三个必须知道的点：
+
+1. **SSE 响应头不用自己写**。SDK 会 merge 进来 `content-type: text/event-stream`、
+   `cache-control: no-cache`、`connection: keep-alive`、`x-accel-buffering: no`
+   （关 nginx 缓冲）、`x-vercel-ai-ui-message-stream: v1`。重复设反而可能冲突。
+2. **`await` 必须写**。`ctx.respond = false` 之后 Koa 不再负责收尾，不等它响应就永远挂死。
+3. **backpressure / flush / 客户端断连取消**，`writeToServerResponse` 内部全处理了
+   （`response.once('close')` → `reader.cancel()` 一路 cancel 到 `streamText` 的 fetch），
+   所以断连时 `onEnd` 照样触发，消息状态记 `cancelled` 且保留已生成的部分正文。
+
+#### 4.10.9 ⚠️ 流式端点的错误时机分界线（最容易踩的坑）
+
+`src/gateway/error-handler.ts` 只能靠 `ctx.status` / `ctx.body` 改响应。
+**`pipeUIMessageStreamToResponse` 一调 `response.writeHead(200)`，响应就锁死了**，
+之后再 throw 只会得到一个坏掉的流。所以：
+
+```
+ctx.respond = false 之前（还能正常返 4xx / 5xx）
+  · 入参 zod 校验
+  · 会话归属校验（跨租户 / 跨用户 → 404）
+  · LLM 凭据校验（缺 key 要在这里报出来，否则用户只看到一个空流）
+  · 落库 user 行 / assistant 占位行
+  · 历史查询（DB 挂了还能返 500）
+ctx.respond = false 之后（只能走流内 error）
+  · 真正的 LLM 网络请求、检索、结果解析、落库回填
+```
+
+流内的错误统一走 `createUIMessageStream({ onError })` → 变成 `{type:'error', errorText}` chunk。
+**`onError` 绝不能把 `err.message` 直接返回**（泄漏内部细节），返回固定中文文案，
+细节只进 `logger.error`。
 
 ---

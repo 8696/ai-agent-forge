@@ -14,8 +14,11 @@ import {
   AdminUsersPage,
   KnowledgeDocumentsPage,
   KnowledgeSearchPage,
+  ModelListPage,
+  PromptEditorPage,
+  SettingsPage,
 } from './pages/admin';
-import { CustomerLoginPage } from './pages/customer';
+import { CustomerLoginPage, ChatPage } from './pages/customer';
 import { SystemLayout } from './layouts/system/SystemLayout';
 import { AdminLayout } from './layouts/admin/AdminLayout';
 import { CustomerLayout } from './layouts/customer/CustomerLayout';
@@ -60,6 +63,9 @@ const routes: RouteObject[] = [
       { path: 'users', element: <AdminUsersPage /> },
       { path: 'knowledge/documents', element: <KnowledgeDocumentsPage /> },
       { path: 'knowledge/test', element: <KnowledgeSearchPage /> },
+      { path: 'models', element: <ModelListPage /> },
+      { path: 'prompts', element: <PromptEditorPage /> },
+      { path: 'settings', element: <SettingsPage /> },
     ],
   },
 
@@ -68,7 +74,9 @@ const routes: RouteObject[] = [
     path: '/customer',
     element: <CustomerLayout />,
     children: [
-      // 当前只暴露 login；其他 customer 功能（home / chat / sessions）已清空
+      // 首页就是聊天页（docs/04-b §3.3「成功 → 跳 /customer/chat（或默认页）」）
+      { index: true, element: <ChatPage /> },
+      { path: 'chat', element: <ChatPage /> },
       { path: 'login', element: <CustomerLoginPage /> },
     ],
   },

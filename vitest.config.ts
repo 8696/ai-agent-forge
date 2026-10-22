@@ -1,4 +1,5 @@
 import { defineConfig } from 'vitest/config';
+import path from 'node:path';
 
 /**
  * vitest 配置 —— docs/16-d §D6 测试基建契约
@@ -28,4 +29,12 @@ export default defineConfig({
   // 单 worker 顺序跑：避免多个测试同时 seed 互相覆盖
   pool: 'forks',
   poolOptions: { forks: { singleFork: true } },
+  // 路径别名要跟 tsconfig.json 的 paths 对齐 —— vite/vitest 不读 tsconfig 的 paths，
+  // 不显式配的话 `@shared/xxx` 在测试里会解析失败（源码里 tsx 能解析，vitest 不能）
+  resolve: {
+    alias: {
+      '@': path.resolve(__dirname, 'src'),
+      '@shared': path.resolve(__dirname, 'shared'),
+    },
+  },
 });

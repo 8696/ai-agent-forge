@@ -1,0 +1,441 @@
+import type { ReactElement } from 'react';
+import { useCallback, useEffect, useState } from 'react';
+import {
+  Alert,
+  Button,
+  Card,
+  Col,
+  Drawer,
+  Empty,
+  Flex,
+  Form,
+  Input,
+  InputNumber,
+  Popconfirm,
+  Row,
+  Space,
+  Switch,
+  Table,
+  Tag,
+  Typography,
+  message,
+} from 'antd';
+import {
+  ApiOutlined,
+  CheckCircleOutlined,
+  EditOutlined,
+  PlusOutlined,
+  ThunderboltOutlined,
+} from '@ant-design/icons';
+import { PageHeader } from '../../components/shell';
+import {
+  activateModel,
+  configErrorMessage,
+  createModel,
+  deleteModel,
+  fetchModels,
+  testModel,
+  updateModel,
+  type ModelTestResult,
+  type ProcessLlmDefaults,
+  type SaveModelInput,
+  type TenantModelItem,
+} from '../../lib/adminConfig';
+
+/**
+ * §5.4.1 模型选择 `/admin/models`（C4）—— 详见 docs/04-c-ui-后台管理页面.md §5.4
+ *
+ * **模型列表**：一条模型 = 一套完整连接配置（端点 + 密钥 + 采样参数），互不共享。
+ * 多个条目之间切换「启用中」，对话走启用的那条；没有启用项时走平台默认。
+ *
+ * 为什么每条都带完整连接配置而不是共用：换个模型还要复制一遍网关和密钥的话，
+ * 配置一多就乱了；而且「自建网关 + 官方 API 并存」根本没法表达。
+ */
+
+const { Text, Paragraph } = Typography;
+
+export function ModelListPage(): ReactElement {
+  const [models, setModels] = useState<TenantModelItem[]>([]);
+  const [defaults, setDefaults] = useState<ProcessLlmDefaults | null>(null);
+  const [notes, setNotes] = useState<string[]>([]);
+  const [canStoreKey, setCanStoreKey] = useState(true);
+  const [loading, setLoading] = useState(true);
+  const [editing, setEditing] = useState<TenantModelItem | 'new' | null>(null);
+  const [testResult, setTestResult] = useState<ModelTestResult | null>(null);
+  const [testingId, setTestingId] = useState<string | null>(null);
+
+  const reload = useCallback(async (): Promise<void> => {
+    try {
+      const data = await fetchModels();
+      setModels(data.models);
+      setDefaults(data.process_defaults);
+      setNotes(data.notes);
+      setCanStoreKey(data.secret_encryption_enabled);
+    } catch (err: unknown) {
+      message.error(configErrorMessage(err, '加载模型列表失败'));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void reload();
+  }, [reload]);
+
+  const onActivate = useCallback(
+    async (row: TenantModelItem): Promise<void> => {
+      try {
+        await activateModel(row.id);
+        message.success(`已启用「${row.name}」，下一轮对话立即生效`);
+        setTestResult(null);
+        await reload();
+      } catch (err: unknown) {
+        message.error(configErrorMessage(err, '切换失败'));
+      }
+    },
+    [reload],
+  );
+
+  const onDelete = useCallback(
+    async (row: TenantModelItem): Promise<void> => {
+      try {
+        await deleteModel(row.id);
+        message.success('已删除');
+        await reload();
+      } catch (err: unknown) {
+        message.error(configErrorMessage(err, '删除失败'));
+      }
+    },
+    [reload],
+  );
+
+  const onTest = useCallback(async (row: TenantModelItem): Promise<void> => {
+    setTestingId(row.id);
+    setTestResult(null);
+    try {
+      const res = await testModel(row.id);
+      setTestResult(res);
+      if (res.ok) {
+        message.success(`连接正常 · ${res.took_ms} ms`);
+      } else {
+        message.error(`连接失败：${res.error ?? '未知错误'}`);
+      }
+    } catch (err: unknown) {
+      message.error(configErrorMessage(err, '测试失败'));
+    } finally {
+      setTestingId(null);
+    }
+  }, []);
+
+  const active = models.find((m) => m.is_active) ?? null;
+
+  const columns = [
+    {
+      title: '名称',
+      dataIndex: 'name',
+      render: (v: string, row: TenantModelItem) => (
+        <Space>
+          <Text strong>{v}</Text>
+          {row.is_active && <Tag color="green">启用中</Tag>}
+        </Space>
+      ),
+    },
+    { title: '模型 id', dataIndex: 'model_id', render: (v: string) => <Text code>{v}</Text> },
+    {
+      title: 'Base URL',
+      dataIndex: 'base_url',
+      render: (v: string) => (
+        <Text type="secondary" style={{ fontSize: 12 }} ellipsis={{ tooltip: v }}>
+          {v}
+        </Text>
+      ),
+    },
+    {
+      title: 'API Key',
+      dataIndex: 'api_key_hint',
+      render: (v: string | null) => (v === null ? '—' : <Text code>{v}</Text>),
+    },
+    {
+      title: '采样',
+      render: (_: unknown, row: TenantModelItem) => (
+        <Text type="secondary" style={{ fontSize: 12 }}>
+          temp {row.temperature ?? '默认'} · out {row.max_output_tokens ?? '默认'}
+        </Text>
+      ),
+    },
+    {
+      title: '操作',
+      render: (_: unknown, row: TenantModelItem) => (
+        <Space size={4}>
+          {!row.is_active && (
+            <Button size="small" type="link" onClick={() => void onActivate(row)}>
+              启用
+            </Button>
+          )}
+          <Button
+            size="small"
+            type="text"
+            icon={<ApiOutlined />}
+            loading={testingId === row.id}
+            onClick={() => void onTest(row)}
+          />
+          <Button size="small" type="text" icon={<EditOutlined />} onClick={() => setEditing(row)} />
+          <Popconfirm
+            title={`删除「${row.name}」？`}
+            description="删掉后不可恢复。"
+            okText="删除"
+            cancelText="取消"
+            okButtonProps={{ danger: true }}
+            onConfirm={() => void onDelete(row)}
+          >
+            <Button size="small" type="link" danger>
+              删除
+            </Button>
+          </Popconfirm>
+        </Space>
+      ),
+    },
+  ];
+
+  return (
+    <div>
+      <PageHeader
+        title="模型选择"
+        subtitle="配多个模型随时切换，对话走「启用中」那条。留空的采样参数用平台默认。"
+        extra={
+          <Button
+            type="primary"
+            icon={<PlusOutlined />}
+            onClick={() => setEditing('new')}
+            disabled={!canStoreKey}
+          >
+            新建模型
+          </Button>
+        }
+      />
+
+      {!canStoreKey && (
+        <Alert
+          type="warning"
+          showIcon
+          style={{ marginBottom: 16 }}
+          message="服务端未配置加密密钥，不能保存 API Key"
+          description="出于安全考虑，CONFIG_ENCRYPTION_KEY 没配时禁止把密钥写进数据库。请联系平台管理员在 .env 里配置后再用。"
+        />
+      )}
+
+      <Alert
+        type="info"
+        showIcon
+        style={{ marginBottom: 16 }}
+        message={
+          active === null
+            ? `当前对话走平台默认（${defaults?.provider ?? '未配置'} · ${defaults?.llmModel ?? '未配置'}）`
+            : `当前对话使用「${active.name}」（${active.model_id}）`
+        }
+        description={<ul style={{ margin: 0, paddingLeft: 18 }}>{notes.map((n) => <li key={n}>{n}</li>)}</ul>}
+      />
+
+      {testResult !== null && (
+        <Alert
+          style={{ marginBottom: 16 }}
+          type={testResult.ok ? 'success' : 'error'}
+          showIcon
+          icon={testResult.ok ? <CheckCircleOutlined /> : undefined}
+          message={
+            testResult.ok
+              ? `连接正常 · ${testResult.provider} · ${testResult.model} · ${testResult.took_ms} ms`
+              : `连接失败：${testResult.error ?? '未知错误'}`
+          }
+          description={testResult.ok ? `模型回复：${testResult.output ?? ''}` : undefined}
+        />
+      )}
+
+      <Card size="small">
+        <Table<TenantModelItem>
+          rowKey="id"
+          size="small"
+          loading={loading}
+          columns={columns}
+          dataSource={models}
+          pagination={false}
+          locale={{
+            emptyText: (
+              <Empty description="还没有配置模型">
+                <Button type="primary" icon={<PlusOutlined />} onClick={() => setEditing('new')}>
+                  新建第一个模型
+                </Button>
+              </Empty>
+            ),
+          }}
+        />
+      </Card>
+
+      <ModelEditor
+        target={editing}
+        defaults={defaults}
+        onClose={() => setEditing(null)}
+        onSaved={() => {
+          setEditing(null);
+          void reload();
+        }}
+      />
+
+      <Paragraph type="secondary" style={{ marginTop: 12, fontSize: 12 }}>
+        <ThunderboltOutlined /> 保存 / 切换后立即生效，下一轮对话就用新配置，不用重启服务。
+      </Paragraph>
+    </div>
+  );
+}
+
+/** 新建 / 编辑的抽屉表单 */
+function ModelEditor({
+  target,
+  defaults,
+  onClose,
+  onSaved,
+}: {
+  target: TenantModelItem | 'new' | null;
+  defaults: ProcessLlmDefaults | null;
+  onClose: () => void;
+  onSaved: () => void;
+}): ReactElement {
+  const [form] = Form.useForm();
+  const [saving, setSaving] = useState(false);
+  const isNew = target === 'new';
+  const editing = target !== null && target !== 'new' ? target : null;
+
+  useEffect(() => {
+    if (editing === null) {
+      return;
+    }
+    form.setFieldsValue({
+      name: editing.name,
+      provider: editing.provider,
+      model_id: editing.model_id,
+      base_url: editing.base_url,
+      temperature: editing.temperature,
+      max_output_tokens: editing.max_output_tokens,
+      prompt_cache_enabled: editing.prompt_cache_enabled,
+      api_key: '',
+    });
+  }, [editing, form]);
+
+  const onOk = useCallback(async (): Promise<void> => {
+    const values = (await form.validateFields()) as Record<string, unknown>;
+    setSaving(true);
+    try {
+      const payload: SaveModelInput = {
+        name: values.name as string,
+        provider: (values.provider as string) ?? null,
+        model_id: values.model_id as string,
+        base_url: values.base_url as string,
+        temperature: (values.temperature as number | null) ?? null,
+        max_output_tokens: (values.max_output_tokens as number | null) ?? null,
+        prompt_cache_enabled: (values.prompt_cache_enabled as boolean) ?? true,
+      };
+      const typedKey = (values.api_key as string | undefined) ?? '';
+      // 编辑时留空 = 保持原密钥；只有真填了才提交
+      if (typedKey !== '' || isNew) {
+        payload.api_key = typedKey;
+      }
+      if (editing === null) {
+        await createModel(payload);
+        message.success('已创建');
+      } else {
+        await updateModel(editing.id, payload);
+        message.success('已保存');
+      }
+      onSaved();
+    } catch (err: unknown) {
+      message.error(configErrorMessage(err, '保存失败'));
+    } finally {
+      setSaving(false);
+    }
+  }, [editing, form, isNew, onSaved]);
+
+  return (
+    <Drawer
+      open={target !== null}
+      title={isNew ? '新建模型' : `编辑「${editing?.name ?? ''}」`}
+      width={480}
+      onClose={onClose}
+      extra={
+        <Space>
+          <Button onClick={onClose}>取消</Button>
+          <Button type="primary" loading={saving} onClick={() => void onOk()}>
+            保存
+          </Button>
+        </Space>
+      }
+    >
+      <Form form={form} layout="vertical">
+        <Form.Item name="name" label="名称" rules={[{ required: true, message: '给它起个名字' }]}>
+          <Input placeholder="例：生产-快 / 自建网关-慢" />
+        </Form.Item>
+
+        <Form.Item name="provider" label="Provider 标识">
+          <Input placeholder="zhipu / openai-compatible（仅用于识别，不参与调用）" allowClear />
+        </Form.Item>
+
+        <Form.Item
+          name="model_id"
+          label="模型 id"
+          rules={[{ required: true, message: '模型 id 不能为空' }]}
+          extra={
+            defaults?.llmModel !== undefined && defaults.llmModel !== ''
+              ? `平台默认是 ${defaults.llmModel}，这里填别的会覆盖它`
+              : undefined
+          }
+        >
+          <Input placeholder="例：glm-5.3" />
+        </Form.Item>
+
+        <Form.Item
+          name="base_url"
+          label="Base URL（Anthropic 协议端点）"
+          rules={[{ required: true, message: 'Base URL 不能为空' }]}
+          extra="生产环境不允许指向内网地址（防 SSRF）；结尾的 /v1 会自动补齐"
+        >
+          <Input placeholder="https://open.bigmodel.cn/api/anthropic" />
+        </Form.Item>
+
+        <Form.Item
+          name="api_key"
+          label="API Key"
+          rules={isNew ? [{ required: true, message: '新建必须填 API Key' }] : []}
+          extra={
+            editing?.has_api_key === true
+              ? `已保存（${editing.api_key_hint}）。留空表示保持不变。`
+              : '填写后加密存储，保存后无法再取回原文。'
+          }
+        >
+          <Input.Password placeholder="仅提交用，不会回显" autoComplete="new-password" />
+        </Form.Item>
+
+        <Row gutter={12}>
+          <Col span={12}>
+            <Form.Item name="temperature" label="Temperature">
+              <InputNumber min={0} max={2} step={0.1} style={{ width: '100%' }} placeholder="默认 0.2" />
+            </Form.Item>
+          </Col>
+          <Col span={12}>
+            <Form.Item name="max_output_tokens" label="Max Output Tokens">
+              <InputNumber min={64} max={32768} step={128} style={{ width: '100%' }} placeholder="默认 2048" />
+            </Form.Item>
+          </Col>
+        </Row>
+
+        <Form.Item
+          name="prompt_cache_enabled"
+          label="提示词缓存"
+          valuePropName="checked"
+          extra="给系统提示词打 cacheControl，重复提问能命中缓存省 token"
+        >
+          <Switch checkedChildren="开" unCheckedChildren="关" />
+        </Form.Item>
+      </Form>
+    </Drawer>
+  );
+}
+

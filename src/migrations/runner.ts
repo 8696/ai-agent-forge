@@ -10,6 +10,11 @@ import * as m005 from './005-add-tenant-status-expires';
 import * as m006 from './006-create-audit-logs';
 import * as m007 from './007-create-documents';
 import * as m008 from './008-converge-documents-schema';
+import * as m009 from './009-create-sessions-messages';
+import * as m010 from './010-create-prompt-versions-llm-config';
+import * as m011 from './011-add-tenant-chat-params';
+import * as m012 from './012-split-tenant-chat-settings';
+import * as m013 from './013-restructure-tenant-config';
 
 /**
  * umzug 迁移 runner（详见 docs/03-技术栈与规范.md §B.2）
@@ -69,6 +74,31 @@ export function buildMigrator(): Umzug<QueryInterface> {
         name: '008-converge-documents-schema',
         up: (params) => m008.up(params),
         down: (params) => m008.down(params),
+      },
+      {
+        name: '009-create-sessions-messages',
+        up: (params) => m009.up(params),
+        down: (params) => m009.down(params),
+      },
+      {
+        name: '010-create-prompt-versions-llm-config',
+        up: (params) => m010.up(params),
+        down: (params) => m010.down(params),
+      },
+      {
+        name: '011-add-tenant-chat-params',
+        up: (params) => m011.up(params),
+        down: (params) => m011.down(params),
+      },
+      {
+        name: '012-split-tenant-chat-settings',
+        up: (params) => m012.up(params),
+        down: (params) => m012.down(params),
+      },
+      {
+        name: '013-restructure-tenant-config',
+        up: (params) => m013.up(params),
+        down: (params) => m013.down(params),
       },
     ],
   });

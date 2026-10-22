@@ -82,7 +82,23 @@
 - 摘要压缩：长会话定期摘要
 - 记忆检索：基于 embedding 召回相关历史片段
 
-**关键代码**：
+**当前实现**（B1 · 2026-10-21）：
+
+| 能力 | 状态 | 位置 |
+| ---- | ---- | ---- |
+| 短期记忆：消息落库，DB 是真理 | ✅ | `src/services/chat.ts`（`insertUserMessage` / `insertAssistantPlaceholder` / `finalizeAssistantMessage`） |
+| 历史重建：从 DB 还原喂给模型 | ✅ | `loadHistoryRows` + `historyToCountable`（只收 user + complete 的 assistant） |
+| 上下文超预算 → 截断 | ✅ | `src/lib/token-estimate.ts` 的 `fitHistoryToBudget`，UI 侧用 `data-truncated` 告知用户 |
+| 摘要压缩（调 LLM 总结早期对话写 `sessions.summary`） | ⏳ | `sessions.summary` 字段与 prompt 插槽已留好，本期恒为 NULL |
+| 长期记忆（`users.preferences`） | ⏳ | 未实现 |
+
+> **为什么截断和摘要是两回事**：截断是「丢掉更早的对话」，用户会感知到 AI 忘事
+> （所以必须用 `data-truncated` 明说「已省略更早的 N 轮」，不能悄悄丢）；
+> 摘要是「把早期对话压成一段话再喂回去」，体验上无感。文档 12-b §B1 的原始验收
+> 「构造 200 轮验证摘要压缩」指的是后者，**目前仍未完成**。
+>
+> **token 估算是粗估且故意高估**：项目不引 tiktoken（理由同 `chunk.ts`：换 provider
+> 不该让历史预算的计算方式漂移），估多了只是多裁几轮历史，估少了会在 provider 侧炸 400。
 
 ---
 

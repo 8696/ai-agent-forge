@@ -70,3 +70,55 @@
 - 每个 provider 配置 QPS 限制（按 model；provider 自带限流时遵循 provider 文档）
 - 主 provider 挂了自动切到备选（**改 `LLM_PROVIDER` 切到下家 + 备选 `*_ANTHROPIC_BASE_URL`**，业务代码不动）
 - 当前 MVP 不做自动 failover（要在 server.ts 写 retry + 探测逻辑），人工切
+
+## 6.4 思考模式（reasoning）的 provider 支持情况
+
+> **2026-10-21 B1 落地时实测**，结论可能随 provider 升级变化，换 provider 前先复测。
+
+对话链路的思考模式由 `CHAT_THINKING_BUDGET_TOKENS` 控制（**默认 0 = 关闭**）。
+开启后 `src/services/chat.ts` 会给 `streamText` 传：
+
+```ts
+providerOptions: { anthropic: { thinking: { type: 'enabled', budgetTokens: N } } }
+```
+
+`@ai-sdk/anthropic` v4 的 provider options schema 支持
+`thinking.type: 'enabled' | 'adaptive' | 'disabled' | 'between_tools'`
+（见 `node_modules/@ai-sdk/anthropic` 的 d.ts）。但**各家网关是否透传这个参数不一样**：
+
+| provider | 实测结果（2026-10-21，dev 用智谱 glm-5.3） |
+| -------- | ------------------------------------------------ |
+| 智谱（`ZHIPU_ANTHROPIC_BASE_URL`） | **默认就会返回 `reasoning-start` / `reasoning-delta`**，不需要打开开关 —— 前端「💭 思考过程」默认就能看到内容。`CHAT_THINKING_BUDGET_TOKENS=0` 时我们不传 `thinking` 参数，模型仍自带推理 |
+| 其他 provider | ⏳ 未实测。可能是忽略参数（无害），也可能 400（会走流内 error 降级） |
+
+> **为什么默认关着**：不传未知参数最安全。只要 provider 自己愿意吐 reasoning，
+> `toUIMessageStream({ sendReasoning: true })` 就照样能把 `ReasoningUIPart` 送到前端，
+> 所以「关着」不等于「看不到思考过程」——只是不由我们控制推理预算。
+>
+> 真要在某个 provider 上开，显式设 `CHAT_THINKING_BUDGET_TOKENS=2048`，
+> **并在目标 provider 上验一轮**，别假设它认。
+
+### ⚠️ 系统提示词必须走 `system` 参数，不能塞进 `messages` 的 system 角色
+
+**2026-10-21 实测**：把系统提示词写成 `messages: [{ role: 'system', ... }]`，
+智谱直接 400：
+
+```
+Invalid prompt: System messages are not allowed in the prompt or messages fields.
+Use the instructions option instead.
+```
+
+Anthropic 原生协议里 `system` 既可以是顶层字段，也可以是 messages 里的首条；
+但**很多「Anthropic 兼容」网关只实现了前者**。SDK 把 `streamText({ system })`
+映射成 `instructions` 字段，所以正确写法是：
+
+```ts
+// ✅ 所有 provider 都能跑的写法
+streamText({ model, system: { role: 'system', content: prompt }, messages: history })
+```
+
+> 为什么传对象而不是字符串：为了挂 `providerOptions.anthropic.cacheControl`
+> 给提示词开 Prompt Caching。**智谱上这个参数实测不生效**（它把提示词映射到
+> `instructions`，而 `cache_control` 只对 messages 里的 content block 有意义），
+> 所以 `cache_read_tokens` 仍是 0；原生 Anthropic 端点上应该可用（未实测）。
+> 换 provider 前建议先跑一轮 `POST /api/v1/admin/config/llm/test` 再开这个开关。

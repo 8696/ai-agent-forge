@@ -62,7 +62,7 @@ CREATE TABLE sessions (
   id VARCHAR(36) PRIMARY KEY COMMENT 'UUID',
   tenant_id VARCHAR(36) NOT NULL COMMENT '所属租户',
   user_id VARCHAR(36) COMMENT '前台用户 ID；匿名访问（公开挂件）为 NULL',
-  channel ENUM('widget', 'email', 'api') NOT NULL COMMENT '接入渠道',
+  channel ENUM('web', 'widget', 'email', 'api') NOT NULL COMMENT '接入渠道',
   status ENUM('active', 'closed', 'transferred') DEFAULT 'active' COMMENT '会话状态',
   title VARCHAR(200) COMMENT '第一条用户消息的前 20 字（自动生成）',
   summary TEXT COMMENT '摘要压缩后的内容（超长会话用）',
@@ -73,6 +73,13 @@ CREATE TABLE sessions (
   INDEX idx_user (user_id)
 ) COMMENT '对话会话表';
 ```
+
+> **channel 的 `web`**：B1 落地时补的值 —— customer 登录后的前台聊天页（`/customer`）。
+> 原 DDL 只有 `widget` / `email` / `api`，`widget` 留给下一轮的公开挂件（E1），
+> `email` / `api` 是预留值，本期无入口。
+>
+> **`summary` 目前恒为 NULL**：真摘要压缩（调 LLM 总结早期对话）是 B1 的下一轮，
+> 本期超长对话靠 `src/lib/token-estimate.ts` 的 token 预算截断处理。
 
 ### 消息表（messages）
 
@@ -98,6 +105,26 @@ CREATE TABLE messages (
   INDEX idx_trace (trace_id)
 ) COMMENT '聊天消息表';
 ```
+
+> **建表迁移**：`src/migrations/009-create-sessions-messages.ts`（sessions + messages 一起建）。
+>
+> 这是一条**收敛迁移**：更早的 Step 6 实现建过同名的两张表（迁移记录 `008-create-sessions` /
+> `009-create-messages` 仍在 `sequelize_meta` 里），那两张表的 `channel` 枚举里没有 `web`。
+> Sequelize 的 `createTable` 会生成 `CREATE TABLE IF NOT EXISTS`，表在的时候**静默跳过**，
+> 后续 `addIndex` 就会撞 `Duplicate key name`。所以 009 逐项判断再动手：
+> 表不存在 → 建全；表存在 → 补缺列、补缺索引，并 `MODIFY` 把 `channel` 收敛到含 `web` 的定义
+> （MySQL 不支持直接给 ENUM 追加值，只能 MODIFY）。
+>
+> **`tool_results` 的语义被重载**：DDL 原意是「工具调用的输出」（Phase 2 才有工具），
+> 但 B1 需要把 AI SDK 的 `data-citations` / `data-status` 这些 data part 落库
+> （否则刷新页面后历史回答的「来源」角标就丢了），所以本期这一列只装
+> `{ data_parts: [...] }`。**做工具调用之前必须先加一条迁移把 data part 挪走**
+> （例如新增 `parts JSON` 列），否则同一列里两种形状混着，前端要靠 key 猜。
+> 读写统一走 `src/services/chat.ts` 的 `readDataParts` / `extractDataParts`。
+>
+> **`status='streaming'` 的僵尸行**：assistant 消息在开流之前就先建行（正文为空），
+> 流结束后回填。进程被 kill / OOM 会留下一批永远停在 `streaming` 的行，
+> 读历史时由 `markStaleStreamingAsFailed()` 就地降级为 `failed`（5 分钟阈值）。
 
 ### 知识库文档表（documents）
 
@@ -313,22 +340,102 @@ CREATE TABLE api_keys (
 
 ### 提示词版本表（prompt_versions · 提示词管理）
 
-> **C3 配套**。提示词文件用 git 管，DB 存「哪个版本在生产、哪些是草稿」元信息。
+> **C3 配套**。建表迁移：`src/migrations/010-create-prompt-versions-llm-config.ts`。
 
 ```sql
 CREATE TABLE prompt_versions (
   id VARCHAR(36) PRIMARY KEY COMMENT 'UUID',
   tenant_id VARCHAR(36) NOT NULL COMMENT '所属租户',
-  version VARCHAR(20) NOT NULL COMMENT '版本号（''v1'' / ''v2''，与文件名对应）',
+  version VARCHAR(20) NOT NULL COMMENT '版本号（v1 / v2 …，租户内唯一）',
   status ENUM('draft', 'production', 'archived') DEFAULT 'draft' COMMENT '生产中 / 草稿 / 已归档',
-  file_path VARCHAR(500) NOT NULL COMMENT '对应 `shared/prompts/customer-service/system.v1.ts`',
-  deployed_at DATETIME(6) NULL COMMENT '部署到生产的时间',
-  deployed_by VARCHAR(36) NULL COMMENT '哪个 admin 部署的',
-  created_at DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6) COMMENT '创建时间',
-  UNIQUE KEY uk_tenant_version (tenant_id, version),
-  INDEX idx_tenant_status (tenant_id, status)
-) COMMENT '提示词版本元信息';
+  content MEDIUMTEXT NOT NULL COMMENT '提示词正文，支持 {{tenantName}} 占位符',
+  description VARCHAR(200) COMMENT '这个版本改了什么（便于回溯）',
+  deployed_at DATETIME(6) NULL COMMENT '发布到生产的时间',
+  deployed_by VARCHAR(36) NULL COMMENT '发布人 user_id',
+  created_by VARCHAR(36) NOT NULL COMMENT '创建人 user_id',
+  created_at DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+  UNIQUE KEY uk_prompt_versions_tenant_version (tenant_id, version),
+  INDEX idx_prompt_versions_tenant_status (tenant_id, status)
+) COMMENT '租户级提示词版本表';
 ```
+
+> **`content` 是对原设计的改动**：原 DDL 只有 `file_path VARCHAR(500)` 指向仓库里的
+> `.ts` 文件。指向文件的话后台只能「选版本」不能「编版本」，改提示词必须发版 ——
+> 而 C3 要的是「租户在后台自定义」。所以正文入库，`file_path` 取消。
+>
+> **单租户同时只有一个 production**，由 `publishPromptVersion()` 在一个事务里保证
+> （先全部转 archived，再置新的 production）。production / archived 不允许直接改。
+
+### 租户模型表（tenant_models · 模型选择）
+
+> **C4 配套**。建表迁移：`src/migrations/013-restructure-tenant-config.ts`。
+
+```sql
+CREATE TABLE tenant_models (
+  id VARCHAR(36) PRIMARY KEY COMMENT 'UUID',
+  tenant_id VARCHAR(36) NOT NULL COMMENT '所属租户',
+  name VARCHAR(100) NOT NULL COMMENT '条目名（租户自定义，如「生产-快」）',
+  provider VARCHAR(32) COMMENT '展示用标识，不参与调用',
+  model_id VARCHAR(100) NOT NULL COMMENT '对话模型 id',
+  base_url VARCHAR(500) NOT NULL COMMENT 'Anthropic 协议端点（已 normalize 成以 /v1 结尾）',
+  api_key_enc BLOB NOT NULL COMMENT 'AES-256-GCM 密文；密钥来自 CONFIG_ENCRYPTION_KEY',
+  api_key_hint VARCHAR(64) COMMENT '脱敏提示（4ff4…m3Bo），唯一允许回显的密钥形态',
+  temperature DECIMAL(3,2) COMMENT 'NULL = 用进程级默认',
+  max_output_tokens INT COMMENT 'NULL = 用进程级默认',
+  prompt_cache_enabled BOOLEAN DEFAULT TRUE COMMENT '是否给系统提示词打 cacheControl',
+  is_active BOOLEAN DEFAULT FALSE COMMENT '是否是对话当前使用的模型；每租户恰有一条为 true',
+  updated_by VARCHAR(36) COMMENT '最后修改人 user_id',
+  created_at DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+  INDEX idx_tenant_models_tenant (tenant_id)
+) COMMENT '租户模型列表';
+```
+
+> **一个租户可以配多个模型**，逐条切换 —— 「自建网关 + 官方 API 并存」这类场景才表达得了。
+> 每条都是**完整的连接配置**（端点 + 密钥 + 采样），不跟别的条目共享。
+> **每租户恰有一条 `is_active`**，由 `activateTenantModel()` 在一个事务里保证
+> （先全灭、再亮新的）；第一条模型入库时自动成为启用项，否则租户「配了却没选中」，
+> 对话会一直走平台默认。
+>
+> **密钥铁律**：`api_key_enc` 存 AES-256-GCM 密文（密钥 = `CONFIG_ENCRYPTION_KEY`，
+> sha256 派生 32 字节），**永不落明文**；`api_key_hint` 是唯一允许回显的形态。
+> 密钥轮换期解不开会**降级到平台默认凭据 + 日志告警**，不会让整个对话失败。
+>
+> **base_url 的 SSRF 风险**：租户填的端点意味着我们的后端会向任意地址发请求。
+> 生产默认拦截内网 / 回环 / 链路本地（含云元数据）/ CGNAT，且逐个 DNS 解析结果校验；
+> dev 默认放开。要指自建局域网网关时设 `CONFIG_ALLOW_PRIVATE_LLM_ENDPOINT=true`。
+
+### 租户通用配置表（tenant_settings · KV）
+
+> **C4 / E2 配套**。建表迁移同上。
+
+```sql
+CREATE TABLE tenant_settings (
+  id VARCHAR(36) PRIMARY KEY COMMENT 'UUID',
+  tenant_id VARCHAR(36) NOT NULL COMMENT '所属租户',
+  config_key VARCHAR(64) NOT NULL COMMENT '配置项键（对应 SETTINGS_REGISTRY）',
+  config_value VARCHAR(1000) NOT NULL COMMENT '值（统一字符串，类型由 registry 决定）',
+  updated_by VARCHAR(36) COMMENT '最后修改人 user_id',
+  created_at DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+  UNIQUE KEY uk_tenant_settings_key (tenant_id, config_key)
+) COMMENT '租户通用配置（只存租户改过的值）';
+```
+
+> **存的是「租户改过的值」，不是「全部配置项」**：
+> 键的**元信息**（类型 / 名称 / 分类 / 默认值 / 取值范围）在代码里
+> —— `src/services/tenant-settings.ts` 的 `SETTINGS_REGISTRY`；本表只存 key + value。
+>
+> 这么切的理由：类型和范围校验必须有代码（手写解析），否则 KV 表会退化成人人可写的
+> 万能垃圾桶；而后台页面按 registry 渲染，加一个配置项不用碰 SQL。
+> 租户没配过的键**根本不占行**。
+>
+> **值的解析失败按「没配」处理**（回落默认 + 记 warn）—— 不能因为一个手滑存进去的
+> 坏值就让整个对话挂掉。
+>
+> **三态语义**（`PUT /config/settings`）：`undefined` = 不改 / `null` = **清除覆盖回落到 .env** /
+> 值 = 覆盖。`null` 那条特别容易写错成 no-op，后果是「用户一旦设过就再也改不回默认」。
 
 ### 评测结果明细表（evaluation_run_items · 每条 case 的分数）
 
@@ -381,6 +488,8 @@ CREATE TABLE evaluation_run_items (
 | spans                                  | ~30000   | ~1100 万 | ~5 GB            |
 | api_keys                               | < 1      | ~10      | < 1 MB           |
 | prompt_versions                        | < 1      | ~20      | < 1 MB           |
+| tenant_models                          | < 1      | ~5       | < 10 KB          |
+| tenant_settings                        | < 1      | ~10      | < 10 KB          |
 | audit_logs                             | ~300     | ~10 万   | ~50 MB           |
 
 向量数据存 Qdrant，不占 MySQL 空间。**messages** 和 **spans** 是增长主力，要按月份分区（PARTITION BY RANGE）以控制单表大表查询性能。

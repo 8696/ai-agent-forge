@@ -15,9 +15,15 @@ export {
 export {
   systemHttp,
   adminHttp,
+  customerHttp,
   apiKeyHttp,
   withReauth,
   allHttpFromTokensFile,
   allHttpFresh,
+  readSse,
+  textFromChunks,
+  dataChunks,
   type AllHttp,
+  type StreamChunk,
+  type StreamResult,
 } from './http';

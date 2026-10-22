@@ -7,6 +7,11 @@ import { User } from './models/User';
 import { SystemUser } from './models/SystemUser';
 import { ApiKey } from './models/ApiKey';
 import { Document } from './models/Document';
+import { Session } from './models/Session';
+import { Message } from './models/Message';
+import { PromptVersion } from './models/PromptVersion';
+import { TenantModel } from './models/TenantModel';
+import { TenantSetting } from './models/TenantSetting';
 import { AuditLog } from './models/AuditLog';
 
 /**
@@ -39,7 +44,19 @@ function buildSequelize(): SequelizeType {
   });
 
   // 注册模型：每加一个 model 在此注册（以后会更多）
-  instance.addModels([Tenant, User, SystemUser, ApiKey, Document, AuditLog]);
+  instance.addModels([
+  Tenant,
+  User,
+  SystemUser,
+  ApiKey,
+  Document,
+  Session,
+  Message,
+  PromptVersion,
+  TenantModel,
+  TenantSetting,
+  AuditLog,
+]);
   return instance;
 }
 

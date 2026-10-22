@@ -2,15 +2,16 @@ import type { ReactElement } from 'react';
 import { Navigate, Outlet, useLocation } from 'react-router-dom';
 import { SharedShellLayout } from '../SharedShellLayout';
 import type { SidebarItem } from '../SharedShellLayout';
-import { DashboardOutlined } from '@ant-design/icons';
+import { MessageOutlined, DashboardOutlined } from '@ant-design/icons';
 
 /**
  * customer 子系统 Layout（租户前台）
  * - role=customer 才能进
- * - 聊天 / 历史 / 偏好尚未落地，侧栏只保留首页
+ * - 侧栏：首页（= 聊天页）
  */
 const SIDEBAR: SidebarItem[] = [
   { key: '/customer', icon: <DashboardOutlined />, label: '首页', to: '/customer' },
+  { key: '/customer/chat', icon: <MessageOutlined />, label: '智能问答', to: '/customer/chat' },
 ];
 
 export function CustomerLayout(): ReactElement {

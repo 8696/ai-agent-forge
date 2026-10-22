@@ -14,7 +14,6 @@ import {
   loginCustomer,
   loginSystem,
   readTokensFile,
-  type TenantCode,
 } from './auth';
 
 function apiBase(): string {
@@ -31,6 +30,11 @@ export function systemHttp(token: string): AxiosInstance {
 
 export function adminHttp(token: string): AxiosInstance {
   return axios.create({ baseURL: `${apiBase()}/api/v1/admin`, headers: withAuthHeader(token) });
+}
+
+/** customer 子系统（会话 / 历史 / 流式对话 / 反馈） */
+export function customerHttp(token: string): AxiosInstance {
+  return axios.create({ baseURL: `${apiBase()}/api/v1/customer`, headers: withAuthHeader(token) });
 }
 
 /**
@@ -72,13 +76,15 @@ export function withReauth(
  * 一键拿全套 HTTP 客户端（用 .e2e-tokens.json 的现成 token，0 网络请求）
  * 适合一次性跑多个 API 测试的场景。
  *
- * 注意：customer 子系统当前只剩 POST /login（无 JWT 鉴权端点），所以这里不导出 customerHttp。
- *      loginCustomer() 仍保留（customer-auth.test.ts 测登录用），.e2e-tokens.json 也仍有 customer JWT 字段。
+ * customer 客户端从 B1 起有了受保护端点（会话 CRUD / 流式对话 / 反馈），
+ * 所以也进这套 AllHttp。
  */
 export interface AllHttp {
   system: AxiosInstance;
   acmeAdmin: AxiosInstance;
   globAdmin: AxiosInstance;
+  acmeCustomer: AxiosInstance;
+  globCustomer: AxiosInstance;
   acmeApiKey: AxiosInstance;
   globApiKey: AxiosInstance;
 }
@@ -89,6 +95,8 @@ export async function allHttpFromTokensFile(): Promise<AllHttp> {
     system: systemHttp(t.system),
     acmeAdmin: adminHttp(t.acmeAdmin),
     globAdmin: adminHttp(t.globAdmin),
+    acmeCustomer: customerHttp(t.acmeCustomer),
+    globCustomer: customerHttp(t.globCustomer),
     acmeApiKey: apiKeyHttp(t.acmeApiKey),
     globApiKey: apiKeyHttp(t.globApiKey),
   };
@@ -98,21 +106,90 @@ export async function allHttpFromTokensFile(): Promise<AllHttp> {
  * 主动重新登录拿一套新 HTTP（处理 JWT 过期 / 服务重启）
  */
 export async function allHttpFresh(): Promise<AllHttp> {
-  const [system, acmeAdmin, globAdmin] = await Promise.all([
+  const [system, acmeAdmin, globAdmin, acmeCustomer, globCustomer] = await Promise.all([
     loginSystem(),
     loginAdmin('acme'),
     loginAdmin('globex'),
+    loginCustomer('acme'),
+    loginCustomer('globex'),
   ]);
   const t = await readTokensFile();
   return {
     system: systemHttp(system),
     acmeAdmin: adminHttp(acmeAdmin),
     globAdmin: adminHttp(globAdmin),
+    acmeCustomer: customerHttp(acmeCustomer),
+    globCustomer: customerHttp(globCustomer),
     acmeApiKey: apiKeyHttp(t.acmeApiKey),
     globApiKey: apiKeyHttp(t.globApiKey),
   };
 }
 
-// 保留 loginCustomer 供 customer-auth.test.ts 复用；这里不导出 HTTP 客户端（customer 没受保护端点）
-void loginCustomer;
-void ({} as TenantCode);
+// ============================================================
+// SSE 流式读取（B1 流式对话测试专用）
+// ============================================================
+
+/** AI SDK 的 UI message stream chunk（wire 上是 `data: {json}`） */
+export interface StreamChunk {
+  type: string;
+  [k: string]: unknown;
+}
+
+export interface StreamResult {
+  status: number;
+  contentType: string | null;
+  headers: Record<string, string>;
+  chunks: StreamChunk[];
+  /** 原始 SSE 文本，断言 `: stream-open` 心跳注释时用 */
+  raw: string;
+}
+
+/**
+ * 读一条 SSE 流并解析成 chunk 数组。
+ *
+ * 用 fetch + `res.text()` 一次性读全，而不是 axios 的 responseType: 'stream'：
+ * 测试要断言的是**最终状态**（chunk 集合、落库内容），不是逐 token 时序。
+ * 先读全再解析最简单，也不会留下半开的 read 泄漏。
+ */
+export async function readSse(url: string, token: string, body: unknown): Promise<StreamResult> {
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+    body: JSON.stringify(body),
+  });
+  const raw = await res.text();
+  const chunks: StreamChunk[] = [];
+  for (const line of raw.split('\n')) {
+    if (!line.startsWith('data: ')) {
+      continue;
+    }
+    const payload = line.slice('data: '.length).trim();
+    // [DONE] 是结束标记；其余应该都是 JSON chunk
+    if (payload === '' || payload === '[DONE]') {
+      continue;
+    }
+    try {
+      chunks.push(JSON.parse(payload) as StreamChunk);
+    } catch {
+      // 非 JSON 的 data 行忽略（心跳等）
+    }
+  }
+  const headers: Record<string, string> = {};
+  res.headers.forEach((v, k) => {
+    headers[k] = v;
+  });
+  return { status: res.status, contentType: res.headers.get('content-type'), headers, chunks, raw };
+}
+
+/** 把 text-delta chunk 拼成最终回答正文 */
+export function textFromChunks(chunks: StreamChunk[]): string {
+  return chunks
+    .filter((c) => c.type === 'text-delta')
+    .map((c) => String(c.delta))
+    .join('');
+}
+
+/** 取 data-${name} 类型的 chunk 数据 */
+export function dataChunks(chunks: StreamChunk[], name: string): unknown[] {
+  return chunks.filter((c) => c.type === `data-${name}`).map((c) => c.data);
+}

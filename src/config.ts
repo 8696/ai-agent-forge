@@ -15,6 +15,22 @@ const optionalStr = z.preprocess(emptyToUndef, z.string().optional());
 const optionalUrl = z.preprocess(emptyToUndef, z.string().url().optional());
 
 /**
+ * 环境变量里的布尔值：认 `1/0`、`true/false`、`yes/no`、`on/off`（大小写不敏感）。
+ *
+ * **不能用 `z.coerce.boolean()`**：它走 JS 真值转换，字符串 `"false"` 会被当成 `true` ——
+ * 写 `CONFIG_ALLOW_PRIVATE_LLM_ENDPOINT=false` 反而把开关打开了。
+ * env 里的东西一律是字符串，所以这个转换必须显式做。
+ */
+const toBool = (value: unknown): unknown => {
+  if (typeof value === 'boolean') return value;
+  if (typeof value !== 'string') return value;
+  const v = value.trim().toLowerCase();
+  if (v === '1' || v === 'true' || v === 'yes' || v === 'on') return true;
+  if (v === '0' || v === 'false' || v === 'no' || v === 'off' || v === '') return false;
+  return value;
+};
+
+/**
  * 环境变量校验，启动时缺必填项直接挂，避免带着错误配置继续服务。
  * 详见 docs/03-技术栈与规范.md §A.12 + docs/07-大模型与Embedding.md §7.1
  *
@@ -97,6 +113,38 @@ const envSchema = z.object({
   CUSTOM_ANTHROPIC_BASE_URL: optionalUrl,
   CUSTOM_ANTHROPIC_MODEL: z.string().default(''),
   CUSTOM_EMBEDDING_MODEL: z.string().default(''),
+
+  // === 租户级配置（C3 / C4）===
+  // 租户自定义 apiKey 的落库加密密钥（AES-256-GCM）。留空 = 禁止保存 apiKey。
+  // 生产必须配；配了之后**永远别换**（换了对不上的旧密文解不出来）
+  CONFIG_ENCRYPTION_KEY: z.string().default(''),
+  // 是否允许租户把 LLM 端点指向内网地址。dev 默认放开；生产默认拦截（SSRF 防护，
+  // 详见 src/lib/llm-endpoint.ts）。要指自建局域网网关时显式设 true
+  CONFIG_ALLOW_PRIVATE_LLM_ENDPOINT: z.preprocess(toBool, z.boolean().default(false)),
+
+  // === 对话（B1 · 多轮对话 + LLM 流式）===
+  // 输入侧总 token 预算：system prompt + 历史 + 检索片段三块之和
+  CHAT_CONTEXT_TOKEN_BUDGET: z.coerce.number().int().positive().default(8000),
+  // 估算高估的安全垫比例（0.15 = 留 15% 给估算误差）
+  CHAT_BUDGET_SAFETY_RATIO: z.coerce.number().min(0).max(0.5).default(0.15),
+  // 最多带多少轮历史进 prompt（先按轮数砍，再按 token 预算砍）
+  CHAT_MAX_HISTORY_TURNS: z.coerce.number().int().positive().default(10),
+  // 检索片段的 token 上限
+  CHAT_RETRIEVAL_TOKEN_BUDGET: z.coerce.number().int().positive().default(2500),
+  // 系统提示词的 token 上限（默认提示词约 330 token，600 绰绰有余）
+  CHAT_SYSTEM_TOKEN_BUDGET: z.coerce.number().int().positive().default(600),
+  // RAG topK（传给 hybridSearch 的候选池大小；真正进 prompt 的条数由 token 预算裁剪决定）
+  CHAT_RETRIEVAL_TOP_K: z.coerce.number().int().min(1).max(50).default(5),
+  // 单次回复最大输出 token
+  CHAT_MAX_OUTPUT_TOKENS: z.coerce.number().int().positive().default(2048),
+  // 单条用户消息最长字符数
+  CHAT_MAX_INPUT_CHARS: z.coerce.number().int().positive().default(2000),
+  // 生成温度
+  CHAT_TEMPERATURE: z.coerce.number().min(0).max(2).default(0.2),
+  // SSE 心跳间隔（ms），<=0 关闭；部署在 nginx 后面建议保持 >0
+  CHAT_KEEPALIVE_MS: z.coerce.number().int().nonnegative().default(15000),
+  // 思考模式预算 token；0 = 关闭（provider 不一定支持，见 docs/06 §6.4）
+  CHAT_THINKING_BUDGET_TOKENS: z.coerce.number().int().nonnegative().default(0),
 
   // === JWT ===
   JWT_SECRET: z.string().min(32, 'JWT_SECRET 至少 32 字符'),
@@ -340,12 +388,33 @@ export const config = Object.freeze({
   CHUNK_SIZE: env.CHUNK_SIZE,
   CHUNK_OVERLAP: env.CHUNK_OVERLAP,
 
+  // 对话（B1）配置整体冻一块：这些值是「一次调用内不许变」的，
+  // 业务代码按 destructure 取，改了要重启才生效（跟 .env 的语义一致）
+  CHAT: Object.freeze({
+    /** 输入侧总 token 预算（system + 历史 + 检索片段） */
+    CONTEXT_TOKEN_BUDGET: env.CHAT_CONTEXT_TOKEN_BUDGET,
+    /** 估算高估的安全垫比例 */
+    BUDGET_SAFETY_RATIO: env.CHAT_BUDGET_SAFETY_RATIO,
+    MAX_HISTORY_TURNS: env.CHAT_MAX_HISTORY_TURNS,
+    RETRIEVAL_TOKEN_BUDGET: env.CHAT_RETRIEVAL_TOKEN_BUDGET,
+    SYSTEM_TOKEN_BUDGET: env.CHAT_SYSTEM_TOKEN_BUDGET,
+    RETRIEVAL_TOP_K: env.CHAT_RETRIEVAL_TOP_K,
+    MAX_OUTPUT_TOKENS: env.CHAT_MAX_OUTPUT_TOKENS,
+    MAX_INPUT_CHARS: env.CHAT_MAX_INPUT_CHARS,
+    TEMPERATURE: env.CHAT_TEMPERATURE,
+    KEEPALIVE_MS: env.CHAT_KEEPALIVE_MS,
+    THINKING_BUDGET_TOKENS: env.CHAT_THINKING_BUDGET_TOKENS,
+  }),
+
   LLM_PROVIDER: env.LLM_PROVIDER,
   LLM_MODEL: env.LLM_MODEL,
   LLM_EMBEDDING_MODEL: env.LLM_EMBEDDING_MODEL,
 
   JWT_SECRET: env.JWT_SECRET,
   JWT_EXPIRES_IN: env.JWT_EXPIRES_IN,
+
+  CONFIG_ENCRYPTION_KEY: env.CONFIG_ENCRYPTION_KEY,
+  CONFIG_ALLOW_PRIVATE_LLM_ENDPOINT: env.CONFIG_ALLOW_PRIVATE_LLM_ENDPOINT,
 
   LOG_LEVEL: env.LOG_LEVEL,
 });

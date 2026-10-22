@@ -11,12 +11,6 @@ export default defineConfig({
     alias: {
       '@': path.resolve(__dirname, 'web'),
       '@shared': path.resolve(__dirname, 'shared'),
-      // 把 @ai-sdk/react 内部 bundle 的 ai v7 暴露成 `@ai-sdk-internal`
-      // —— 让前端能 import DefaultChatTransport（v4 ChatInit 需要）
-      '@ai-sdk-internal': path.resolve(
-        __dirname,
-        'node_modules/@ai-sdk/react/node_modules/ai',
-      ),
     },
   },
   server: {
