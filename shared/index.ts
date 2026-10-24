@@ -24,3 +24,5 @@ export {
 
 export { CITATION_TEXT_LIMIT, renderRagContext } from './prompts/chat/rag-context';
 export type { RagContextResult, RenderableHit } from './prompts/chat/rag-context';
+
+export { renderSummaryBlock, SUMMARY_BLOCK_HEADER } from './prompts/chat/summary';

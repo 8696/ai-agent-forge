@@ -1,8 +1,9 @@
 import Router from '@koa/router';
-import { User } from '../../models';
+import { User, UserMemory } from '../../models';
 import { hashPassword } from '../../lib/password';
 import { createUserSchema, updateUserSchema } from '../../lib/validators';
 import { NotFoundError, ValidationError, type TenantUserJwtPayload } from '../../lib';
+import { writeAuditLog } from '../../lib/audit-log';
 import { jwtAuth } from '../jwt-base';
 import { requireAdmin } from './middleware';
 
@@ -16,6 +17,11 @@ import { requireAdmin } from './middleware';
  *   DELETE /api/admin/users/:id
  *
  * 跨租户隔离：ctx.state.adminUser.tenant_id 自动加 where filter
+ *
+ * ⚠️ **写操作必须留痕**（D5）：建用户 / 改用户 / 删用户都写 audit_logs。
+ *    D5 的验收原文是「关键操作（建用户 / 改配置 / 租户启停 / 文档增删）→ audit_logs 有记录」——
+ *    建用户这一条以前是漏的，现在补上了。
+ *    ⚠️ **密码永远不进 details**（只记「重置过密码」这个事实）。
  */
 export const adminUserRouter = new Router({ prefix: '/api/v1/admin' });
 
@@ -49,6 +55,17 @@ adminUserRouter.post('/users', async (ctx) => {
     role: input.role,
   });
 
+  await writeAuditLog({
+    tenant_id: u.tenant_id,
+    user_id: u.sub,
+    action: 'USER_CREATED',
+    resource_type: 'user',
+    resource_id: user.id,
+    // ⚠️ 密码不进日志
+    details: { email: user.email, role: user.role },
+    ip: ctx.ip,
+  });
+
   ctx.status = 201;
   ctx.body = {
     id: user.id,
@@ -69,6 +86,9 @@ adminUserRouter.patch('/users/:id', async (ctx) => {
     throw new NotFoundError('用户');
   }
 
+  // 改之前的邮箱 —— 审计要记「从哪个改成哪个」
+  const prevEmail = target.email;
+
   if (input.email !== undefined && input.email !== target.email) {
     const dup = await User.findOne({ where: { email: input.email, tenant_id: u.tenant_id } });
     if (dup !== null) {
@@ -81,6 +101,22 @@ adminUserRouter.patch('/users/:id', async (ctx) => {
     target.must_change_password = false;
   }
   await target.save();
+
+  await writeAuditLog({
+    tenant_id: u.tenant_id,
+    user_id: u.sub,
+    action: 'USER_UPDATED',
+    resource_type: 'user',
+    resource_id: target.id,
+    // ⚠️ 密码本身永远不进日志 —— 只记「重置过密码」这个事实
+    details: {
+      prev_email: prevEmail,
+      email: target.email,
+      email_changed: target.email !== prevEmail,
+      password_reset: input.password !== undefined,
+    },
+    ip: ctx.ip,
+  });
 
   ctx.body = {
     id: target.id,
@@ -103,6 +139,23 @@ adminUserRouter.delete('/users/:id', async (ctx) => {
   if (target === null) {
     throw new NotFoundError('用户');
   }
+
+  // 删用户要一起删掉他的长期记忆（B4）：
+  // 记忆是**物理删除**的，跟用户一起走 —— 留着就成了没人认领的孤儿行
+  // （后台「用户记忆」页按 users 表关联，用户没了就再也看不到那些行，
+  //  物理删除的合规清理入口也用不上了），而里面可能还留着姓名 / 工号 / 地址。
+  await UserMemory.destroy({ where: { tenant_id: u.tenant_id, user_id: id } });
+
+  await writeAuditLog({
+    tenant_id: u.tenant_id,
+    user_id: u.sub,
+    action: 'USER_DELETED',
+    resource_type: 'user',
+    resource_id: target.id,
+    details: { email: target.email, role: target.role },
+    ip: ctx.ip,
+  });
+
   await target.destroy();
   ctx.status = 204;
 });

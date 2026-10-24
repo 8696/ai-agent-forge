@@ -39,7 +39,21 @@
 - 启停之间：所有 audit_logs 留痕（`/system/audit` 也能查）
 - 列表加载：默认按 `created_at DESC`，状态筛选支持单独显示 `disabled` 列表（无活跃租户运营只看历史）
 
-### 6.2 总览 `/system/dashboard`
+### 6.2 总览 `/system/dashboard` ✅ 已落地 2026-10-24
+
+> 实际路由是 `/system`（首页就是总览），不是 `/system/dashboard`。
+> 数据来源：`GET /api/v1/system/stats`（新增端点，**跨租户口径**）。
+>
+> 内容：总租户数（启用 / 禁用 / 已到期）+ 总用户数 + 今日对话数 / 成本 + 7 天趋势图
+> + 「成本超预算的租户」列表。
+>
+> ⚠️ **这是唯一返回跨租户数字的端点**，闸门是 `requireSystemUser` —— 租户 admin
+> 调它会 401，租户级页面拿不到别的租户的任何数字。
+>
+> ⚠️ **「成本超预算」只看显式配过 `monthly_token_budget` 的租户** ——
+> 平台默认值是 0（不限），没配过的租户不进这个列表。
+>
+> ⚠️ **趋势图的日期桶来自 `cost_logs`**（同 §5.1）：没有 LLM 调用的日子不画。
 
 - 跨租户 KPI：总租户数 / 总用户数 / 总成本 / 总对话数
 - 趋势图
@@ -140,11 +154,24 @@
 - 后台在 < 992px 自动折叠 Sider
 - 聊天挂件：嵌入网页后自适应宽度
 
-### 9.3 暗色模式
+### 9.3 暗色模式 ✅ 已落地 2026-10-24
 
 - 右上角 ☀/🌙 按钮切换
 - AntD `theme.darkAlgorithm`
 - 持久化到 localStorage
+
+**实现细节**：
+
+- token 分三层写在 `web/theme.ts`：`brandToken`（两模式一样）/ `lightToken`·`darkToken`
+  （背景·边框）/ `lightComponents`·`darkComponents`（Table·Modal·Tag·Breadcrumb 等）。
+  ⚠️ 背景色**不能**共用一份 —— 否则 darkAlgorithm 拿到的还是白底。
+- 开关状态放在 `web/lib/themeMode.ts`（模块级 store，不是 context）：
+  根组件（`App.tsx` 的 ConfigProvider）和顶栏按钮在两棵不同的树里，store 更简单
+- 顶栏按钮挂在 `web/layouts/SharedShellLayout.tsx` —— **3 套子系统的顶栏是同一份骨架**，
+  改一处三个子系统都有
+- **没存过时跟随系统 `prefers-color-scheme`**；用户手动切过之后以用户的选择为准
+- 页面里凡是写死浅色的地方（`#fff` / `#f5f7fa` / `rgba(0,0,0,0.45)` 等）
+  一律换成 `theme.useToken()` 的 token —— 否则暗色下会出现白底面板
 
 ---
 

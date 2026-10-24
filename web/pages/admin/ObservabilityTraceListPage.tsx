@@ -13,7 +13,7 @@ import {
 } from 'antd';
 import type { TableColumnsType } from 'antd';
 import { ReloadOutlined } from '@ant-design/icons';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import dayjs, { type Dayjs } from 'dayjs';
 import { PageHeader } from '../../components/shell/PageHeader';
 import {
@@ -36,15 +36,33 @@ const { Text } = Typography;
  */
 export function ObservabilityTraceListPage(): ReactElement {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [rows, setRows] = useState<TraceItem[] | null>(null);
   const [pagination, setPagination] = useState<Pagination | null>(null);
   const [errMsg, setErrMsg] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  const [status, setStatus] = useState<TraceStatus | 'all'>('all');
+  // 状态筛选同步到 URL：Dashboard 的「错误率超标」告警点进来就是 ?status=error，
+  // 链接也能直接分享给别人。
+  const urlStatus = searchParams.get('status');
+  const [status, setStatus] = useState<TraceStatus | 'all'>(
+    urlStatus === 'error' || urlStatus === 'success' ? urlStatus : 'all',
+  );
   const [range, setRange] = useState<[Dayjs, Dayjs] | null>(null);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
+
+  const onStatusChange = (v: TraceStatus | 'all'): void => {
+    setStatus(v);
+    setPage(1);
+    const next = new URLSearchParams(searchParams);
+    if (v === 'all') {
+      next.delete('status');
+    } else {
+      next.set('status', v);
+    }
+    setSearchParams(next, { replace: true });
+  };
 
   const load = async (): Promise<void> => {
     setLoading(true);
@@ -163,10 +181,7 @@ export function ObservabilityTraceListPage(): ReactElement {
         <Space wrap size={12} style={{ marginBottom: 12 }}>
           <Select
             value={status}
-            onChange={(v) => {
-              setStatus(v);
-              setPage(1);
-            }}
+            onChange={onStatusChange}
             style={{ width: 140 }}
             options={[
               { value: 'all', label: '全部状态' },

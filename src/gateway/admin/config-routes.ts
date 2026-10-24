@@ -1,6 +1,6 @@
 import Router from '@koa/router';
 import { z } from 'zod';
-import { Tenant, PromptVersion } from '../../models';
+import { Tenant, PromptVersion, MODEL_USAGE_SCOPES } from '../../models';
 import { jwtAuth } from '../jwt-base';
 import { requireAdmin } from './middleware';
 import { ValidationError, NotFoundError } from '../../lib/errors';
@@ -64,16 +64,25 @@ function currentUser(ctx: { state: Record<string, unknown> }): TenantUserJwtPayl
 
 adminConfigRouter.get('/config/models', async (ctx) => {
   const u = currentUser(ctx);
+  const models = await listTenantModels(u.tenant_id);
   ctx.body = {
-    models: await listTenantModels(u.tenant_id),
+    models,
     process_defaults: describeProcessLlmDefaults(),
     secret_encryption_enabled: isSecretEncryptionEnabled(),
     notes: [
       '每条模型是一套完整连接配置（端点 + 密钥 + 采样参数），互不共享。',
-      '第一条模型会自动成为「启用中」，之后可随时切换。',
-      '没有启用中的模型时，对话走平台默认（.env 里配好的那个）。',
+      '「用途」决定这条模型服务于哪条链路：对话 / 记忆抽取 / 会话摘要。',
+      '每个用途各自一条「启用中」；对话没启用项时走平台默认（.env 里配好的那个）。',
+      '记忆抽取没配专用模型时，回落到对话模型（不配也能用）。',
+      '会话摘要没配专用模型时，回落到对话模型（不配也能用）。',
       'API Key 只写不读：保存后只显示脱敏串，原始值无法再取回。',
     ],
+    // 当前生效的三条 —— 页面顶部要一眼看出「对话 / 抽取 / 摘要 各在用哪个」
+    active_chat: models.find((m) => m.is_active && m.usage_scope === 'chat') ?? null,
+    active_memory:
+      models.find((m) => m.is_active && m.usage_scope === 'memory') ?? null,
+    active_summary:
+      models.find((m) => m.is_active && m.usage_scope === 'summary') ?? null,
   };
 });
 
@@ -87,6 +96,8 @@ const modelBodySchema = z.object({
   temperature: z.number().min(0).max(2).nullish(),
   max_output_tokens: z.number().int().min(64).max(32768).nullish(),
   prompt_cache_enabled: z.boolean().nullish(),
+  /** 用途：chat=对话模型 / memory=记忆抽取模型 / summary=会话摘要模型。不带 = chat */
+  usage_scope: z.enum(MODEL_USAGE_SCOPES).optional(),
 });
 
 adminConfigRouter.post('/config/models', async (ctx) => {
@@ -101,6 +112,7 @@ adminConfigRouter.post('/config/models', async (ctx) => {
     temperature: input.temperature ?? null,
     max_output_tokens: input.max_output_tokens ?? null,
     prompt_cache_enabled: input.prompt_cache_enabled ?? true,
+    usage_scope: input.usage_scope ?? 'chat',
   });
   await writeAuditLog({
     tenant_id: u.tenant_id,
@@ -108,7 +120,12 @@ adminConfigRouter.post('/config/models', async (ctx) => {
     action: 'TENANT_MODEL_CREATE',
     resource_type: 'tenant_model',
     resource_id: row.id,
-    details: { name: row.name, model_id: row.model_id, is_active: row.is_active },
+    details: {
+      name: row.name,
+      model_id: row.model_id,
+      is_active: row.is_active,
+      usage_scope: row.usage_scope,
+    },
     ip: ctx.ip,
   });
   ctx.status = 201;
@@ -127,6 +144,7 @@ adminConfigRouter.put('/config/models/:id', async (ctx) => {
     temperature: input.temperature ?? null,
     max_output_tokens: input.max_output_tokens ?? null,
     prompt_cache_enabled: input.prompt_cache_enabled ?? true,
+    usage_scope: input.usage_scope,
   });
   await writeAuditLog({
     tenant_id: u.tenant_id,
@@ -142,7 +160,13 @@ adminConfigRouter.put('/config/models/:id', async (ctx) => {
 
 adminConfigRouter.post('/config/models/:id/activate', async (ctx) => {
   const u = currentUser(ctx);
-  const previous = (await listTenantModels(u.tenant_id)).find((m) => m.is_active) ?? null;
+  const target = await getTenantModel(u.tenant_id, ctx.params.id ?? '');
+  // ⚠️ 「上一个启用项」要在**同一个 scope** 里找 ——
+  //    chat 和 memory 是两条独立链路，各自一条启用项。
+  const previous =
+    (await listTenantModels(u.tenant_id)).find(
+      (m) => m.is_active && m.usage_scope === target.usage_scope && m.id !== target.id,
+    ) ?? null;
   const row = await activateTenantModel(u.tenant_id, ctx.params.id ?? '');
   await writeAuditLog({
     tenant_id: u.tenant_id,
@@ -150,7 +174,7 @@ adminConfigRouter.post('/config/models/:id/activate', async (ctx) => {
     action: 'TENANT_MODEL_ACTIVATE',
     resource_type: 'tenant_model',
     resource_id: row.id,
-    details: { from: previous?.name ?? null, to: row.name },
+    details: { from: previous?.name ?? null, to: row.name, usage_scope: row.usage_scope },
     ip: ctx.ip,
   });
   ctx.body = toModelView(row);

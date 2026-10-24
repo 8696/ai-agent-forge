@@ -12,6 +12,7 @@ import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { getCurrentUser } from '../lib/auth';
 import { setToken } from '../lib/apiFactory';
 import { BrandMark } from '../components/shell/BrandMark';
+import { ThemeToggle } from '../components/shell/ThemeToggle';
 
 const { Header, Sider, Content } = Layout;
 const { Text } = Typography;
@@ -190,23 +191,26 @@ export function SharedShellLayout(props: SharedShellLayoutProps): ReactElement {
             </Text>
           </Space>
 
-          <Dropdown menu={{ items: userMenu }} trigger={['click']} placement="bottomRight">
-            <button type="button" aria-label="user" style={userBtnStyle}>
-              <Avatar size={28} icon={<UserOutlined />} style={{ background: '#597ef7' }} />
-              <span
-                style={{
-                  color: 'rgba(255,255,255,0.85)',
-                  fontSize: 13,
-                  maxWidth: 180,
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                }}
-              >
-                {user?.email ?? `${user?.sub.slice(0, 8) ?? '—'}`}
-              </span>
-            </button>
-          </Dropdown>
+          <Space size={4} align="center">
+            <ThemeToggle />
+            <Dropdown menu={{ items: userMenu }} trigger={['click']} placement="bottomRight">
+              <button type="button" aria-label="user" style={userBtnStyle}>
+                <Avatar size={28} icon={<UserOutlined />} style={{ background: '#597ef7' }} />
+                <span
+                  style={{
+                    color: 'rgba(255,255,255,0.85)',
+                    fontSize: 13,
+                    maxWidth: 180,
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {user?.email ?? `${user?.sub.slice(0, 8) ?? '—'}`}
+                </span>
+              </button>
+            </Dropdown>
+          </Space>
         </Header>
         <Content
           style={{

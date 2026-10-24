@@ -18,6 +18,9 @@ import * as m013 from './013-restructure-tenant-config';
 import * as m014 from './014-create-cost-logs';
 import * as m015 from './015-create-traces-spans';
 import * as m016 from './016-create-evaluation';
+import * as m017 from './017-create-user-memories';
+import * as m018 from './018-add-tenant-model-usage-scope';
+import * as m019 from './019-add-tenant-model-summary-scope';
 
 /**
  * umzug 迁移 runner（详见 docs/03-技术栈与规范.md §B.2）
@@ -117,6 +120,21 @@ export function buildMigrator(): Umzug<QueryInterface> {
         name: '016-create-evaluation',
         up: (params) => m016.up(params),
         down: (params) => m016.down(params),
+      },
+      {
+        name: '017-create-user-memories',
+        up: (params) => m017.up(params),
+        down: (params) => m017.down(params),
+      },
+      {
+        name: '018-add-tenant-model-usage-scope',
+        up: (params) => m018.up(params),
+        down: (params) => m018.down(params),
+      },
+      {
+        name: '019-add-tenant-model-summary-scope',
+        up: (params) => m019.up(params),
+        down: (params) => m019.down(params),
       },
     ],
   });

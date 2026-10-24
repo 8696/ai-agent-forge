@@ -16,7 +16,15 @@ import {
   readTokensFile,
 } from './auth';
 
-function apiBase(): string {
+/**
+ * 后端根地址 —— **所有测试文件都必须用这个**，不要各自重算一遍。
+ *
+ * 优先级：API_BASE（显式指定）> PORT（默认 3099）。
+ * ⚠️ 之前每个测试文件都自己写 `http://localhost:${process.env.PORT ?? '3099'}`，
+ *    跑在非默认端口时裸 axios 请求会打到 3099 去 → 一片 ECONNREFUSED。
+ *    统一从这里取就绕开了。
+ */
+export function apiBase(): string {
   return process.env.API_BASE ?? `http://localhost:${process.env.PORT ?? '3099'}`;
 }
 

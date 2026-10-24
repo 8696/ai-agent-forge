@@ -24,10 +24,17 @@ export type UserRole = 'admin' | 'customer';
 
 /**
  * 用户偏好（JSON 列），存长期记忆
+ *
+ * ⚠️ 记忆**条目本体**不在这里，而在 `user_memories` 表（见 src/models/UserMemory.ts）——
+ * 那边要支持逐条列出 / 编辑 / 删除 / 归档 / 记来源和置信度。
+ * 这个 JSON 列只存「跟这个用户有关、但不是记忆条目本身」的零散偏好，
+ * 其中 `memory_enabled` 是长期记忆的总开关（用户在「我的记忆」页自己关）。
  */
 export interface UserPreferences {
   language?: string;
   timezone?: string;
+  /** 是否开启自动记忆（抽取 + 注入）。缺省视为开启 */
+  memory_enabled?: boolean;
   [key: string]: unknown;
 }
 

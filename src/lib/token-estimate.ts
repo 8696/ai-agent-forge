@@ -50,6 +50,14 @@ export function estimateTokens(text: string): number {
 export interface TokenCountableMessage {
   role: string;
   content: string;
+  /**
+   * 这条消息在 DB 里的行 id（可选）。
+   *
+   * 只有摘要压缩（B1）用得上：它要记住「摘要覆盖到了哪一条消息」，
+   * 才能算出「这一轮新增了哪些消息」。
+   * 调用方不传就是纯文本消息 —— 纯逻辑（预算裁剪）不依赖这个字段。
+   */
+  ref?: string;
 }
 
 /**
@@ -77,6 +85,13 @@ export interface HistoryFitResult {
   droppedTurns: number;
   /** 保留部分的估算 token 数 */
   estimatedTokens: number;
+  /**
+   * 被丢弃的消息本身（按时间从旧到新）。
+   *
+   * 摘要压缩（B1）要用它：把丢掉的轮次折成一段摘要写进 sessions.summary。
+   * 没有它的话调用方只知道「丢了 N 轮」，没法去总结丢的是什么。
+   */
+  dropped: TokenCountableMessage[];
 }
 
 /**
@@ -88,14 +103,15 @@ export interface HistoryFitResult {
  *  2. **截断只在轮边界发生**——assistant 的回答不会被从中间砍掉。没有 assistant 收尾的那半轮
  *     （用户刚问完还没得到回答）会被整轮丢掉，因为把「有问无答」的尾巴喂回去只会浪费 token。
  *
- * 真正被丢掉的历史，本期不写入 sessions.summary（真摘要压缩是下一轮），
- * 调用方要按 droppedTurns 在 UI 上提示用户「已省略更早的 N 轮对话」。
+ * 被丢掉的历史交给调用方处置：
+ *  - 摘要压缩（B1）：把 dropped 折成一段摘要写进 sessions.summary，下一轮再喂回去
+ *  - UI 提示：按 droppedTurns 告知用户「已省略更早的 N 轮对话」
  */
 export function fitHistoryToBudget(
   messages: readonly TokenCountableMessage[],
   options: HistoryBudgetOptions,
 ): HistoryFitResult {
-  const empty: HistoryFitResult = { kept: [], droppedTurns: 0, estimatedTokens: 0 };
+  const empty: HistoryFitResult = { kept: [], droppedTurns: 0, estimatedTokens: 0, dropped: [] };
   if (messages.length === 0) {
     return empty;
   }
@@ -115,6 +131,7 @@ export function fitHistoryToBudget(
       kept: [...messages],
       droppedTurns: 0,
       estimatedTokens: estimateMessagesTokens(messages),
+      dropped: [],
     };
   }
 
@@ -152,6 +169,7 @@ export function fitHistoryToBudget(
     kept,
     droppedTurns: turnStarts.length - keptStarts.length,
     estimatedTokens: used,
+    dropped: messages.slice(0, firstKept) as TokenCountableMessage[],
   };
 }
 

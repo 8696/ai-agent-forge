@@ -12,12 +12,12 @@
  */
 import { describe, it, expect } from 'vitest';
 import axios from 'axios';
-import { allHttpFromTokensFile } from '../helpers';
+import { allHttpFromTokensFile, apiBase } from '../helpers';
 
 describe('D6 测试基建契约 · 烟雾', () => {
   it('system 子系统 POST /login → 200 + JWT', async () => {
     const r = await axios.post(
-      `http://localhost:${process.env.PORT ?? '3099'}/api/v1/system/login`,
+      `${apiBase()}/api/v1/system/login`,
       { email: 'platform-admin@local.test', password: 'PlatformAdmin-123!' },
       { validateStatus: () => true },
     );
@@ -27,7 +27,7 @@ describe('D6 测试基建契约 · 烟雾', () => {
 
   it('admin 子系统 POST /login → 200 + JWT（acme）', async () => {
     const r = await axios.post(
-      `http://localhost:${process.env.PORT ?? '3099'}/api/v1/admin/login`,
+      `${apiBase()}/api/v1/admin/login`,
       { email: 'admin@acme.test', password: 'AcmeAdmin-123!', tenant_code: 'acme' },
       { validateStatus: () => true },
     );
@@ -43,7 +43,7 @@ describe('D6 测试基建契约 · 烟雾', () => {
 
   it('dev-probe /jwt-info 能解码 token', async () => {
     const http = await allHttpFromTokensFile();
-    const r = await axios.get(`http://localhost:${process.env.PORT ?? '3099'}/api/_dev/jwt-info`, {
+    const r = await axios.get(`${apiBase()}/api/_dev/jwt-info`, {
       headers: { authorization: http.acmeAdmin.defaults.headers.authorization },
       validateStatus: () => true,
     });
@@ -55,7 +55,7 @@ describe('D6 测试基建契约 · 烟雾', () => {
 async function axiosLoginCustomer(): Promise<{ status: number; data: unknown }> {
   const r = await import('axios').then((m) =>
     m.default.post(
-      `http://localhost:${process.env.PORT ?? '3099'}/api/v1/customer/login`,
+      `${apiBase()}/api/v1/customer/login`,
       { email: 'alice@acme.test', password: 'AcmeCustomer-123!', tenant_code: 'acme' },
       { validateStatus: () => true },
     ),

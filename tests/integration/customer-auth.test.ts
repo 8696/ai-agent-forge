@@ -8,9 +8,9 @@
  */
 import { describe, it, expect } from 'vitest';
 import axios from 'axios';
-import { loginCustomer } from '../helpers';
+import { apiBase,  loginCustomer } from '../helpers';
 
-const BASE = `http://localhost:${process.env.PORT ?? '3099'}`;
+const BASE = apiBase();
 
 describe('customer-auth-routes', () => {
   describe('POST /api/v1/customer/login', () => {

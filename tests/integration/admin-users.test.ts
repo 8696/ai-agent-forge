@@ -5,9 +5,9 @@
  */
 import { describe, it, expect, beforeAll } from 'vitest';
 import axios from 'axios';
-import { allHttpFromTokensFile, type AllHttp } from '../helpers';
+import { apiBase,  allHttpFromTokensFile, type AllHttp } from '../helpers';
 
-const BASE = `http://localhost:${process.env.PORT ?? '3099'}`;
+const BASE = apiBase();
 
 describe('admin-users-routes', () => {
   let http: AllHttp;
@@ -133,6 +133,101 @@ describe('admin-users-routes', () => {
       const emails = (r.data as { users: Array<{ email: string }> }).users.map((u) => u.email);
       expect(emails).not.toContain('admin@globex.test');
       expect(emails).not.toContain('bob@globex.test');
+    });
+  });
+
+  // D5 的验收原文：「关键操作（建用户 / 改配置 / 租户启停 / 文档增删）→ audit_logs 有记录」
+  // 建用户这一条以前是漏的 —— 补上以后必须有测试钉住，别再退回原样
+  describe('审计留痕 · 用户写操作', () => {
+    /** 取本租户某个 action 的审计记录（按时间倒序，第一条就是刚发生的） */
+    const fetchAudit = async (action: string): Promise<
+      Array<{ action: string; resource_type: string | null; resource_id: string | null; details: unknown }>
+    > => {
+      const r = await http.acmeAdmin.get(`/audit?action=${action}&page_size=10`);
+      expect(r.status).toBe(200);
+      return (r.data as { logs: Array<{ action: string; resource_type: string | null; resource_id: string | null; details: unknown }> })
+        .logs;
+    };
+
+    it('建用户 → USER_CREATED', async () => {
+      const email = `audit-created-${Date.now()}@acme.test`;
+      const created = await http.acmeAdmin.post(
+        '/users',
+        { email, password: 'Pass-12345678', role: 'customer' },
+        { validateStatus: () => true },
+      );
+      expect(created.status).toBe(201);
+      const id = (created.data as { id: string }).id;
+
+      const logs = await fetchAudit('USER_CREATED');
+      const hit = logs.find((l) => l.resource_id === id);
+      expect(hit, '建用户后应有 USER_CREATED 审计记录').toBeDefined();
+      expect(hit?.resource_type).toBe('user');
+      expect((hit?.details as { email: string }).email).toBe(email);
+      // ⚠️ 密码绝不能进审计
+      expect(JSON.stringify(hit?.details)).not.toContain('Pass-12345678');
+
+      await http.acmeAdmin.delete(`/users/${id}`);
+    });
+
+    it('改用户 → USER_UPDATED（密码不进日志）', async () => {
+      const email = `audit-updated-${Date.now()}@acme.test`;
+      const created = await http.acmeAdmin.post(
+        '/users',
+        { email, password: 'Pass-12345678', role: 'customer' },
+        { validateStatus: () => true },
+      );
+      const id = (created.data as { id: string }).id;
+
+      const r = await http.acmeAdmin.patch(
+        `/users/${id}`,
+        { email: `renamed-${Date.now()}@acme.test`, password: 'Another-12345678' },
+        { validateStatus: () => true },
+      );
+      expect(r.status).toBe(200);
+
+      const logs = await fetchAudit('USER_UPDATED');
+      const hit = logs.find((l) => l.resource_id === id);
+      expect(hit, '改用户后应有 USER_UPDATED 审计记录').toBeDefined();
+      const details = hit?.details as {
+        prev_email: string;
+        email: string;
+        email_changed: boolean;
+        password_reset: boolean;
+      };
+      expect(details.email_changed).toBe(true);
+      expect(details.password_reset).toBe(true);
+      expect(details.prev_email).toBe(email);
+      expect(JSON.stringify(hit?.details)).not.toContain('Another-12345678');
+
+      await http.acmeAdmin.delete(`/users/${id}`);
+    });
+
+    it('删用户 → USER_DELETED', async () => {
+      const email = `audit-deleted-${Date.now()}@acme.test`;
+      const created = await http.acmeAdmin.post(
+        '/users',
+        { email, password: 'Pass-12345678', role: 'customer' },
+        { validateStatus: () => true },
+      );
+      const id = (created.data as { id: string }).id;
+
+      const r = await http.acmeAdmin.delete(`/users/${id}`, { validateStatus: () => true });
+      expect(r.status).toBe(204);
+
+      const logs = await fetchAudit('USER_DELETED');
+      const hit = logs.find((l) => l.resource_id === id);
+      expect(hit, '删用户后应有 USER_DELETED 审计记录').toBeDefined();
+      expect((hit?.details as { email: string }).email).toBe(email);
+    });
+
+    it('新建的 action 出现在筛选下拉框的清单里', async () => {
+      const r = await http.acmeAdmin.get('/audit/actions');
+      expect(r.status).toBe(200);
+      const actions = (r.data as { actions: string[] }).actions;
+      expect(actions).toContain('USER_CREATED');
+      expect(actions).toContain('USER_UPDATED');
+      expect(actions).toContain('USER_DELETED');
     });
   });
 });

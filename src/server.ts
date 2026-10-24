@@ -18,8 +18,14 @@ import {
   adminConfigRouter,
   adminObservabilityRouter,
   adminEvaluationRouter,
+  adminMemoryRouter,
+  adminAuditRouter,
   customerAuthRouter,
   customerChatRouter,
+  customerMemoryRouter,
+  publicWidgetRouter,
+  publicApiRouter,
+  publicApiKeyAdminRouter,
 } from './gateway';
 import { rebuildFromQdrant } from './rag/bm25';
 
@@ -36,7 +42,9 @@ async function bootstrap(): Promise<void> {
     cors({
       origin: '*',
       credentials: true,
-      allowHeaders: ['Content-Type', 'Authorization'],
+      // X-Widget-Token / X-API-Key：E1 的两条对外链路用的自定义头，
+      // 浏览器跨域调用时必须显式允许，否则预检请求会被拦掉。
+      allowHeaders: ['Content-Type', 'Authorization', 'X-Widget-Token', 'X-API-Key'],
     }),
   );
   app.use(bodyParser({ jsonLimit: '4mb', enableTypes: ['json', 'form'] }));
@@ -67,8 +75,22 @@ async function bootstrap(): Promise<void> {
   app.use(
     adminEvaluationRouter.routes(),
   ).use(adminEvaluationRouter.allowedMethods()); // admin 评测（评测集 / 跑批）
+  app.use(
+    adminMemoryRouter.routes(),
+  ).use(adminMemoryRouter.allowedMethods()); // admin 用户记忆（B4）
+  app.use(adminAuditRouter.routes()).use(adminAuditRouter.allowedMethods()); // admin 审计日志
   app.use(customerAuthRouter.routes()).use(customerAuthRouter.allowedMethods()); // customer login
   app.use(customerChatRouter.routes()).use(customerChatRouter.allowedMethods()); // customer 对话（SSE）
+  app.use(
+    customerMemoryRouter.routes(),
+  ).use(customerMemoryRouter.allowedMethods()); // customer 我的记忆（B4）
+
+  // ===== 对外接入（E1）=====
+  // 公开挂件（免登录，匿名会话 token）+ 对外 REST API（API Key 鉴权）
+  app.use(publicWidgetRouter.routes()).use(publicWidgetRouter.allowedMethods());
+  app.use(publicApiRouter.routes()).use(publicApiRouter.allowedMethods());
+  // 租户后台管理自己的 API Key（admin JWT 鉴权；URL 属于 admin 命名空间）
+  app.use(publicApiKeyAdminRouter.routes()).use(publicApiKeyAdminRouter.allowedMethods());
 
   // 数据库初始化（缺配置 + 启动 DB 失败都不让起来）
   await initDatabase();

@@ -12,8 +12,9 @@ import { getSequelize } from '../../src/db';
 import { Tenant, User } from '../../src/models';
 import { signToken } from '../../src/lib/jwt';
 import { hashPassword } from '../../src/lib/password';
+import { apiBase } from '../helpers';
 
-const BASE = `http://localhost:${process.env.PORT ?? '3099'}`;
+const BASE = apiBase();
 
 describe('legacy F1 · system 端租户管理', () => {
   const testCode = `f1-${Date.now()}`;

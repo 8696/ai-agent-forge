@@ -8,3 +8,4 @@
  */
 export { CustomerLoginPage } from './CustomerLoginPage';
 export { ChatPage } from './ChatPage';
+export { CustomerMemoriesPage } from './MemoriesPage';

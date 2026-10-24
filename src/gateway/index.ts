@@ -1,11 +1,12 @@
 /**
- * Gateway 层顶层 barrel —— 3 个独立子系统（按业务边界完全分桶）
+ * Gateway 层顶层 barrel —— 4 个独立子系统（按业务边界完全分桶）
  *
  * 详见 docs/03-技术栈与规范.md §B.5
  *
  * - system/   SaaS 平台方子系统（/api/v1/system/*，role=system）
  * - admin/     租户后台子系统（/api/v1/admin/*，role ∈ {admin, agent}）
  * - customer/  租户前台子系统（/api/v1/customer/*，role=customer）
+ * - public/    对外接入子系统（E1：/api/v1/public/*，鉴权 = API Key / 匿名会话 token）
  *
  * 每个子系统 auth 自闭环（login / me / change-password 全在自己桶里）；
  * 没有跨子系统的共享 auth namespace。
@@ -30,6 +31,18 @@ export {
   adminConfigRouter,
   adminObservabilityRouter,
   adminEvaluationRouter,
+  adminMemoryRouter,
+  adminAuditRouter,
   requireAdmin,
 } from './admin';
-export { customerAuthRouter, customerChatRouter, requireCustomer } from './customer';
+export {
+  customerAuthRouter,
+  customerChatRouter,
+  customerMemoryRouter,
+  requireCustomer,
+} from './customer';
+export {
+  publicWidgetRouter,
+  publicApiRouter,
+  publicApiKeyAdminRouter,
+} from './public';

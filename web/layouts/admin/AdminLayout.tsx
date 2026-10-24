@@ -12,6 +12,9 @@ import { DashboardOutlined, FileSearchOutlined, TeamOutlined, UploadOutlined, Sl
   FundOutlined,
   ExperimentOutlined,
   TrophyOutlined,
+  BookOutlined,
+  AuditOutlined,
+  KeyOutlined,
 } from '@ant-design/icons';
 
 /**
@@ -22,6 +25,12 @@ import { DashboardOutlined, FileSearchOutlined, TeamOutlined, UploadOutlined, Sl
 const SIDEBAR: SidebarItem[] = [
   { key: '/admin', icon: <DashboardOutlined />, label: '首页', to: '/admin' },
   { key: '/admin/users', icon: <TeamOutlined />, label: '用户', to: '/admin/users' },
+  {
+    key: '/admin/memories',
+    icon: <BookOutlined />,
+    label: '用户记忆',
+    to: '/admin/memories',
+  },
   {
     key: '/admin/knowledge/documents',
     icon: <UploadOutlined />,
@@ -75,6 +84,18 @@ const SIDEBAR: SidebarItem[] = [
     icon: <TrophyOutlined />,
     label: '评测结果',
     to: '/admin/evaluation/runs',
+  },
+  {
+    key: '/admin/api-keys',
+    icon: <KeyOutlined />,
+    label: 'API 密钥',
+    to: '/admin/api-keys',
+  },
+  {
+    key: '/admin/audit',
+    icon: <AuditOutlined />,
+    label: '审计日志',
+    to: '/admin/audit',
   },
 ];
 

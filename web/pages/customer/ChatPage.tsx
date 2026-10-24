@@ -14,6 +14,7 @@ import {
   Tooltip,
   Typography,
   message,
+  theme,
 } from 'antd';
 import {
   CopyOutlined,
@@ -103,6 +104,7 @@ function moderationOf(m: ChatUIMessage): { blocked: boolean; reason: string } | 
 }
 
 export function ChatPage(): ReactElement {
+  const { token } = theme.useToken();
   const [sessions, setSessions] = useState<SessionListItem[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -190,7 +192,7 @@ export function ChatPage(): ReactElement {
                 }}
                 onClick={() => setActiveId(s.id)}
               >
-                <MessageOutlined style={{ color: 'rgba(0,0,0,0.45)' }} />
+                <MessageOutlined style={{ color: token.colorTextQuaternary }} />
                 <Text
                   ellipsis
                   style={{ flex: 1, minWidth: 0 }}
@@ -270,8 +272,8 @@ export function ChatPage(): ReactElement {
             display: 'flex',
             flexDirection: 'column',
             borderRadius: 8,
-            background: '#fff',
-            boxShadow: '0 1px 2px rgba(0,0,0,0.03)',
+            background: token.colorBgContainer,
+            boxShadow: token.boxShadowTertiary,
             overflow: 'hidden',
           }}
         >
@@ -369,6 +371,7 @@ function ChatPanel({
   initialMessages: ChatUIMessage[];
   onSessionsChanged: () => void;
 }): ReactElement {
+  const { token } = theme.useToken();
   const [input, setInput] = useState('');
   const [phase, setPhase] = useState<Phase>('idle');
   const [notice, setNotice] = useState<string | null>(null);
@@ -490,7 +493,7 @@ function ChatPanel({
         <div ref={bottomRef} />
       </div>
 
-      <div style={{ borderTop: '1px solid rgba(5,5,5,0.06)', padding: 12 }}>
+      <div style={{ borderTop: `1px solid ${token.colorBorderSecondary}`, padding: 12 }}>
         {notice !== null && (
           <Alert
             type="info"
@@ -583,6 +586,7 @@ function AssistantBubble({
   onCopy: () => void;
   onRegenerate: () => void;
 }): ReactElement {
+  const { token } = theme.useToken();
   const text = textOf(msg);
   const thinking = thinkingOf(msg);
   const citations = citationsOf(msg);
@@ -605,7 +609,7 @@ function AssistantBubble({
               style={{
                 whiteSpace: 'pre-wrap',
                 fontSize: 12,
-                color: 'rgba(0,0,0,0.65)',
+                color: token.colorTextSecondary,
                 marginTop: 4,
                 maxHeight: 260,
                 overflowY: 'auto',
@@ -616,11 +620,11 @@ function AssistantBubble({
           </div>
         ) : (
           <details>
-            <summary style={{ cursor: 'pointer', fontSize: 12, color: 'rgba(0,0,0,0.45)' }}>
+            <summary style={{ cursor: 'pointer', fontSize: 12, color: token.colorTextQuaternary }}>
               💭 思考过程
             </summary>
             <Paragraph
-              style={{ whiteSpace: 'pre-wrap', fontSize: 12, color: 'rgba(0,0,0,0.65)', marginTop: 4 }}
+              style={{ whiteSpace: 'pre-wrap', fontSize: 12, color: token.colorTextSecondary, marginTop: 4 }}
             >
               {thinking}
             </Paragraph>
@@ -644,7 +648,7 @@ function AssistantBubble({
       ) : (
         <div
           style={{
-            background: '#f5f7fa',
+            background: token.colorBgLayout,
             borderRadius: 12,
             borderBottomLeftRadius: 4,
             padding: '10px 14px',
@@ -690,6 +694,7 @@ function AssistantBubble({
  * 数据来自 SSE 里的 data-citations part，编号与 AI 回答里的 [n] 一一对应。
  */
 function CitationList({ hits }: { hits: CitationHit[] }): ReactElement {
+  const { token } = theme.useToken();
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
       {hits.map((h) => (
@@ -697,8 +702,8 @@ function CitationList({ hits }: { hits: CitationHit[] }): ReactElement {
           key={`${h.doc_id}-${h.chunk_index}`}
           size="small"
           style={{
-            borderLeft: `3px solid ${h.sources.length > 1 ? '#52c41a' : '#d9d9d9'}`,
-            background: '#fafafa',
+            borderLeft: `3px solid ${h.sources.length > 1 ? '#52c41a' : token.colorBorder}`,
+            background: token.colorFillQuaternary,
           }}
           styles={{ body: { padding: 10 } }}
         >

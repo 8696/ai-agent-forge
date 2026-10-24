@@ -131,6 +131,65 @@ export const SETTINGS_REGISTRY: SettingSpec[] = [
     max: 100000,
     fallback: 0,
   },
+  {
+    key: 'memory_enabled',
+    label: '开启用户记忆',
+    category: '记忆',
+    description:
+      '是否给本租户的前台用户开启长期记忆。关掉后既不自动抽取也不注入；' +
+      '用户自己写的那部分记忆也会一并停止使用',
+    type: 'boolean',
+    fallback: true,
+  },
+  {
+    key: 'memory_top_k',
+    label: '每轮注入几条记忆',
+    category: '记忆',
+    description:
+      '每轮对话最多把用户的多条记忆拼进提示词。**0 = 不注入**（记忆仍然会被记录和展示，只是不参与回答）',
+    type: 'number',
+    min: 0,
+    max: 20,
+    fallback: 8,
+  },
+  {
+    key: 'memory_token_budget',
+    label: '记忆 token 上限',
+    category: '记忆',
+    description:
+      '记忆段最多能占多少 token。**这一段是整段的预算**（含固定的开头说明，约 150 token），' +
+      '所以下限是 200 —— 再小连一条记忆都装不下，记忆会**静默失效**（页面上还在，AI 从来没用过）。' +
+      '要完全关闭注入请把「每轮注入几条记忆」设成 0。这部分是从「单轮上下文总预算」里划出来的，' +
+      '调大 = AI 记得更多，但留给历史对话和检索片段的预算变少',
+    type: 'number',
+    min: 200,
+    max: 4000,
+    fallback: 600,
+  },
+  {
+    key: 'summary_enabled',
+    label: '开启会话摘要',
+    category: '记忆',
+    description:
+      '长对话超出上下文预算时，是否把更早的对话自动压缩成摘要保留下来。' +
+      '关掉后就只剩「丢弃更早的轮次」，AI 会真的忘事。' +
+      '**开启会多一次 LLM 调用**（每轮对话一次），可以在「模型 & 提示词」里单独配一条便宜的「会话摘要」模型来压成本',
+    type: 'boolean',
+    fallback: true,
+  },
+  {
+    key: 'summary_token_budget',
+    label: '摘要 token 上限',
+    category: '记忆',
+    description:
+      '会话摘要段最多能占多少 token。**这一段是整段的预算**（含固定的开头说明，约 120 token），' +
+      '所以下限是 200 —— 再小连一条摘要都装不下，摘要会**静默失效**（库里写好了，AI 从来没用过）。' +
+      '这部分是从「单轮上下文总预算」里划出来的，调大 = 摘要保得更细，但留给历史对话的预算变少',
+    type: 'number',
+    min: 200,
+    max: 4000,
+    fallback: 600,
+  },
 ];
 
 const REGISTRY_BY_KEY = new Map(SETTINGS_REGISTRY.map((s) => [s.key, s]));

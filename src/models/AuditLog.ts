@@ -14,17 +14,63 @@ import { Table, Column, Model, PrimaryKey, DataType, CreatedAt } from 'sequelize
  * 写入时不强校验（writeAuditLog 的 action 收 string），加类型只是给调用处
  * 一个提示 —— 不想因为漏改联合类型就编译不过。
  */
+/**
+ * 审计动作类型
+ *
+ * ⚠️ **这一份要跟代码里实际写进 audit_logs 的 action 对齐**。
+ *    落库时 `action` 是普通字符串（`writeAuditLog` 收 `AuditAction | string`），
+ *    写错了类型也拦不住 —— 所以这个联合类型是**给人看的清单**，不是运行时校验。
+ *    加新的写审计的地方时，记得两处都改：
+ *      1. 这里（后端）
+ *      2. web/pages/admin/AuditLogsPage.tsx 的 ACTION_LABEL（前端中文标签）
+ */
 export type AuditAction =
+  // —— 平台方（system 子系统，tenant_id 为 NULL）——
   | 'TENANT_STATUS_CHANGE'
   | 'TENANT_EXPIRES_CHANGE'
+  // —— 租户后台：用户 ——
+  | 'USER_CREATED'
+  | 'USER_UPDATED'
+  | 'USER_DELETED'
+  // —— 租户后台：知识库 ——
+  | 'DOCUMENT_UPLOAD'
+  | 'DOCUMENT_DELETE'
+  | 'DOCUMENT_INDEX_FAILED'
+  // —— 租户后台：模型 / 提示词 / 设置 ——
+  | 'TENANT_MODEL_CREATE'
+  | 'TENANT_MODEL_UPDATE'
+  | 'TENANT_MODEL_ACTIVATE'
+  | 'TENANT_MODEL_DELETE'
+  | 'PROMPT_VERSION_CREATE'
+  | 'PROMPT_VERSION_DELETE'
+  | 'PROMPT_PUBLISH'
+  | 'PROMPT_ROLLBACK'
+  | 'TENANT_SETTINGS_CHANGE'
+  // —— 租户后台：对外 API 密钥 ——
+  | 'API_KEY_CREATED'
+  | 'API_KEY_REVOKED'
+  // —— 租户后台：评测 ——
+  | 'EVALUATION_DATASET_CREATED'
+  | 'EVALUATION_DATASET_DELETED'
+  | 'EVALUATION_RUN_STARTED'
+  | 'EVALUATION_SCORE_DROPPED'
+  // —— 租户后台：长期记忆（B4）——
+  | 'USER_MEMORY_CREATED'
+  | 'USER_MEMORY_UPDATED'
+  | 'USER_MEMORY_ARCHIVED'
+  | 'USER_MEMORY_RESTORED'
+  /** 历史值（早期只有管理员端物理删时用过），保留兼容 */
+  | 'USER_MEMORY_DELETED'
+  /** 物理删除（不可恢复）：用户自己清空 / 管理员清理 */
+  | 'USER_MEMORY_PURGED'
+  | 'USER_MEMORY_CLEARED'
+  | 'USER_MEMORY_TOGGLED'
+  | 'USER_MEMORY_EXTRACTED'
+  // —— 平台级信号（限流 / 安全 / 成本）——
   | 'RATE_LIMIT_EXCEEDED'
   | 'PROMPT_INJECTION_BLOCKED'
   | 'CONTENT_MODERATION_BLOCKED'
-  | 'COST_BUDGET_EXCEEDED'
-  | 'EVALUATION_SCORE_DROPPED'
-  | 'EVALUATION_DATASET_CREATED'
-  | 'EVALUATION_DATASET_DELETED'
-  | 'EVALUATION_RUN_STARTED';
+  | 'COST_BUDGET_EXCEEDED';
 
 /**
  * 审计日志表 —— 详见 docs/05-a-数据模型-mysql.md §5.1

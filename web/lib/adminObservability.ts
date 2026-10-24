@@ -125,6 +125,8 @@ export interface ObservabilitySummary {
     total_tokens: number;
     error_rate: number;
     errors: number;
+    /** 今天最贵的一次对话花了多少（告警阈值 $0.5） */
+    max_conversation_cost: number;
   };
   trend: Array<{ date: string; conversations: number; cost: number; errors: number }>;
 }

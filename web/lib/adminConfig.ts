@@ -23,6 +23,21 @@ export interface ProcessLlmDefaults {
   baseUrlConfigured: boolean;
 }
 
+/**
+ * 模型条目的用途 —— 决定这条模型服务于哪条链路
+ *
+ *  - `chat`   对话模型
+ *  - `memory` 记忆抽取模型（没配时抽取回落到对话模型）
+ *  - `summary` 会话摘要模型（没配时摘要回落到对话模型）
+ */
+export type ModelUsageScope = 'chat' | 'memory' | 'summary';
+
+export const MODEL_USAGE_SCOPE_LABEL: Record<ModelUsageScope, string> = {
+  chat: '对话',
+  memory: '记忆抽取',
+  summary: '会话摘要',
+};
+
 export interface TenantModelItem {
   id: string;
   name: string;
@@ -35,6 +50,8 @@ export interface TenantModelItem {
   max_output_tokens: number | null;
   prompt_cache_enabled: boolean;
   is_active: boolean;
+  /** 用途：chat=对话模型 / memory=记忆抽取模型 / summary=会话摘要模型 */
+  usage_scope: ModelUsageScope;
   updated_at: string;
 }
 
@@ -48,6 +65,8 @@ export interface SaveModelInput {
   temperature?: number | null;
   max_output_tokens?: number | null;
   prompt_cache_enabled?: boolean;
+  /** 用途；不带 = chat */
+  usage_scope?: ModelUsageScope;
 }
 
 export interface ModelTestResult {
@@ -64,12 +83,21 @@ export async function fetchModels(): Promise<{
   process_defaults: ProcessLlmDefaults;
   secret_encryption_enabled: boolean;
   notes: string[];
+  /** 当前生效的对话模型（null = 走平台默认） */
+  active_chat: TenantModelItem | null;
+  /** 当前生效的记忆抽取模型（null = 抽取回落到对话模型） */
+  active_memory: TenantModelItem | null;
+  /** 当前生效的会话摘要模型（null = 摘要回落到对话模型） */
+  active_summary: TenantModelItem | null;
 }> {
   const { data } = await adminApi.get<{
     models: TenantModelItem[];
     process_defaults: ProcessLlmDefaults;
     secret_encryption_enabled: boolean;
     notes: string[];
+    active_chat: TenantModelItem | null;
+    active_memory: TenantModelItem | null;
+    active_summary: TenantModelItem | null;
   }>('/config/models');
   return data;
 }

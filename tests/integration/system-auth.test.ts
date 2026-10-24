@@ -7,9 +7,9 @@
  */
 import { describe, it, expect, beforeAll } from 'vitest';
 import axios from 'axios';
-import { allHttpFromTokensFile, loginSystem, type AllHttp } from '../helpers';
+import { apiBase,  allHttpFromTokensFile, loginSystem, type AllHttp } from '../helpers';
 
-const BASE = `http://localhost:${process.env.PORT ?? '3099'}`;
+const BASE = apiBase();
 
 describe('system-auth-routes', () => {
   let http: AllHttp;

@@ -85,7 +85,10 @@ CREATE TABLE sessions (
 > 原 DDL 只有 `widget` / `email` / `api`，`widget` 留给下一轮的公开挂件（E1），
 > `email` / `api` 是预留值，本期无入口。
 >
-> **`summary` 目前恒为 NULL**：真摘要压缩（调 LLM 总结早期对话）是 B1 的下一轮，
+> **`summary` 写的是会话摘要压缩的结果**（2026-10-24 起不再恒为 NULL）：
+> 超长会话被裁掉的早期对话会调 LLM 折成一段摘要写进这里，下一轮再注入上下文。
+> 配套的「摘要覆盖到哪条消息为止」边界标记在 `sessions.metadata.summary_boundary`。
+> 详见 [12-b §B1.1](./12-b-需求-ai对话能力.md)。原来说的
 > 本期超长对话靠 `src/lib/token-estimate.ts` 的 token 预算截断处理。
 
 ### 消息表（messages）
@@ -485,7 +488,8 @@ CREATE TABLE tenant_models (
   temperature DECIMAL(3,2) COMMENT 'NULL = 用进程级默认',
   max_output_tokens INT COMMENT 'NULL = 用进程级默认',
   prompt_cache_enabled BOOLEAN DEFAULT TRUE COMMENT '是否给系统提示词打 cacheControl',
-  is_active BOOLEAN DEFAULT FALSE COMMENT '是否是对话当前使用的模型；每租户恰有一条为 true',
+  usage_scope ENUM('chat','memory') DEFAULT 'chat' COMMENT '用途：chat=对话模型 / memory=记忆抽取模型',
+  is_active BOOLEAN DEFAULT FALSE COMMENT '是否是该 usage_scope 当前启用的模型',
   updated_by VARCHAR(36) COMMENT '最后修改人 user_id',
   created_at DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6),
   updated_at DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
@@ -495,9 +499,17 @@ CREATE TABLE tenant_models (
 
 > **一个租户可以配多个模型**，逐条切换 —— 「自建网关 + 官方 API 并存」这类场景才表达得了。
 > 每条都是**完整的连接配置**（端点 + 密钥 + 采样），不跟别的条目共享。
-> **每租户恰有一条 `is_active`**，由 `activateTenantModel()` 在一个事务里保证
-> （先全灭、再亮新的）；第一条模型入库时自动成为启用项，否则租户「配了却没选中」，
-> 对话会一直走平台默认。
+>
+> **`usage_scope` 决定这条模型服务于哪条链路**（加列迁移 `018-add-tenant-model-usage-scope.ts`）：
+>  - `chat`（默认）对话模型
+>  - `memory` 记忆抽取模型 —— B4 的自动抽取是**独立的一次 LLM 调用**，
+>    推理型模型的思考 token 全额算输出 token（一次实测 2000+），
+>    租户单独配一条便宜模型给它用，是唯一能压这项成本的手段
+>
+> **每租户每个 `usage_scope` 恰有一条 `is_active`**，由 `activateTenantModel()` 在一个事务里保证
+> （先全灭、再亮新的，**只在同 scope 内互斥**）；每个 scope 的第一条模型入库时自动成为
+> 该 scope 的启用项，否则租户「配了却没选中」会一直走平台默认。
+> 没配 `memory` 模型时，抽取**回落到对话模型**（行为跟没加这个字段之前一样）。
 >
 > **密钥铁律**：`api_key_enc` 存 AES-256-GCM 密文（密钥 = `CONFIG_ENCRYPTION_KEY`，
 > sha256 派生 32 字节），**永不落明文**；`api_key_hint` 是唯一允许回显的形态。
@@ -575,8 +587,54 @@ CREATE TABLE evaluation_results (
 > - `duration_ms` 改名 `latency_ms`：跟 `traces.duration_ms` / `spans.duration_ms` 统一
 > - `item_id` 从 `BIGINT` 改成 `VARCHAR(36)`：跟 `evaluation_items.id` 对齐
 
----
+### 用户长期记忆表（user_memories）✅ B4 已落地 2026-10-24
 
+```sql
+CREATE TABLE user_memories (
+  id VARCHAR(36) PRIMARY KEY COMMENT '记忆 id（nanoid 21）',
+  tenant_id VARCHAR(36) NOT NULL COMMENT '所属租户',
+  user_id VARCHAR(36) NOT NULL COMMENT '记忆所属用户（用户级记忆：同一租户下不同用户互不可见）',
+  category ENUM('profile', 'preference', 'fact', 'context') NOT NULL DEFAULT 'fact' COMMENT '分类：画像 / 偏好 / 事实 / 情境',
+  content VARCHAR(500) NOT NULL COMMENT '记忆正文（一句话陈述）',
+  source ENUM('auto', 'user', 'admin') NOT NULL DEFAULT 'auto' COMMENT '来源：auto=模型自动抽取 / user=用户自己写 / admin=租户管理员写',
+  confidence FLOAT NOT NULL DEFAULT 0.5 COMMENT '抽取置信度 0~1；用户自己写的为 1',
+  status ENUM('active', 'archived') NOT NULL DEFAULT 'active' COMMENT '状态：active=生效中 / archived=已归档（软删，可恢复）',
+  hit_count INT NOT NULL DEFAULT 0 COMMENT '被注入进提示词的次数',
+  last_hit_at DATETIME(6) NULL COMMENT '最后一次被注入的时间',
+  source_session_id VARCHAR(36) NULL COMMENT '抽取来源会话 id（回溯当时的原话用）',
+  source_message_id VARCHAR(36) NULL COMMENT '抽取来源消息 id',
+  created_at DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6) COMMENT '创建时间',
+  updated_at DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6) COMMENT '更新时间',
+  INDEX idx_user_memories_tenant_user (tenant_id, user_id),
+  INDEX idx_user_memories_tenant_created (tenant_id, created_at)
+) COMMENT '用户长期记忆（B4 长期记忆）';
+```
+
+> **建表迁移**：`src/migrations/017-create-user-memories.ts`。
+>
+> **为什么不用 `users.preferences` JSON 存**：那列能存零散偏好，但撑不住本功能要的
+> 逐条列出 / 逐条改 / 逐条删 / 归档 / 记来源和置信度 / 注入时只取 top N。
+> `users.preferences` 现在只存**记忆总开关**（`memory_enabled`），
+> 记忆条目本体在这张表（见 `src/models/UserMemory.ts`）。
+>
+> **`source` 的语义是「最后一次为这条内容背书的角色」**：
+> 用户手动改过一条 `auto` 记忆 → 变成 `user`；管理员改过 → 变成 `admin`。
+> 自动抽取**只允许改 `source='auto'` 的行** —— 用户和管理员明确表达过的
+> 比模型猜的权威，模型不许覆盖。
+>
+> **删除是软删**：自动抽取会改写旧记忆（update / archive），需要能恢复，
+> 所以用 `status='archived'` 而不是物理删。管理员另有 `DELETE /memories/:id/permanent`
+> 做合规清理（不可恢复）。
+>
+> **删用户会连带物理删掉他的记忆**（`DELETE /api/v1/admin/users/:id` 里一起做）——
+> 留着就成了没人认领的孤儿行（后台「用户记忆」页按 `users` 表关联，
+> 用户没了就再也看不到那些行，物理删除的合规清理入口也用不上了），
+> 而里面可能还留着姓名 / 工号 / 地址。
+>
+> **不加外键**：跟 `evaluation_*` / `cost_logs` / `traces` 一致 ——
+> 记忆要跨子系统查，外键只会拖慢写入。
+
+---
 
 ## 5.2 关键索引策略
 

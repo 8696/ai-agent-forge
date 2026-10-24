@@ -1,14 +1,13 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import axios from 'axios';
 import type { ChatUIMessage, CitationHit } from '@shared/types/chat';
-import {
+import { apiBase, 
   allHttpFromTokensFile,
   readSse,
   readTokensFile,
   textFromChunks,
   dataChunks,
-  type AllHttp,
-} from '../helpers';
+  type AllHttp, } from '../helpers';
 
 /**
  * customer 对话路由（src/gateway/customer/chat-routes.ts）
@@ -23,7 +22,7 @@ import {
  *    会话 CRUD / 鉴权 / 隔离 / 落库结构这些零费用用例任何时候都跑。
  */
 
-const BASE = `http://localhost:${process.env.PORT ?? '3099'}`;
+const BASE = apiBase();
 const LLM_E2E = process.env.CHAT_LLM_E2E === '1';
 /** 唯一化后缀：防止重跑时命中上一轮自己上传的文档 */
 const MARKER = `chat测试${Date.now()}`;

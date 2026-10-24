@@ -32,6 +32,10 @@ export interface ResolvedLlmSettings {
   retrievalTokenBudget: number;
   /** system + 历史 + 检索片段的总 token 预算 */
   contextTokenBudget: number;
+  /** 会话摘要段能占的 token 上限（B1 摘要压缩） */
+  summaryTokenBudget: number;
+  /** 租户要不要开会话摘要（B1 摘要压缩）—— 关掉就只剩「丢弃更早的轮次」 */
+  summaryEnabled: boolean;
   /** 单条用户消息的字数上限 */
   maxInputChars: number;
   /** 思考模式推理预算；0 = 关 */
@@ -72,6 +76,8 @@ export interface ProcessDefaults {
   maxHistoryTurns: number;
   retrievalTokenBudget: number;
   contextTokenBudget: number;
+  summaryTokenBudget: number;
+  summaryEnabled: boolean;
   maxInputChars: number;
   thinkingBudgetTokens: number;
   promptCacheEnabled: boolean;
@@ -96,6 +102,10 @@ export function mergeSettings(
     const v = settings[key];
     return typeof v === 'number' && Number.isFinite(v) ? v : fallback;
   };
+  const bool = (key: string, fallback: boolean): boolean => {
+    const v = settings[key];
+    return typeof v === 'boolean' ? v : fallback;
+  };
   const promptVersion = settings['prompt_version'];
 
   const kvOverlay = {
@@ -104,6 +114,9 @@ export function mergeSettings(
     maxHistoryTurns: num('max_history_turns', defaults.maxHistoryTurns),
     retrievalTokenBudget: num('retrieval_token_budget', defaults.retrievalTokenBudget),
     contextTokenBudget: num('context_token_budget', defaults.contextTokenBudget),
+    summaryTokenBudget: num('summary_token_budget', defaults.summaryTokenBudget),
+    // 平台总开关关掉时，租户配的「开」也无效 —— 平台级是硬边界
+    summaryEnabled: defaults.summaryEnabled && bool('summary_enabled', true),
     maxInputChars: num('max_input_chars', defaults.maxInputChars),
     thinkingBudgetTokens: num('thinking_budget_tokens', defaults.thinkingBudgetTokens),
   };
@@ -156,6 +169,8 @@ export async function resolveLlmSettings(tenantId: string): Promise<ResolvedLlmS
     maxHistoryTurns: config.CHAT.MAX_HISTORY_TURNS,
     retrievalTokenBudget: config.CHAT.RETRIEVAL_TOKEN_BUDGET,
     contextTokenBudget: config.CHAT.CONTEXT_TOKEN_BUDGET,
+    summaryTokenBudget: config.CHAT.SUMMARY_TOKEN_BUDGET,
+    summaryEnabled: config.CHAT.SUMMARY_ENABLED,
     maxInputChars: config.CHAT.MAX_INPUT_CHARS,
     thinkingBudgetTokens: config.CHAT.THINKING_BUDGET_TOKENS,
     // 提示词缓存默认开（docs/04-c §5.4.1）
@@ -172,6 +187,8 @@ export async function resolveLlmSettings(tenantId: string): Promise<ResolvedLlmS
         'max_history_turns',
         'retrieval_token_budget',
         'context_token_budget',
+        'summary_token_budget',
+        'summary_enabled',
         'max_input_chars',
         'thinking_budget_tokens',
         'prompt_version',
@@ -216,4 +233,123 @@ export function describeProcessLlmDefaults(): {
   } catch {
     return { provider: 'unknown', llmModel: '', baseUrlConfigured: false };
   }
+}
+
+// ============================================================
+// 旁路 LLM 调用的模型解析（记忆抽取 / 会话摘要）
+// ============================================================
+
+/**
+ * 旁路模型解析结果。
+ *
+ * `source` 说明这次调用实际用了哪一层 —— 旁路调用是**独立的一次 LLM 调用**，
+ * 一次实测 2000 token 量级，成本必须能追溯到具体是哪条模型配置。
+ */
+export interface ResolvedScopedLlm {
+  apiKey: string;
+  baseUrl: string;
+  model: string;
+  provider: string;
+  /**
+   * - `tenant-model`  租户单独配了这条用途的模型条目（usage_scope='memory' / 'summary'）
+   * - `chat-model`    没配专用模型 → 回落到对话模型
+   * - `process-default` 租户一条模型都没配 → 回落到 .env 平台默认
+   */
+  source: 'tenant-model' | 'chat-model' | 'process-default';
+  /** 用了哪条模型条目（null = 走 .env 进程默认） */
+  modelEntryId: string | null;
+  /** 配置有问题但已降级时写在这里，调用方据此告警 */
+  degraded: string | null;
+}
+
+/**
+ * 解析旁路调用该用哪个模型。
+ *
+ * ## 为什么能独立配置
+ * 旁路调用的产物是结构化文本，推理型模型的思考 token 全额算输出 token ——
+ * 用对话那个模型，一次实测 2000+ token，而租户没有任何办法把它切便宜。
+ * 租户在 `/admin/models` 里加一条对应 usage_scope 的模型条目就能解决。
+ *
+ * ## 回落链
+ * 专用模型 → 对话模型 → .env 平台默认。
+ * 没配专用模型的租户**行为完全不变**（还是用对话模型跑）。
+ *
+ * ## 温度固定 0
+ * 旁路调用的产物要被程序解析，模型一乱来就整轮丢掉（解析失败 = 白花一次调用）。
+ * 条目里配的 temperature 是给对话用的，不套用到旁路。
+ */
+export async function resolveScopedLlm(
+  tenantId: string,
+  scope: 'memory' | 'summary',
+): Promise<ResolvedScopedLlm> {
+  let degraded: string | null = null;
+
+  // 1) 租户单独配的专用模型
+  const scopedModel = await resolveActiveModel(tenantId, scope);
+  if (scopedModel !== null) {
+    if (scopedModel.degraded === null) {
+      return {
+        apiKey: scopedModel.apiKey,
+        baseUrl: scopedModel.baseUrl,
+        model: scopedModel.model,
+        provider: scopedModel.provider,
+        source: 'tenant-model',
+        modelEntryId: scopedModel.id,
+        degraded: null,
+      };
+    }
+    // 密钥解不开 → 记下来，回落到对话模型（别让整个旁路调用停摆）
+    degraded = scopedModel.degraded;
+  }
+
+  // 2) 回落到对话模型
+  const chatModel = await resolveActiveModel(tenantId, 'chat');
+  if (chatModel !== null && chatModel.degraded === null) {
+    return {
+      apiKey: chatModel.apiKey,
+      baseUrl: chatModel.baseUrl,
+      model: chatModel.model,
+      provider: chatModel.provider,
+      source: 'chat-model',
+      modelEntryId: chatModel.id,
+      degraded,
+    };
+  }
+  if (chatModel !== null && chatModel.degraded !== null) {
+    degraded = degraded ?? chatModel.degraded;
+  }
+
+  // 3) 回落到 .env 平台默认
+  const cfg = getLlm();
+  return {
+    apiKey: cfg.llmApiKey,
+    baseUrl: cfg.llmBaseUrl,
+    model: cfg.llmModel,
+    provider: cfg.provider,
+    source: 'process-default',
+    modelEntryId: null,
+    degraded,
+  };
+}
+
+/**
+ * 解析记忆抽取该用哪个模型（B4）。
+ *
+ * 抽取要输出结构化 JSON，推理型模型的思考 token 全额算输出 token ——
+ * 用对话那个模型，一次抽取实测 2000+ token，而租户没有任何办法把它切便宜。
+ * 租户在 `/admin/models` 里加一条 `usage_scope='memory'` 的模型条目就能解决。
+ */
+export async function resolveExtractionLlm(tenantId: string): Promise<ResolvedScopedLlm> {
+  return resolveScopedLlm(tenantId, 'memory');
+}
+
+/**
+ * 解析会话摘要该用哪个模型（B1 摘要压缩）。
+ *
+ * 跟抽取同一个道理：摘要是**独立的一次 LLM 调用**（每轮对话最多一次），
+ * 租户用推理型模型时这一项就是纯成本。
+ * 租户在 `/admin/models` 里加一条 `usage_scope='summary'` 的模型条目就能解决。
+ */
+export async function resolveSummaryLlm(tenantId: string): Promise<ResolvedScopedLlm> {
+  return resolveScopedLlm(tenantId, 'summary');
 }

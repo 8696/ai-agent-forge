@@ -7,9 +7,9 @@
  */
 import { describe, it, expect } from 'vitest';
 import axios from 'axios';
-import { allHttpFromTokensFile } from '../helpers';
+import { apiBase,  allHttpFromTokensFile } from '../helpers';
 
-const BASE = `http://localhost:${process.env.PORT ?? '3099'}`;
+const BASE = apiBase();
 
 describe('dev-probe-routes', () => {
   describe('GET /api/_dev/jwt-info', () => {

@@ -1,6 +1,6 @@
 import { Op } from 'sequelize';
 import { getSequelize } from '../db';
-import { TenantModel } from '../models';
+import { TenantModel, type ModelUsageScope } from '../models';
 import { NotFoundError, ValidationError } from '../lib/errors';
 import { encryptSecret, decryptSecret, isSecretEncryptionEnabled, secretHint } from '../lib/crypto';
 import { assertLlmEndpoint } from '../lib/llm-endpoint';
@@ -10,10 +10,16 @@ import { logger } from '../logger';
 /**
  * 租户模型列表 —— docs/12-c §C4（模型选择）
  *
- * 一个租户可以配多个模型，逐条切换；对话走 `is_active` 的那条。
+ * 一个租户可以配多个模型，逐条切换；对话走 `usage_scope='chat'` 且 `is_active` 的那条。
  *
  * **密钥铁律**：`api_key_enc` 是 AES-256-GCM 密文，永不回显；
  * 对外只有 `has_api_key` + `api_key_hint`（脱敏串）。
+ *
+ * ## 用途（usage_scope）
+ *  - `chat`   对话模型
+ *  - `memory` 记忆抽取模型（B4）。**没配就回落到对话模型**，行为跟没加这个字段之前一样。
+ *
+ * 不变式是「每租户**每个 scope** 恰一条 is_active」，不是「每租户恰一条」。
  */
 
 export interface TenantModelView {
@@ -28,6 +34,8 @@ export interface TenantModelView {
   max_output_tokens: number | null;
   prompt_cache_enabled: boolean;
   is_active: boolean;
+  /** 用途：chat=对话模型 / memory=记忆抽取模型 */
+  usage_scope: ModelUsageScope;
   updated_at: string;
 }
 
@@ -45,6 +53,7 @@ export function toModelView(row: TenantModel): TenantModelView {
     max_output_tokens: row.max_output_tokens,
     prompt_cache_enabled: row.prompt_cache_enabled,
     is_active: row.is_active,
+    usage_scope: row.usage_scope,
     updated_at: row.updated_at.toISOString(),
   };
 }
@@ -75,6 +84,8 @@ export interface UpsertModelInput {
   temperature: number | null;
   max_output_tokens: number | null;
   prompt_cache_enabled: boolean;
+  /** 用途；不传 = chat（对话模型） */
+  usage_scope?: ModelUsageScope | undefined;
 }
 
 export async function createTenantModel(
@@ -87,23 +98,31 @@ export async function createTenantModel(
     model_id: input.model_id,
     api_key: input.api_key ?? '',
   });
+  const scope: ModelUsageScope = input.usage_scope ?? 'chat';
 
   return getSequelize().transaction(async (t) => {
-    // 第一条模型自动成为启用项：否则租户建了模型却没选中，
-    // 对话只会一直走 .env 默认，用户会以为「配了没生效」
-    const existingCount = await TenantModel.count({ where: { tenant_id: tenantId }, transaction: t });
+    // 这个 scope 的第一条模型自动成为该 scope 的启用项：否则租户建了模型却没选中，
+    // 对话只会一直走 .env 默认，用户会以为「配了没生效」。
+    //
+    // ⚠️ 是**按 scope 各自计数**：租户先建了一条 chat 模型（自动启用），
+    //    再建一条 memory 模型时，memory scope 还是空的 → 它也自动启用。
+    const existingCount = await TenantModel.count({
+      where: { tenant_id: tenantId, usage_scope: scope },
+      transaction: t,
+    });
     const created = await TenantModel.create(
       {
         tenant_id: tenantId,
         name: input.name,
         provider: input.provider,
-        model_id: normalized.baseUrl === input.base_url ? input.model_id : input.model_id,
+        model_id: input.model_id,
         base_url: normalized.baseUrl,
         api_key_enc: normalized.encrypted.cipher,
         api_key_hint: normalized.encrypted.hint,
         temperature: input.temperature,
         max_output_tokens: input.max_output_tokens,
         prompt_cache_enabled: input.prompt_cache_enabled,
+        usage_scope: scope,
         is_active: existingCount === 0,
         updated_by: userId,
       },
@@ -144,12 +163,34 @@ export async function updateTenantModel(
   }
   row.updated_by = userId;
   await row.save();
+
+  // 改用途：这条模型换到另一个 scope 去了。
+  //
+  // ⚠️ 不能简单把 usage_scope 一改了事 —— 它原来可能在旧 scope 里是「启用中」，
+  //    换过去就会变成「新 scope 里第二条启用项」，破坏不变式。
+  //    所以：先把它在旧 scope 里的启用位去掉，再看新 scope 有没有启用项，
+  //    没有就把它启用（有就不动，让管理员自己去切）。
+  if (input.usage_scope !== undefined && input.usage_scope !== row.usage_scope) {
+    row.usage_scope = input.usage_scope;
+    row.is_active = false;
+    await row.save();
+
+    const activeInNewScope = await TenantModel.count({
+      where: { tenant_id: tenantId, usage_scope: input.usage_scope, is_active: true },
+    });
+    if (activeInNewScope === 0) {
+      await activateTenantModel(tenantId, row.id);
+    }
+  }
+
   return row;
 }
 
 /**
- * 启用某条模型：同一租户其它条目先全部置 false，再亮这条。
- * 在一个事务里做，保证「每租户恰一条 is_active」这个不变式。
+ * 启用某条模型：**同一个 scope 内**其它条目先全部置 false，再亮这条。
+ * 在一个事务里做，保证「每租户每个 scope 恰一条 is_active」这个不变式。
+ *
+ * ⚠️ 跨 scope 不互斥：chat 和 memory 是两条独立的链路，各自一条启用项。
  */
 export async function activateTenantModel(tenantId: string, id: string): Promise<TenantModel> {
   return getSequelize().transaction(async (t) => {
@@ -163,7 +204,15 @@ export async function activateTenantModel(tenantId: string, id: string): Promise
     }
     await TenantModel.update(
       { is_active: false },
-      { where: { tenant_id: tenantId, is_active: true, id: { [Op.ne]: id } }, transaction: t },
+      {
+        where: {
+          tenant_id: tenantId,
+          usage_scope: row.usage_scope,
+          is_active: true,
+          id: { [Op.ne]: id },
+        },
+        transaction: t,
+      },
     );
     row.is_active = true;
     await row.save({ transaction: t });
@@ -173,9 +222,16 @@ export async function activateTenantModel(tenantId: string, id: string): Promise
 
 export async function deleteTenantModel(tenantId: string, id: string): Promise<void> {
   const row = await getTenantModel(tenantId, id);
-  const activeCount = await TenantModel.count({ where: { tenant_id: tenantId } });
-  if (row.is_active && activeCount <= 1) {
-    throw new ValidationError('这是唯一一条模型配置，删掉后对话会回落到平台默认');
+  // 保护的是「删掉之后这条链路彻底没有租户自配的模型了」：
+  //  - chat scope：对话会回落到平台默认（.env）—— 用户多半是误操作，拦一下
+  //  - memory scope：抽取会回落到对话模型 —— 链路还在，允许删
+  if (row.is_active && row.usage_scope === 'chat') {
+    const activeCount = await TenantModel.count({
+      where: { tenant_id: tenantId, usage_scope: 'chat' },
+    });
+    if (activeCount <= 1) {
+      throw new ValidationError('这是唯一一条对话模型，删掉后对话会回落到平台默认');
+    }
   }
   await row.destroy();
 }
@@ -196,11 +252,17 @@ export interface ResolvedActiveModel {
 }
 
 /**
- * 对话链路取「启用中的那条」，解密出可用凭据。
- * 没有启用模型 → 返回 null，由调用方回落 .env 进程默认。
+ * 取某个 scope 下启用中的那条模型 —— 密钥已解密（失败时 degraded 有值）。
+ * 没有启用模型 → 返回 null，由调用方回落（对话回落 .env 进程默认，
+ * 记忆抽取回落到对话模型）。
  */
-export async function resolveActiveModel(tenantId: string): Promise<ResolvedActiveModel | null> {
-  const row = await TenantModel.findOne({ where: { tenant_id: tenantId, is_active: true } });
+export async function resolveActiveModel(
+  tenantId: string,
+  scope: ModelUsageScope = 'chat',
+): Promise<ResolvedActiveModel | null> {
+  const row = await TenantModel.findOne({
+    where: { tenant_id: tenantId, usage_scope: scope, is_active: true },
+  });
   if (row === null) {
     return null;
   }

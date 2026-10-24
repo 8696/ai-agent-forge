@@ -13,6 +13,7 @@ import {
   InputNumber,
   Popconfirm,
   Row,
+  Select,
   Space,
   Switch,
   Table,
@@ -36,7 +37,9 @@ import {
   fetchModels,
   testModel,
   updateModel,
+  MODEL_USAGE_SCOPE_LABEL,
   type ModelTestResult,
+  type ModelUsageScope,
   type ProcessLlmDefaults,
   type SaveModelInput,
   type TenantModelItem,
@@ -46,7 +49,17 @@ import {
  * §5.4.1 模型选择 `/admin/models`（C4）—— 详见 docs/04-c-ui-后台管理页面.md §5.4
  *
  * **模型列表**：一条模型 = 一套完整连接配置（端点 + 密钥 + 采样参数），互不共享。
- * 多个条目之间切换「启用中」，对话走启用的那条；没有启用项时走平台默认。
+ *
+ * ## 用途（usage_scope）
+ *  - `chat`   对话模型
+ *  - `memory` 记忆抽取模型（B4）—— 抽取是独立的一次 LLM 调用，
+ *    推理型模型的思考 token 全额算输出 token，一次实测 2000+ token。
+ *    单独配一条便宜模型给它用，是租户唯一能压这项成本的手段。
+ *  - `summary` 会话摘要模型（B1 摘要压缩）—— 摘要也是独立的一次 LLM 调用，
+ *    长对话每轮最多一次。同理，租户可以单独配一条便宜模型压这项成本。
+ *
+ * **每个用途各自一条「启用中」**：对话走 chat 那条，抽取走 memory 那条，摘要走 summary 那条。
+ * 没配 memory / summary 模型时，它们回落到对话模型（不配也能用，行为跟以前一样）。
  *
  * 为什么每条都带完整连接配置而不是共用：换个模型还要复制一遍网关和密钥的话，
  * 配置一多就乱了；而且「自建网关 + 官方 API 并存」根本没法表达。
@@ -59,6 +72,9 @@ export function ModelListPage(): ReactElement {
   const [defaults, setDefaults] = useState<ProcessLlmDefaults | null>(null);
   const [notes, setNotes] = useState<string[]>([]);
   const [canStoreKey, setCanStoreKey] = useState(true);
+  const [activeChat, setActiveChat] = useState<TenantModelItem | null>(null);
+  const [activeMemory, setActiveMemory] = useState<TenantModelItem | null>(null);
+  const [activeSummary, setActiveSummary] = useState<TenantModelItem | null>(null);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<TenantModelItem | 'new' | null>(null);
   const [testResult, setTestResult] = useState<ModelTestResult | null>(null);
@@ -71,6 +87,9 @@ export function ModelListPage(): ReactElement {
       setDefaults(data.process_defaults);
       setNotes(data.notes);
       setCanStoreKey(data.secret_encryption_enabled);
+      setActiveChat(data.active_chat);
+      setActiveMemory(data.active_memory);
+      setActiveSummary(data.active_summary);
     } catch (err: unknown) {
       message.error(configErrorMessage(err, '加载模型列表失败'));
     } finally {
@@ -86,7 +105,9 @@ export function ModelListPage(): ReactElement {
     async (row: TenantModelItem): Promise<void> => {
       try {
         await activateModel(row.id);
-        message.success(`已启用「${row.name}」，下一轮对话立即生效`);
+        message.success(
+          `已启用「${row.name}」（${MODEL_USAGE_SCOPE_LABEL[row.usage_scope]}），下一轮立即生效`,
+        );
         setTestResult(null);
         await reload();
       } catch (err: unknown) {
@@ -127,8 +148,6 @@ export function ModelListPage(): ReactElement {
     }
   }, []);
 
-  const active = models.find((m) => m.is_active) ?? null;
-
   const columns = [
     {
       title: '名称',
@@ -136,6 +155,9 @@ export function ModelListPage(): ReactElement {
       render: (v: string, row: TenantModelItem) => (
         <Space>
           <Text strong>{v}</Text>
+          <Tag color={row.usage_scope === 'chat' ? 'blue' : 'purple'}>
+            {MODEL_USAGE_SCOPE_LABEL[row.usage_scope]}
+          </Tag>
           {row.is_active && <Tag color="green">启用中</Tag>}
         </Space>
       ),
@@ -229,11 +251,27 @@ export function ModelListPage(): ReactElement {
         showIcon
         style={{ marginBottom: 16 }}
         message={
-          active === null
+          activeChat === null
             ? `当前对话走平台默认（${defaults?.provider ?? '未配置'} · ${defaults?.llmModel ?? '未配置'}）`
-            : `当前对话使用「${active.name}」（${active.model_id}）`
+            : `当前对话使用「${activeChat.name}」（${activeChat.model_id}）`
         }
-        description={<ul style={{ margin: 0, paddingLeft: 18 }}>{notes.map((n) => <li key={n}>{n}</li>)}</ul>}
+        description={
+          <>
+            <div style={{ marginBottom: 6 }}>
+              记忆抽取：
+              {activeMemory === null
+                ? '未单独配置，跟随对话模型'
+                : `使用「${activeMemory.name}」（${activeMemory.model_id}）`}
+            </div>
+            <div style={{ marginBottom: 6 }}>
+              会话摘要：
+              {activeSummary === null
+                ? '未单独配置，跟随对话模型'
+                : `使用「${activeSummary.name}」（${activeSummary.model_id}）`}
+            </div>
+            <ul style={{ margin: 0, paddingLeft: 18 }}>{notes.map((n) => <li key={n}>{n}</li>)}</ul>
+          </>
+        }
       />
 
       {testResult !== null && (
@@ -317,6 +355,7 @@ function ModelEditor({
       temperature: editing.temperature,
       max_output_tokens: editing.max_output_tokens,
       prompt_cache_enabled: editing.prompt_cache_enabled,
+      usage_scope: editing.usage_scope,
       api_key: '',
     });
   }, [editing, form]);
@@ -333,6 +372,7 @@ function ModelEditor({
         temperature: (values.temperature as number | null) ?? null,
         max_output_tokens: (values.max_output_tokens as number | null) ?? null,
         prompt_cache_enabled: (values.prompt_cache_enabled as boolean) ?? true,
+        usage_scope: (values.usage_scope as ModelUsageScope) ?? 'chat',
       };
       const typedKey = (values.api_key as string | undefined) ?? '';
       // 编辑时留空 = 保持原密钥；只有真填了才提交
@@ -369,9 +409,24 @@ function ModelEditor({
         </Space>
       }
     >
-      <Form form={form} layout="vertical">
+      <Form form={form} layout="vertical" initialValues={{ usage_scope: 'chat' }}>
         <Form.Item name="name" label="名称" rules={[{ required: true, message: '给它起个名字' }]}>
           <Input placeholder="例：生产-快 / 自建网关-慢" />
+        </Form.Item>
+
+        <Form.Item
+          name="usage_scope"
+          label="用途"
+          rules={[{ required: true, message: '选一个用途' }]}
+          extra="这条模型服务于哪条链路。「记忆抽取」用来给 B4 长期记忆的自动抽取配一条便宜模型，「会话摘要」用来给 B1 长对话摘要压缩配一条便宜模型 —— 没单独配置时它们都跟随对话模型。"
+        >
+          <Select
+            options={[
+              { value: 'chat', label: '对话（主链路）' },
+              { value: 'memory', label: '记忆抽取（自动抽取记忆的 LLM 调用）' },
+              { value: 'summary', label: '会话摘要（长对话压缩成摘要的 LLM 调用）' },
+            ]}
+          />
         </Form.Item>
 
         <Form.Item name="provider" label="Provider 标识">

@@ -64,6 +64,11 @@ export type ChatDataTypes = {
   truncated: {
     dropped_turns: number;
     message: string;
+    /**
+     * 开了摘要压缩（B1）时为 true —— 被裁掉的内容不是丢了，
+     * 而是被折成摘要，下一轮还会回来（措辞不一样，用户的预期差很多）
+     */
+    summarized?: boolean;
   };
   /**
    * 输出审核结果（D4）

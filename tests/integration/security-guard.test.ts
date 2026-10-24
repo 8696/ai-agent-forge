@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import type { ChatUIMessage } from '@shared/types/chat';
-import { allHttpFromTokensFile, readTokensFile, type AllHttp } from '../helpers';
+import { apiBase,  allHttpFromTokensFile, readTokensFile, type AllHttp } from '../helpers';
 import { getSequelize } from '../../src/db';
 import { AuditLog, Message } from '../../src/models';
 
@@ -19,7 +19,7 @@ import { AuditLog, Message } from '../../src/models';
  * （403 内容违规 / 429 限流），没有一条会真的走完一次生成。
  */
 
-const BASE = `http://localhost:${process.env.PORT ?? '3099'}`;
+const BASE = apiBase();
 
 /** AI SDK 发给服务端的请求体形状 */
 function chatBody(userText: string): { messages: ChatUIMessage[] } {

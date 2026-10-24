@@ -28,6 +28,12 @@ import {
 import { buildPrompt, NO_HITS_NOTICE } from '../prompts';
 import { resolveLlmSettings, type ResolvedLlmSettings } from './llm-settings';
 import { resolveTenantPrompt } from './prompt-registry';
+import {
+  buildSummaryBlockText,
+  splitHistoryByBoundary,
+  summarizeDroppedTurns,
+  type SessionSummaryState,
+} from './session-summary';
 import { hybridSearch, type HybridHit, type RecallSource } from '../rag/hybrid-search';
 import type { TenantUserJwtPayload } from '../lib/jwt';
 import { withTimeout } from '../lib/async';
@@ -38,6 +44,7 @@ import {
 } from './security-guard';
 import { checkBudgetAndAlert, recordLlmUsage } from './cost-tracking';
 import { getSettingValue } from './tenant-settings';
+import { extractAndApplyMemories } from './memory';
 import type { SpanHandle, TraceHandle } from './trace';
 
 /**
@@ -305,16 +312,18 @@ export async function loadHistoryRows(sessionId: string, excludeIds: string[] = 
  * 只收 user 和 **complete** 的 assistant：
  *  - failed / cancelled 的半截回答喂回去会让模型接着错的内容编
  *  - streaming 的还在生成中，喂进去等于自己跟自己说话
+ *
+ * `ref` 带上行 id —— 摘要压缩（B1）靠它知道「摘要覆盖到哪条消息为止」。
  */
 function historyToCountable(rows: readonly Message[]): TokenCountableMessage[] {
   const out: TokenCountableMessage[] = [];
   for (const row of rows) {
     if (row.role === 'user' && row.content !== null && row.content.trim() !== '') {
-      out.push({ role: 'user', content: row.content });
+      out.push({ role: 'user', content: row.content, ref: row.id });
       continue;
     }
     if (row.role === 'assistant' && row.status === 'complete' && row.content !== null && row.content.trim() !== '') {
-      out.push({ role: 'assistant', content: row.content });
+      out.push({ role: 'assistant', content: row.content, ref: row.id });
     }
   }
   return out;
@@ -389,7 +398,7 @@ export async function loadSessionUiMessages(
 // ============================================================
 
 export interface ContextWindow {
-  /** 喂给模型的 system 提示词（基础提示词 + 资料段） */
+  /** 喂给模型的 system 提示词（基础提示词 + 摘要段 + 记忆段 + 资料段） */
   systemText: string;
   /** 喂给模型的历史（已过轮数 + token 双重裁剪） */
   history: ModelMessage[];
@@ -397,6 +406,19 @@ export interface ContextWindow {
   hits: HybridHit[];
   /** 被裁掉的早期轮数 */
   droppedTurns: number;
+  /**
+   * 注入的会话摘要段（空串 = 这个会话还没有摘要）。
+   *
+   * 摘要段占的 token 从历史预算里扣 —— 跟检索片段、记忆段一样，
+   * 三块都从「单轮上下文总预算」里划。
+   */
+  summaryBlock: string;
+  /**
+   * 这一轮被裁掉的**DB 行**（已排除「已经在摘要里」的部分）。
+   *
+   * 摘要压缩用它：把这些行折成一段摘要写进 sessions.summary。
+   */
+  droppedRows: Message[];
 }
 
 export interface BuildContextInput {
@@ -412,19 +434,42 @@ export interface BuildContextInput {
   retrievalTokenBudget?: number | null;
   /** 租户覆盖的单轮上下文总预算 */
   contextTokenBudget?: number | null;
+  /**
+   * 租户覆盖的摘要段 token 上限；null/undefined = 用进程级默认。
+   *
+   * 跟检索预算、上下文总预算一样是**租户可配**的 —— 摘要压得越细，
+   * 留给历史对话的预算越少。
+   */
+  summaryTokenBudget?: number | null;
   historyRows: readonly Message[];
   rawHits: readonly HybridHit[];
   /** 检索是否整体故障（两路全挂） */
   retrievalError: string | null;
+  /**
+   * 会话摘要状态（B1 摘要压缩）。
+   *
+   * 里面的 `boundary` 告诉调用方「摘要覆盖到哪条消息为止」——
+   * 边界之前的历史已经被摘要概括了，不再喂原文。
+   */
+  summaryState?: SessionSummaryState | null;
+  /**
+   * 用户长期记忆段（B4）。
+   * **由路由层在开流之前查好传进来** —— 跟 historyRows 同一个理由：
+   * 查库失败要在还能返 500 的时候失败，塞进 execute 就只能变成流内 error 了。
+   * 空串 = 这个用户没有记忆。
+   */
+  memoryText?: string | null;
 }
 
 /**
  * 组装一次 LLM 调用的全部输入：system 提示词 + 历史 + 资料段。
  *
- * 预算分配（先扣安全垫，再按固定比例切三块）：
+ * 预算分配（先扣安全垫，再按固定比例切几块）：
  *   可用 = 总预算 × (1 - 安全垫)
  *   资料段 ≤ RETRIEVAL_TOKEN_BUDGET
- *   历史   = 可用 - 资料段实际占用 - SYSTEM_TOKEN_BUDGET
+ *   摘要段 ≤ SUMMARY_TOKEN_BUDGET
+ *   记忆段 = 实际占用
+ *   历史   = 可用 - 资料段实际占用 - 摘要段实际占用 - 记忆段实际占用 - SYSTEM_TOKEN_BUDGET
  *
  * 纯计算（除了提示词渲染），不触网 —— 单测可以直接喂假数据。
  */
@@ -436,6 +481,8 @@ export function buildContextWindow(input: BuildContextInput): ContextWindow {
   const retrievalTokenBudget =
     input.retrievalTokenBudget ?? config.CHAT.RETRIEVAL_TOKEN_BUDGET;
   const contextTokenBudget = input.contextTokenBudget ?? config.CHAT.CONTEXT_TOKEN_BUDGET;
+  const summaryTokenBudget =
+    input.summaryTokenBudget ?? config.CHAT.SUMMARY_TOKEN_BUDGET;
 
   const reserve = Math.floor(contextTokenBudget * config.CHAT.BUDGET_SAFETY_RATIO);
   const usable = Math.max(1, contextTokenBudget - reserve);
@@ -444,12 +491,31 @@ export function buildContextWindow(input: BuildContextInput): ContextWindow {
   const keptHits = fitHitsToBudget(input.rawHits, retrievalTokenBudget);
   const retrievalCost = estimateTokens(keptHits.map((h) => h.text).join('\n'));
 
-  // 2) 历史：剩余预算里从最新一轮往回收
+  // 1.5) 会话摘要（B1 摘要压缩）：摘要段占的 token 从总预算里扣，
+  //      跟检索片段、记忆段一样从历史预算里让位。
+  const summaryState = input.summaryState ?? null;
+  const summaryBlock = buildSummaryBlockText(summaryState?.summary ?? null, summaryTokenBudget);
+  const summaryCost = estimateTokens(summaryBlock);
+
+  // 1.6) 用户记忆（B4）：它的 token 从总预算里扣，跟检索片段一样从历史预算里让位。
+  //     记忆不多的话这一项接近 0，不影响现有行为。
+  const memoryText = input.memoryText ?? '';
+  const memoryCost = estimateTokens(memoryText);
+
+  // 2) 历史：先把「已经在摘要里」的部分切掉，剩下的才参与预算裁剪。
+  //    否则摘要覆盖的旧对话会被当成新增内容再喂一遍 —— 既浪费 token，
+  //    又会让模型看到同一件事的两种说法（原文 + 摘要）。
+  const freshRows = splitHistoryByBoundary(
+    input.historyRows,
+    summaryState?.boundary ?? null,
+  ).fresh;
+
+  // 3) 历史：剩余预算里从最新一轮往回收
   const historyBudget = Math.max(
     0,
-    usable - retrievalCost - config.CHAT.SYSTEM_TOKEN_BUDGET,
+    usable - retrievalCost - summaryCost - memoryCost - config.CHAT.SYSTEM_TOKEN_BUDGET,
   );
-  const countable = historyToCountable(input.historyRows);
+  const countable = historyToCountable(freshRows);
   const fitted = fitHistoryToBudget(countable, {
     maxTokens: historyBudget,
     maxTurns: maxHistoryTurns,
@@ -457,16 +523,18 @@ export function buildContextWindow(input: BuildContextInput): ContextWindow {
 
   if (fitted.droppedTurns > 0) {
     logger.info(
-      { droppedTurns: fitted.droppedTurns, keptTokens: fitted.estimatedTokens },
-      '历史超出 token 预算，已裁掉更早的轮次（真摘要压缩下轮做）',
+      { droppedTurns: fitted.droppedTurns, keptTokens: fitted.estimatedTokens, summaryCost },
+      '历史超出 token 预算，已裁掉更早的轮次（会被折进会话摘要，下一轮生效）',
     );
   }
 
-  // 3) 提示词：租户自定义正文优先，编号由 renderRagContext 分配（和 data-citations 同源）
+  // 4) 提示词：租户自定义正文优先，编号由 renderRagContext 分配（和 data-citations 同源）
   const prompt = buildPrompt({
     tenantName: input.tenantName,
     settings: input.tenantSettings,
     overrideContent: input.promptContent ?? null,
+    summaryText: summaryBlock,
+    memoryText,
     hits: keptHits,
     // 没命中时给模型一句明话，避免它凭印象编；
     // 检索整体故障时用另一句措辞，用户能从 UI 上看出是系统问题
@@ -479,11 +547,26 @@ export function buildContextWindow(input: BuildContextInput): ContextWindow {
     content: m.content,
   }));
 
+  // 被裁掉的那些轮次对应的 DB 行 —— 摘要压缩要拿它们去调 LLM 摘要
+  const rowById = new Map(freshRows.map((r) => [r.id, r]));
+  const droppedRows: Message[] = [];
+  for (const m of fitted.dropped) {
+    if (m.ref === undefined) {
+      continue;
+    }
+    const row = rowById.get(m.ref);
+    if (row !== undefined) {
+      droppedRows.push(row);
+    }
+  }
+
   return {
     systemText: prompt.systemText,
     history,
     hits: keptHits,
     droppedTurns: fitted.droppedTurns,
+    summaryBlock,
+    droppedRows,
   };
 }
 
@@ -571,6 +654,21 @@ export interface StreamContext {
   promptContent: string | null;
   /** 客户端 IP（写审计日志用） */
   ip?: string | null;
+  /**
+   * 用户长期记忆段（B4）—— **由路由层在开流之前查好传进来**。
+   * 跟 historyRows 同一个理由：查库失败要在还能返 500 的时候失败。
+   * 空串 = 没有记忆。
+   */
+  memoryText?: string | null;
+  /**
+   * 会话摘要状态（B1 摘要压缩）—— **由路由层在开流之前查好传进来**。
+   *
+   * 摘要正文 + 摘要覆盖到哪条消息为止（边界）。
+   * 边界之前的历史已经被摘要概括，不再喂原文。
+   */
+  summaryState?: SessionSummaryState | null;
+  /** 租户覆盖的摘要段 token 上限；null/undefined = 用进程级默认 */
+  summaryTokenBudget?: number | null;
   /**
    * 观测句柄（D2）。路由层创建、这里消费：
    * 检索 / 调模型 / 记账三段各自记成 span，流结束时把 trace 收掉。
@@ -687,9 +785,12 @@ export function createChatStream(ctxData: StreamContext) {
         maxHistoryTurns: llm.maxHistoryTurns,
         retrievalTokenBudget: llm.retrievalTokenBudget,
         contextTokenBudget: llm.contextTokenBudget,
+        summaryTokenBudget: ctxData.summaryTokenBudget ?? null,
         historyRows,
         rawHits,
         retrievalError,
+        summaryState: ctxData.summaryState ?? null,
+        memoryText: ctxData.memoryText ?? '',
       });
 
       // 引用片段**必须带 id**：AI SDK 客户端对 data part 的去重只在 `chunk.id != null`
@@ -722,8 +823,41 @@ export function createChatStream(ctxData: StreamContext) {
           transient: true,
           data: {
             dropped_turns: window.droppedTurns,
-            message: `已省略更早的 ${window.droppedTurns} 轮对话（超出模型上下文预算）`,
+            // 开了摘要压缩就说清楚「不是丢掉，是压成摘要」——
+            // 用户看到的措辞不一样，对「AI 还记不记得」的预期就差很多。
+            //
+            // ⚠️ 判断的是「摘要功能开不开」，不是「有没有现成的摘要」：
+            //    第一轮压缩时摘要还不存在，但用户听到的应该是「正在整理成摘要」，
+            //    而不是「已省略」—— 那样用户会以为内容丢了。
+            message:
+              llm.summaryEnabled
+                ? `更早的 ${window.droppedTurns} 轮对话超出上下文预算，正在整理成摘要（下一轮起会带上）`
+                : `已省略更早的 ${window.droppedTurns} 轮对话（超出模型上下文预算）`,
+            summarized: llm.summaryEnabled,
           },
+        });
+      }
+
+      // ---- 摘要压缩（B1）----
+      //
+      // 这一轮被裁掉的轮次 → 调 LLM 折成一段摘要写进 sessions.summary，
+      // 下一轮再注入上下文。
+      //
+      // ⚠️ **必须 fire-and-forget**：这是在流的 execute 里，不能 await ——
+      //    一次摘要调用要几秒，await 会把首字节响应拖到几秒之后。
+      //    摘要滞后一轮是可接受的（见 src/services/session-summary.ts 的说明）。
+      if (window.droppedRows.length > 0) {
+        void summarizeDroppedTurns({
+          tenantId: session.tenant_id,
+          userId: session.user_id,
+          sessionId: session.id,
+          droppedRows: window.droppedRows,
+          fallbackLlm: llm,
+        }).catch((err: unknown) => {
+          logger.error(
+            { err: err instanceof Error ? err.message : String(err), sessionId: session.id },
+            '会话摘要任务失败',
+          );
         });
       }
 
@@ -958,6 +1092,36 @@ export function createChatStream(ctxData: StreamContext) {
             'trace 收尾失败',
           );
         }
+      }
+
+      // ---- 记忆抽取（B4 · 长期记忆）----
+      //
+      // ⚠️ **必须 fire-and-forget**：onEnd 是在流的 flush / cancel 里被 await 的，
+      //    在这里 await 一次 LLM 调用会把整个响应的收尾拖慢好几秒。
+      //    代价是「刚说完就立刻追问」时新记忆还来不及进下一轮 —— 可以接受，
+      //    而且下一轮的记忆是「上一轮之前」的，也不算错。
+      //
+      // 只在对话正常完成时抽：被中止 / 失败的那一轮，用户的话可能是说了又后悔。
+      //
+      // ⚠️ ctxData.userText 是**脱敏之后**的文本（路由层 guard 过），
+      //    所以记忆里不会出现明文身份证 / 银行卡号。
+      if (status === 'complete' && session.user_id !== null) {
+        void extractAndApplyMemories({
+          tenantId: session.tenant_id,
+          userId: session.user_id,
+          userText: ctxData.userText,
+          assistantText: finalContent,
+          sessionId: session.id,
+          messageId: assistantRowId,
+          // 只是兜底：抽取优先用租户单独配的「记忆抽取模型」，
+          // 没配才回落到对话模型（resolveExtractionLlm 内部处理）
+          fallbackLlm: llm,
+        }).catch((err: unknown) => {
+          logger.error(
+            { err: err instanceof Error ? err.message : String(err), sessionId: session.id },
+            '记忆抽取任务失败',
+          );
+        });
       }
     },
   });

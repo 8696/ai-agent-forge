@@ -74,7 +74,29 @@ describe('fitHistoryToBudget · 历史裁剪', () => {
       kept: [],
       droppedTurns: 0,
       estimatedTokens: 0,
+      dropped: [],
     });
+  });
+
+  it('被丢掉的消息本身也交出来（摘要压缩要拿它去总结）', () => {
+    const history: TokenCountableMessage[] = [];
+    for (let i = 1; i <= 3; i += 1) {
+      history.push({ role: 'user', content: `问题 ${i}`, ref: `u${i}` });
+      history.push({ role: 'assistant', content: `回答 ${i}`, ref: `a${i}` });
+    }
+    const r = fitHistoryToBudget(history, { maxTokens: 100000, maxTurns: 1 });
+    expect(r.droppedTurns).toBe(2);
+    // 丢掉的是最老的两轮，顺序从旧到新
+    expect(r.dropped.map((m) => m.ref)).toEqual(['u1', 'a1', 'u2', 'a2']);
+    // kept + dropped = 全部，一条不漏（按时间从旧到新）
+    expect([...r.dropped, ...r.kept].map((m) => m.ref)).toEqual(
+      history.map((m) => m.ref),
+    );
+  });
+
+  it('没丢东西时 dropped 是空数组', () => {
+    const r = fitHistoryToBudget([msg('user', 10)], { maxTokens: 10000, maxTurns: 10 });
+    expect(r.dropped).toEqual([]);
   });
 
   it('预算充足时全部保留，droppedTurns = 0', () => {

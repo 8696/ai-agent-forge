@@ -77,6 +77,25 @@ export interface BuildPromptInput {
    * src/services/prompt-registry.ts 解析好了，这里只负责拼资料段。
    */
   overrideContent?: string | null;
+  /**
+   * 会话早期内容的摘要段（B1 摘要压缩，见 src/services/session-summary.ts）。
+   * 空串 / null = 这个会话还没有摘要。
+   *
+   * ⚠️ **拼在记忆段前面**：摘要和记忆的「权威度」都比资料段低 ——
+   * 摘要是模型自动改写的（有损），记忆是用户/管理员背书的（更权威），
+   * 资料是知识库原文（最权威）。位置越靠后模型越容易当成当下的依据，
+   * 所以顺序反过来会让自动摘要压过公司制度。
+   */
+  summaryText?: string | null;
+  /**
+   * 用户长期记忆段（B4，见 src/services/memory.ts 的 renderMemoryBlock）。
+   * 空串 / null = 这个用户还没有记忆。
+   *
+   * ⚠️ **拼在资料段前面**：记忆段自己写明了「与『可参考资料』冲突时以『可参考资料』为准」，
+   * 而资料段在后面 —— 位置越靠后模型越容易当成当下的依据。顺序反过来会让记忆
+   * 压过公司制度，那不是我们要的。
+   */
+  memoryText?: string | null;
   /** 已按相关度降序、且过了 token 预算裁剪的检索片段 */
   hits: Parameters<typeof renderRagContext>[0];
   /** 检索为空时的降级文案（区分「库是空的」和「没命中」） */
@@ -127,7 +146,7 @@ export function buildPrompt(input: BuildPromptInput): BuiltPrompt {
 
   return {
     ...base,
-    systemText: `${baseText}${rag.text}`,
+    systemText: `${baseText}${input.summaryText ?? ''}${input.memoryText ?? ''}${rag.text}`,
     rag,
     truncatedSystem,
   };

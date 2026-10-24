@@ -39,16 +39,128 @@
   后台新增 5 个页面：`/admin/observability/traces`（+ 详情）、`/admin/observability/cost`、
   `/admin/evaluation/datasets`、`/admin/evaluation/runs`。
   验收见 [12-d](./docs/12-d-需求-运维稳定.md) §D1 §D2
+- **两个 Dashboard 落地**（2026-10-24）：租户后台首页（`/admin`）= 4 张指标卡
+  （今日对话数 / p95 延迟 / 今日成本 / 错误率）+ 7 天对话量 / 成本双图 + 异常告警列表
+  （每条带跳转按钮，错误率超标 → `/admin/observability/traces?status=error`）；
+  平台方总览（`/system`）= 跨租户 KPI + 7 天趋势 + 「成本超预算的租户」列表。
+  平台方那边新增了 `GET /api/v1/system/stats` —— **唯一返回跨租户数字的端点**，
+  闸门是 `requireSystemUser`（租户 admin 调它 401）。
+  ⚠️ 两边的趋势图**日期桶来自 `cost_logs`**：没有 LLM 调用的日子不画
+- **深色模式落地**（2026-10-24）：顶栏 ☀/🌙 按钮切换 + `localStorage` 持久化 +
+  没存过时跟随系统 `prefers-color-scheme`。`web/theme.ts` 的 token 拆成了
+  品牌 / 浅色 / 深色三层（**背景色不能共用一份**，否则切了暗色还是白底）；
+  顶栏按钮挂在 `SharedShellLayout`（3 套子系统共用一份骨架）。
+  页面里写死的浅色一律换成 `theme.useToken()` 的 token
+- **E1 落地**（2026-10-24）：新增第 4 个子系统 `public/`（`/api/v1/public/*`）
+  - **公开挂件 `/widget/:tenantCode`**（免登录，SSE 流式）：匿名会话用**签名 token**
+    （`w1.<session_id>.<HMAC>`，走 `X-Widget-Token` 头、不进 URL）认领，
+    关浏览器再打开历史还在
+  - **对外 REST API**：`POST /api/v1/public/chat`（JSON）+ `/chat/stream`（SSE），
+    **API Key 鉴权**（`ak_<nanoid(32)>`，prefix 粗筛 + bcrypt 比对 + 60s 进程内缓存，
+    后台撤销立刻失效）
+  - **后台 `/admin/api-keys` 管自己的 key**（新建 / 列表 / 撤销；完整 key 只显示一次）
+  - 鉴权命名空间跟 system/admin/customer **完全独立**（JWT 打过来 401，反之亦然）
+  - 验收见 [12-e](./docs/12-e-需求-业务接入与平台运营.md) §E1
+- **用户写操作补审计**（2026-10-24）：建用户 / 改用户 / 删用户以前**一次都没写审计**，
+  而 D5 的验收明写着「建用户 → audit_logs 有记录」。现在补上
+  `USER_CREATED` / `USER_UPDATED` / `USER_DELETED`（密码永远不进 `details`），
+  `AuditAction` 联合类型也跟代码里实际写入的 action 对齐了
+- **审计日志的读侧落地**（2026-10-24）：`GET /api/v1/admin/audit`（分页 + 筛选）
+  + `/api/v1/admin/audit/actions`（真实 action 清单），后台页面 `/admin/audit`。
+  ⚠️ 只看得到**本租户**的日志 —— 系统级日志（`tenant_id` 为空）租户 admin 看不到
+- **B3 / B5 / B6 / C2 规格已补**（2026-10-24）：需求池从 20 条补到 24 条。
+  B3 工具调用 / B5 状态机工作流 / B6 多代理协作 / C2 工具管理 —— **都是 Phase 2**，
+  规格写在 [12-b](./docs/12-b-需求-ai对话能力.md) §B3 §B5 §B6 与
+  [12-c](./docs/12-c-需求-管理员可配置.md) §C2，代码未实现
+- **B4 用户长期记忆**（2026-10-24）：记忆分三层 —— 短期（会话历史，B1 已做）/
+  摘要（`sessions.summary`，下轮做）/ **长期**（本轮做的）。
+  新增 `user_memories` 表（一条 = 一条关于用户的事实，分 画像/偏好/事实/情境 四类）。
+  **三级更新机制**：T1 正则信号预筛（零成本，挡住大部分对话）→ T2 调 LLM 抽取
+  （把现有记忆一起喂进去，模型自己决定新增/改写/归档）→ T3 用户或管理员手动改。
+  注入走 system prompt（拼在检索资料段**前面**，冲突时以资料为准），
+  每轮 top N 条 + token 预算双重裁剪。
+  **两个页面**：租户后台 `/admin/memories`（左用户右记忆的双栏，租户 admin 能看/改/归档
+  本租户每个用户的记忆）、前台 `/customer/memories`（用户看自己的、能改能删能一键关掉自动记忆）。
+  验收见 [12-b](./docs/12-b-需求-ai对话能力.md) §B4，模块实现见
+  [07-c](./docs/07-c-模块-rag记忆状态协议.md) 模块 10
+- **B4 补三项**（2026-10-24）：
+  - **抽取模型可独立配置**：`tenant_models` 加 `usage_scope`（`chat` / `memory`），
+    `/admin/models` 的模型条目多了「用途」。**每个 scope 各自一条启用项**，
+    抽取的回落链是「抽取模型 → 对话模型 → 平台默认」（不配也能用，行为跟以前一样）。
+    意义：抽取是独立的一次 LLM 调用（推理型模型的思考 token 全额算输出 token，
+    一次实测 2000+），租户单独配条便宜模型是唯一能压这项成本的手段
+  - **抽取进 trace/span**：抽取写一条**独立**的 trace（`kind='memory'`，
+    `name='memory.extract'`）+ 三段 span（`llm.extract` / `cost.record` / `storage.apply`）。
+    故意不挂在对话那条 trace 上 —— 对话 trace 的 duration_ms 要保持「用户感知的耗时」
+  - **客户侧物理清空**：`DELETE /customer/memories/permanent`（清空全部）+ 
+    `DELETE /customer/memories/:id/permanent`（单条）—— 归档只是软删，
+    用户行使「删除我的全部个人数据」的权利时要的是真删
+- **B1 摘要压缩落地**（2026-10-24）：超长会话不再只「截断」——
+  被裁掉的早期轮次会调一次 LLM 折成摘要写进 `sessions.summary`，**下一轮注入上下文**。
+  - **边界标记**：`sessions.metadata.summary_boundary` 记「摘要覆盖到哪条消息为止」，
+    下一轮按它把历史切成两段 —— 边界之前的不再喂原文（否则原文 + 摘要两种说法并存）
+  - **滚动重写**：输入是「旧摘要 + 新丢掉的轮次」，输出是一份全新的完整摘要（不是追加）
+  - **摘要模型可独立配**：`tenant_models.usage_scope` 加了第三个取值 `summary`
+    （迁移 `019`），回落链「摘要模型 → 对话模型 → 平台默认」
+  - **摘要写独立 trace**：`kind='summary'` / `name='session.summarize'`，不挂对话 trace
+  - **租户开关**：`summary_enabled` / `summary_token_budget`（通用配置页「记忆」分类）
+  - **实测**：`max_history_turns=1` 连发 4 轮，第 4 轮问「我刚才说我叫什么」答对了
+    （那条原始消息早就在上下文窗口外，只靠摘要记着）
+  - 验收见 [12-b](./docs/12-b-需求-ai对话能力.md) §B1.1，实现见
+    [src/services/session-summary.ts](./src/services/session-summary.ts)
 
 **已知限制**（不主动修，等你派活）：
 
+- **B3 / B5 / B6 / C2 是 Phase 2 需求**（工具调用 / 状态机工作流 / 多代理协作 / 工具管理）：
+  **规格已补**（[12-b](./docs/12-b-需求-ai对话能力.md) §B3 §B5 §B6、[12-c](./docs/12-c-需求-管理员可配置.md) §C2），
+  代码未实现。`tools` / `missions` 两张表的 DDL 在 [05-a](./docs/05-a-数据模型-mysql.md) 里但**迁移没建**
+- **antd v6 的废弃 API 警告刷屏**：`Alert message` → `title`、`Space direction` → `orientation`、
+  `Modal`/`Drawer destroyOnClose` → `destroyOnHidden`、`Drawer width` → `size`、
+  `List` → `Listy`。**只是控制台警告，不影响功能**，但每个页面都在刷；
+  顺带一提：`Alert.paddingBlock` / `paddingInline` 在 v6 的类型里已经不存在了
+  （写上去也不生效，`theme.ts` 里已删）
 - 不支持 `.docx`（`file_type` 的 `'word'` 是预留值，解析器没引 mammoth）
 - BM25 索引是**进程内内存索引**，单实例有效；多实例部署时各实例关键词召回不一致
 - 上传走同步索引，大文件会占住 HTTP 连接
-- **上下文超预算是「截断」不是「摘要压缩」**：超预算丢更早的轮次并告知用户，
-  真摘要压缩（调 LLM 总结写 `sessions.summary`）是下一轮
-- **Prompt Caching 未接**：`cache_read_tokens` 字段已落库但提示词没打 `cacheControl`，必然是 0
-- 公开聊天挂件（免登录 `/widget/:tenantId`）属 E1，未做；附件 / 图片上传、联网开关、收藏未做
+- **摘要压缩的六个已知边界**（详见 [12-b](./docs/12-b-需求-ai对话能力.md) §B1.1）：
+  - **摘要滞后一轮**：本轮丢掉的轮次要到下一轮才进摘要（摘要是 fire-and-forget 的）
+  - **摘要是有损压缩**：模型改写过的内容跟原文不完全一致，细节可能丢
+  - **长对话每轮可能多一次 LLM 调用**：可以关（`summary_enabled=false`）
+    或配一条便宜的「会话摘要」模型压成本
+  - **摘要是进程内 fire-and-forget**：进程在写完前被 kill，这段摘要就丢了（下一轮重来）
+  - **同会话的摘要任务串行化是进程内的**：多实例部署时闸门不跨进程，
+    但重复摘要只是多花一次钱，不会写坏数据（写之前会重读边界）
+  - **摘要块在 system prompt 里不是消息**：模型看到的是「一段早期对话的摘要」，
+    语义上略差，但检索型问答影响不大
+- **B4 长期记忆的六个已知边界**（详见 [12-b](./docs/12-b-需求-ai对话能力.md) §B4）：
+  - ~~**摘要压缩（`sessions.summary`）还是没做**~~ —— 2026-10-24 已做，见上面「B1 摘要压缩落地」
+  - **抽取是 fire-and-forget**：对话结束几秒后记忆才落库，
+    「刚说完就立刻追问」的那一轮用不上新记忆
+  - **抽取要额外花一次 LLM 调用**（实测约 2000 token，推理型模型的思考 token 占大头）：
+    T1 预筛挡住了大部分对话，但「有个人信息」的轮次必然多这一次成本。
+    **可以压**：租户在 `/admin/models` 单独配一条「记忆抽取」用途的便宜模型
+  - **抽取是进程内 fire-and-forget，没有跨实例的锁**：同一用户快速连发两条都带自我表述的
+    消息，可能抽出两次同一条记忆（已用「插入前查库判重」把窗口压到很窄，但没根治）。
+    注意这不是「多实例各抽一次」—— 一轮对话只由一个实例处理，只抽一次
+  - **抽取只改得动「最近 50 条」记忆**：模型能改写 / 归档的目标 id 取自喂给它的
+    现有记忆快照（`updated_at DESC limit 50`），第 51 条之外的记忆模型碰不到
+  - **记忆没有遗忘机制**：只增不减，靠单用户 50 条 `auto` 记忆封顶 + 冲突时归档收敛；
+    「三个月前的岗位」这类过时信息要靠模型自己改写
+  - **记忆注入没有做相关性排序**：现在是「按优先级取 top N」，
+    没有按当前问题做 embedding 召回（`07-c` 模块 10 的「记忆检索」那项）
+  - **「本轮用了哪几条记忆」查不到**：注入时算出的 `injected` / `dropped` 没回传前端，
+    聊天页也没有任何记忆提示；`hit_count` 只有累计数，没有 per-turn 记录
+- **Prompt Caching 接了但实测无效**：`cacheControl` 已经打上了
+  （`src/services/chat.ts`，受租户级「提示词缓存」开关控制），
+  但智谱的 Anthropic 兼容端点把系统提示词映射到 `instructions` 字段，
+  而 `cache_control` 只对 `messages` 里的 content block 有意义 → `cache_read_tokens` 恒为 0。
+  原生 Anthropic 端点上应该可用（**未实测**）
+- 附件 / 图片上传、联网开关、**会话收藏**未做（图片理解 / 图像生成 / 文件上传见 04-b §4.5 §4.6）
+- **E1 的三个已知边界**（详见 [12-e](./docs/12-e-需求-业务接入与平台运营.md) §E1）：
+  - **挂件 / 对外 API 的会话没有清理机制** —— 匿名会话永远留在 `sessions` 表里
+  - **匿名场景限流挡不住「一个人开十个浏览器」** —— 匿名没有身份可限
+  - **`api_keys.key_prefix` 只有 8 位且索引是复合索引** → 单独按 prefix 查走不了索引，
+    会全表扫，key 一多就慢。正解是加一列 sha256 确定性哈希（要改 migrations）
 - **D1 评测的三个已知边界**（详见 [12-d](./docs/12-d-需求-运维稳定.md) §D1）：
   - **跑批是后台异步的**（接口返 202），不是同步跑完
   - **单次跑批最多 50 题**（`EVALUATION_MAX_ITEMS`）：一条题 = 2 次 LLM 调用（生成 + 裁判），

@@ -4,6 +4,7 @@ import { config } from './config';
 import { logger } from './logger';
 import { Tenant } from './models/Tenant';
 import { User } from './models/User';
+import { UserMemory } from './models/UserMemory';
 import { SystemUser } from './models/SystemUser';
 import { ApiKey } from './models/ApiKey';
 import { Document } from './models/Document';
@@ -54,6 +55,7 @@ function buildSequelize(): SequelizeType {
   instance.addModels([
   Tenant,
   User,
+  UserMemory,
   SystemUser,
   ApiKey,
   Document,

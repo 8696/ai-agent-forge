@@ -23,14 +23,17 @@ import {
   parseChatRequest,
   renameSession,
   type ChatRequestBody,
+  type ParsedRequest,
 } from '../../services/chat';
 import { resolveLlmSettings } from '../../services/llm-settings';
+import { buildMemoryTextForChat } from '../../services/memory';
 import { resolveTenantPrompt } from '../../services/prompt-registry';
 import { checkRateLimit } from '../../services/rate-limit';
+import { loadSummaryState } from '../../services/session-summary';
 import { guardUserInput } from '../../services/security-guard';
 import { getBudgetStatus } from '../../services/cost-tracking';
 import { getSettingValue } from '../../services/tenant-settings';
-import { startTrace, type TraceHandle } from '../../services/trace';
+import { startTrace, type TraceKind } from '../../services/trace';
 
 /**
  * customer 对话路由 —— 详见 docs/12-b-需求-ai对话能力.md §B1（多轮对话 + LLM 流式）
@@ -48,6 +51,9 @@ import { startTrace, type TraceHandle } from '../../services/trace';
  *
  * 跨租户隔离：会话一律按 (id, tenant_id, user_id) 三元组查，
  * 别人的会话按「不存在」处理（404 而不是 403），不泄露这个 id 是否存在。
+ *
+ * 本文件同时导出 `runChatTurn` —— E1 的公开挂件 / 对外 REST API 复用同一套
+ * RAG + LLM 链路（详见下面 runChatTurn 的注释）。
  */
 
 export const customerChatRouter = new Router({ prefix: '/api/v1/customer' });
@@ -138,32 +144,76 @@ customerChatRouter.get('/sessions/:id/messages', async (ctx) => {
   ctx.body = await loadSessionUiMessages(sessionId, input.limit);
 });
 
-// ===== ★ 流式发消息 =====
+// ============================================================
+// ★ 共享的「跑一轮对话」执行器
+// ============================================================
 
 /**
- * 错误时机的分界线就在下面那行 `ctx.respond = false`：
+ * 一轮对话要做的全部准备工作，**开流之前**必须做完的那些事。
  *
- *   ↑ 之前：任何失败都还能被 src/gateway/error-handler.ts 转成正常的 4xx / 5xx JSON
- *   ↓ 之后：响应头已锁死，只能靠流内 error part 告诉客户端
+ * 为什么抽出来：E1 的两条新链路（公开挂件 / 对外 REST API）跟 customer 前台
+ * 用的是**同一套 RAG + LLM 链路**（检索 → 拼提示词 → 流式生成 → 落库 → 记账）。
+ * 三处各写一遍的话，任何一次修复（比如「预算检查要放在花钱之前」）都得改三个地方，
+ * 漏一个就是线上事故。所以这里抽成一个函数，三条链路共用。
  *
- * 所以入参校验、会话归属、LLM 凭据、落库、历史查询全部放在上面，一样都不能漏。
+ * ⚠️ **SSE 的错误时机分界线**（最容易踩的坑）：
+ *   响应头一旦写出去，src/gateway/error-handler.ts 就再也改不动响应了。
+ *   所以下面这个函数里的每一步都必须「失败时还能抛异常」——
+ *   校验入参、限流、预算、凭据、审核、落库、历史查询、记忆查询，全部在开流之前做完。
+ *   函数返回之后调用方才 `ctx.respond = false` 把流 pipe 出去。
  */
-customerChatRouter.post('/sessions/:id/messages', async (ctx) => {
-  const user = currentUser(ctx);
-  const actor = actorFromJwt(user);
-  const sessionId = ctx.params.id ?? '';
+export interface ChatTurnOptions {
+  ctx: Context;
+  /** 本轮对话所属的会话（归属已由调用方校验过） */
+  session: Session;
+  /** 租户（提示词里的 {{tenantName}} / 租户级配置都要用） */
+  tenant: Tenant;
+  /**
+   * 解析本轮输入。
+   *
+   * 回调收到的是**租户侧的** maxInputChars ——「单条消息多长算超长」是租户可配的
+   * （tenant_settings.max_input_chars），拿到租户值才能判。解析失败请抛 ValidationError
+   * （此时还没开流，能正常返 400）。
+   */
+  parseBody: (maxInputChars: number) => ParsedRequest;
+  /**
+   * 限流维度标识（同一租户下区分不同调用者）：
+   *   - customer：用户 id
+   *   - widget  ：`widget:<会话 id>`（匿名，没有用户 id）
+   *   - api     ：`apikey:<key id>`
+   */
+  rateLimitScope: string;
+  /** trace 名称（观测里区分入口） */
+  traceName: string;
+  /** trace 类型 */
+  traceKind: TraceKind;
+}
 
-  // 1) 会话归属（跨租户 / 跨用户一律 404）
-  const session = await loadOwnedSession(sessionId, actor);
+export interface ChatTurnResult {
+  /** UI message stream（还没写出去，由调用方 pipe 到响应） */
+  stream: ReturnType<typeof createChatStream>;
+  /** assistant 占位行的 id（跟前端看到的 message.id 一致） */
+  assistantRowId: string;
+  /** 真正送进模型的文本（已脱敏） */
+  safeUserText: string;
+}
 
-  // 2) 观测（D2）：trace 从这里开始，覆盖「限流 → 审核 → 检索 → 生成 → 记账」全程。
-  //    归属校验失败（404）不记 trace —— 那是客户端打错了，不是链路问题。
+/**
+ * 跑一轮对话的准备阶段，返回可以直接 pipe 的 UI message stream。
+ *
+ * 失败时抛异常（还没开流，调用方能正常返 4xx / 5xx）。
+ */
+export async function runChatTurn(options: ChatTurnOptions): Promise<ChatTurnResult> {
+  const { ctx, session, tenant } = options;
+
+  // 观测（D2）：trace 从这里开始，覆盖「限流 → 审核 → 检索 → 生成 → 记账」全程。
+  // 归属校验失败不记 trace —— 那是客户端打错了，不是链路问题。
   const trace = startTrace({
     tenantId: session.tenant_id,
-    userId: actor.userId,
+    userId: session.user_id,
     sessionId: session.id,
-    name: 'chat.message',
-    kind: 'chat',
+    name: options.traceName,
+    kind: options.traceKind,
     channel: session.channel,
   });
   const requestSpan = trace.span('http.request', 'http', {
@@ -172,9 +222,9 @@ customerChatRouter.post('/sessions/:id/messages', async (ctx) => {
   });
 
   try {
-    // 3) 限流（D5）。**必须在任何花钱的动作之前** —— 限流就是为了挡住
+    // 1) 限流（D5）。**必须在任何花钱的动作之前** —— 限流就是为了挡住
     //    「疯狂重试 / 刷接口」这类请求，排在 LLM 调用后面就没有意义了。
-    const rateLimit = await checkRateLimit(session.tenant_id, actor.userId);
+    const rateLimit = await checkRateLimit(session.tenant_id, options.rateLimitScope);
     if (!rateLimit.allowed) {
       const retryAfterSec = Math.max(1, Math.ceil(rateLimit.retryAfterMs / 1000));
       ctx.set('Retry-After', String(retryAfterSec));
@@ -184,7 +234,7 @@ customerChatRouter.post('/sessions/:id/messages', async (ctx) => {
       );
     }
 
-    // 4) 成本预算（D3）。默认只告警不拦截；COST_BUDGET_BLOCK=true 时才真的拒。
+    // 2) 成本预算（D3）。默认只告警不拦截；COST_BUDGET_BLOCK=true 时才真的拒。
     //    只在「真的要拦」时才去读租户配置 —— 默认配置下这一段不产生任何 DB 查询
     //    （告警那条路在流结束时算，见 src/services/chat.ts 的 onEnd）。
     if (config.COST.BUDGET_BLOCK) {
@@ -201,13 +251,10 @@ customerChatRouter.post('/sessions/:id/messages', async (ctx) => {
       }
     }
 
-    // 5) 租户级配置 + 凭据 —— 必须排在入参校验之前：
+    // 3) 租户级配置 + 凭据 —— 必须排在入参校验之前：
     //    「单条消息多长算超长」是租户可配的（tenant_settings.max_input_chars），
     //    拿不到租户值就没法判。缺凭据也要在这里报出来，否则用户只看到一个空流。
     const llm = await resolveLlmSettings(session.tenant_id);
-
-    // 6) 入参（AI SDK 的 HttpChatTransport 协议：{ id, messages, trigger, messageId }）
-    const parsed = parseChatRequest(ctx.request.body as ChatRequestBody, llm.maxInputChars);
     if (llm.apiKey.trim() === '' || llm.baseUrl.trim() === '' || llm.model.trim() === '') {
       throw new AppError(
         '对话服务未配置：请在「模型 & 提示词」里填写模型与 API Key，或联系平台管理员配置 .env',
@@ -216,7 +263,10 @@ customerChatRouter.post('/sessions/:id/messages', async (ctx) => {
       );
     }
 
-    // 7) 安全防护（D4）：脱敏 → 敏感词 → 注入检测。
+    // 4) 入参（AI SDK 的 HttpChatTransport 协议：{ id, messages, trigger, messageId }）
+    const parsed = options.parseBody(llm.maxInputChars);
+
+    // 5) 安全防护（D4）：脱敏 → 敏感词 → 注入检测。
     //    **必须排在落库之前** —— 拦截的请求不能留下 user 行，
     //    脱敏后的文本才是允许落库和送进模型的内容。
     const guardSpan = trace.span('security.guard', 'guard');
@@ -224,7 +274,7 @@ customerChatRouter.post('/sessions/:id/messages', async (ctx) => {
     try {
       guard = await guardUserInput(parsed.userText, {
         tenantId: session.tenant_id,
-        userId: actor.userId,
+        userId: session.user_id,
         llm: { apiKey: llm.apiKey, baseUrl: llm.baseUrl, model: llm.model },
         ip: ctx.ip,
       });
@@ -238,49 +288,62 @@ customerChatRouter.post('/sessions/:id/messages', async (ctx) => {
     }
     const safeUserText = guard.text;
 
-    // 8) 落库 user 行。「重新生成」时不再重复插 —— 那条已经在库里了
+    // 6) 落库 user 行。「重新生成」时不再重复插 —— 那条已经在库里了
     if (!parsed.isRegenerate) {
       await insertUserMessage(session, safeUserText);
     }
 
-    // 9) 落库 assistant 占位行。重新生成时复用原行 id，
+    // 7) 落库 assistant 占位行。重新生成时复用原行 id，
     //    配合 createUIMessageStream 的 generateId 实现「覆盖同一条」而不是多插一行
     const assistantRowId = await insertAssistantPlaceholder(
       session,
       parsed.regenerateTargetId ?? undefined,
     );
 
-    // 10) 读历史（开流之前查完：DB 挂了还能正常返 500）
+    // 8) 读历史（开流之前查完：DB 挂了还能正常返 500）
     const historyRows = await loadHistoryRows(
       session.id,
       parsed.regenerateTargetId === null ? [] : [parsed.regenerateTargetId],
     );
 
-    // 11) 租户级配置：模型 / 温度 / 缓存开关（§C4）+ 生效的提示词正文（§C3）
-    //     都在开流之前查完；租户没配就回落 .env 进程默认 + 内置默认提示词
-    const tenant = await Tenant.findByPk(session.tenant_id);
-    const tenantName = tenant?.name ?? '本公司';
-    const llmSettings = await resolveLlmSettings(session.tenant_id);
+    // 8.5) 用户长期记忆（B4）。同样在开流之前查好 ——
+    //      查库失败要能返 500，而不是变成流内 error。
+    //      匿名会话（挂件 / 对外 API）没有 user_id → 没有个人记忆，直接跳过。
+    const memoryText =
+      session.user_id === null
+        ? ''
+        : await buildMemoryTextForChat(session.tenant_id, session.user_id);
+
+    // 8.6) 会话摘要（B1 摘要压缩）。同样在开流之前查好 ——
+    //      查库失败要能返 500，而不是变成流内 error。
+    //      里面带「摘要覆盖到哪条消息为止」的边界，用来把已经摘要过的历史切掉。
+    const summaryState = await loadSummaryState(session.id, session.tenant_id);
+
+    // 9) 租户级配置：模型 / 温度 / 缓存开关（§C4）+ 生效的提示词正文（§C3）
+    //    都在开流之前查完；租户没配就回落 .env 进程默认 + 内置默认提示词
     const resolvedPrompt = await resolveTenantPrompt(
       session.tenant_id,
-      llmSettings.promptVersion,
-      tenantName,
+      llm.promptVersion,
+      tenant.name,
     );
-    if (llmSettings.degraded !== null) {
-      logger.warn({ sessionId: session.id, reason: llmSettings.degraded }, '租户 LLM 配置降级');
+    if (llm.degraded !== null) {
+      logger.warn({ sessionId: session.id, reason: llm.degraded }, '租户 LLM 配置降级');
     }
 
     requestSpan.end({ regenerate: parsed.isRegenerate });
 
     const stream = createChatStream({
       session,
-      tenantName,
-      tenantSettings: tenant?.settings ?? null,
+      tenantName: tenant.name,
+      tenantSettings: tenant.settings ?? null,
       assistantRowId,
       userText: safeUserText,
       historyRows,
-      llm: llmSettings,
+      llm,
       promptContent: resolvedPrompt.origin === 'tenant' ? resolvedPrompt.text : null,
+      memoryText,
+      summaryState,
+      summaryTokenBudget: llm.summaryTokenBudget,
       ip: ctx.ip,
       trace,
     });
@@ -289,9 +352,9 @@ customerChatRouter.post('/sessions/:id/messages', async (ctx) => {
       {
         sessionId: session.id,
         tenantId: session.tenant_id,
-        provider: llmSettings.provider,
-        model: llmSettings.model,
-        llmSource: llmSettings.source,
+        provider: llm.provider,
+        model: llm.model,
+        llmSource: llm.source,
         promptVersion: resolvedPrompt.version,
         promptOrigin: resolvedPrompt.origin,
         regenerate: parsed.isRegenerate,
@@ -299,27 +362,66 @@ customerChatRouter.post('/sessions/:id/messages', async (ctx) => {
       '开始一次对话',
     );
 
-    // 8) 把流交给 Node 响应。
-    //    pipeUIMessageStreamToResponse 内部已经处理了 backpressure、flush()、
-    //    以及客户端断连 → reader.cancel()，所以断连时 streamText 的 fetch 会被中止，
-    //    onEnd 照样触发（消息状态记为 cancelled，已生成的部分正文保留）。
-    ctx.respond = false;
-    await pipeUIMessageStreamToResponse({
-      response: ctx.res,
-      status: 200,
-      stream,
-      // SSE 那几个头 SDK 自己会 merge 进来（content-type / cache-control /
-      // connection / x-accel-buffering / x-vercel-ai-ui-message-stream），别重复设。
-      // keepAliveMs 会让流一开就发一条 `: stream-open` 注释，前端的 loading 立刻亮，
-      // 也能避免长检索被 nginx 掐断。
-      ...(config.CHAT.KEEPALIVE_MS > 0 ? { keepAliveMs: config.CHAT.KEEPALIVE_MS } : {}),
-    });
+    return { stream, assistantRowId, safeUserText };
   } catch (err: unknown) {
     // 开流之前的失败：trace 记 error；开流之后的失败由 chat.ts 的 onEnd 收尾
     requestSpan.fail(err);
     await trace.fail(err);
     throw err;
   }
+}
+
+// ===== ★ 流式发消息 =====
+
+/**
+ * 错误时机的分界线就在下面那行 `ctx.respond = false`：
+ *
+ *   ↑ 之前：任何失败都还能被 src/gateway/error-handler.ts 转成正常的 4xx / 5xx JSON
+ *   ↓ 之后：响应头已锁死，只能靠流内 error part 告诉客户端
+ *
+ * 所以入参校验、会话归属、LLM 凭据、落库、历史查询全部放在 runChatTurn 里，一样都不能漏。
+ */
+customerChatRouter.post('/sessions/:id/messages', async (ctx) => {
+  const user = currentUser(ctx);
+  const actor = actorFromJwt(user);
+  const sessionId = ctx.params.id ?? '';
+
+  // 1) 会话归属（跨租户 / 跨用户一律 404）
+  const session = await loadOwnedSession(sessionId, actor);
+
+  // 2) 租户（提示词里的 {{tenantName}} / 租户级配置都要用）
+  const tenant = await Tenant.findByPk(session.tenant_id);
+  if (tenant === null) {
+    throw new NotFoundError('租户');
+  }
+
+  // 3) 跑一轮对话（限流 / 预算 / 审核 / 落库 / 历史 / 记忆 / 提示词，全在开流之前）
+  const turn = await runChatTurn({
+    ctx,
+    session,
+    tenant,
+    parseBody: (maxInputChars) =>
+      parseChatRequest(ctx.request.body as ChatRequestBody, maxInputChars),
+    rateLimitScope: actor.userId,
+    traceName: 'chat.message',
+    traceKind: 'chat',
+  });
+
+  // 4) 把流交给 Node 响应。
+  //    pipeUIMessageStreamToResponse 内部已经处理了 backpressure、flush()、
+  //    以及客户端断连 → reader.cancel()，所以断连时 streamText 的 fetch 会被中止，
+  //    onEnd 照样触发（消息状态记为 cancelled，已生成的部分正文保留）。
+  ctx.respond = false;
+  await pipeUIMessageStreamToResponse({
+    response: ctx.res,
+    status: 200,
+    stream: turn.stream,
+    // SSE 那几个头 SDK 自己会 merge 进来（content-type / cache-control /
+    // connection / x-accel-buffering / x-vercel-ai-ui-message-stream），别重复设。
+    // keepAliveMs 会让流一开就发一条 `: stream-open` 注释，前端的 loading 立刻亮，
+    // 也能避免长检索被 nginx 掐断。
+    ...(config.CHAT.KEEPALIVE_MS > 0 ? { keepAliveMs: config.CHAT.KEEPALIVE_MS } : {}),
+  });
 });
 
 // ===== 反馈 =====

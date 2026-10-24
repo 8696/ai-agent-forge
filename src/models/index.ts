@@ -6,6 +6,17 @@ export { Tenant } from './Tenant';
 export type { TenantPlan, TenantStatus, TenantSettings } from './Tenant';
 export { User } from './User';
 export type { UserRole, UserPreferences } from './User';
+export { UserMemory } from './UserMemory';
+export type {
+  UserMemoryCategory,
+  UserMemorySource,
+  UserMemoryStatus,
+} from './UserMemory';
+export {
+  USER_MEMORY_CATEGORIES,
+  USER_MEMORY_SOURCES,
+  USER_MEMORY_STATUSES,
+} from './UserMemory';
 export { SystemUser } from './SystemUser';
 export type { SystemUserRole } from './SystemUser';
 export { ApiKey } from './ApiKey';
@@ -33,5 +44,5 @@ export { EvaluationResult } from './EvaluationResult';
 export type { EvaluationScores } from './EvaluationResult';
 export { PromptVersion } from './PromptVersion';
 export type { PromptVersionStatus } from './PromptVersion';
-export { TenantModel } from './TenantModel';
+export { TenantModel, MODEL_USAGE_SCOPES, type ModelUsageScope } from './TenantModel';
 export { TenantSetting } from './TenantSetting';

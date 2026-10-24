@@ -13,6 +13,7 @@ export {
   type TenantCode,
 } from './auth';
 export {
+  apiBase,
   systemHttp,
   adminHttp,
   customerHttp,

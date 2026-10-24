@@ -12,6 +12,9 @@ import {
   AdminLoginPage,
   AdminHomePage,
   AdminUsersPage,
+  AdminAuditLogsPage,
+  AdminApiKeysPage,
+  AdminMemoriesPage,
   KnowledgeDocumentsPage,
   KnowledgeSearchPage,
   ModelListPage,
@@ -23,7 +26,8 @@ import {
   EvaluationDatasetsPage,
   EvaluationRunsPage,
 } from './pages/admin';
-import { CustomerLoginPage, ChatPage } from './pages/customer';
+import { CustomerLoginPage, ChatPage, CustomerMemoriesPage } from './pages/customer';
+import { WidgetPage } from './pages/widget';
 import { SystemLayout } from './layouts/system/SystemLayout';
 import { AdminLayout } from './layouts/admin/AdminLayout';
 import { CustomerLayout } from './layouts/customer/CustomerLayout';
@@ -35,11 +39,11 @@ import { CustomerLayout } from './layouts/customer/CustomerLayout';
  *   /system/*        → SystemLayout（含 /system/login 自己的 layout + auth）
  *   /admin/*         → AdminLayout
  *   /customer/*      → CustomerLayout
+ *   /widget/:tenantCode → 公开聊天挂件（E1，免登录）
  *   /dev/probe       → 公开调试页（dev only）
  *   *                → NotFoundPage
  *
  * 未来按 docs/04-UI需求.md §3 增加：
- *   /widget/:tenantId   公开聊天挂件
  *   /admin/*            11 个管理页面（Step 13 落）
  *   /customer/*         租户前台业务页
  */
@@ -66,6 +70,7 @@ const routes: RouteObject[] = [
       { index: true, element: <AdminHomePage /> },
       { path: 'login', element: <AdminLoginPage /> },
       { path: 'users', element: <AdminUsersPage /> },
+      { path: 'memories', element: <AdminMemoriesPage /> },
       { path: 'knowledge/documents', element: <KnowledgeDocumentsPage /> },
       { path: 'knowledge/test', element: <KnowledgeSearchPage /> },
       { path: 'models', element: <ModelListPage /> },
@@ -76,6 +81,8 @@ const routes: RouteObject[] = [
       { path: 'observability/cost', element: <ObservabilityCostPage /> },
       { path: 'evaluation/datasets', element: <EvaluationDatasetsPage /> },
       { path: 'evaluation/runs', element: <EvaluationRunsPage /> },
+      { path: 'audit', element: <AdminAuditLogsPage /> },
+      { path: 'api-keys', element: <AdminApiKeysPage /> },
     ],
   },
 
@@ -87,11 +94,14 @@ const routes: RouteObject[] = [
       // 首页就是聊天页（docs/04-b §3.3「成功 → 跳 /customer/chat（或默认页）」）
       { index: true, element: <ChatPage /> },
       { path: 'chat', element: <ChatPage /> },
+      { path: 'memories', element: <CustomerMemoriesPage /> },
       { path: 'login', element: <CustomerLoginPage /> },
     ],
   },
 
   // 公开
+  // E1 公开聊天挂件：免登录，租户靠 URL 里的 tenantCode 定位
+  { path: '/widget/:tenantCode', element: <WidgetPage /> },
   { path: '/dev/probe', element: <DevProbePage /> },
   { path: '*', element: <NotFoundPage /> },
 ];

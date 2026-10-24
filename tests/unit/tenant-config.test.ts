@@ -138,6 +138,8 @@ describe('mergeSettings · 三层配置合并', () => {
     maxHistoryTurns: 10,
     retrievalTokenBudget: 2500,
     contextTokenBudget: 8000,
+    summaryTokenBudget: 600,
+    summaryEnabled: true,
     maxInputChars: 2000,
     thinkingBudgetTokens: 0,
     promptCacheEnabled: true,

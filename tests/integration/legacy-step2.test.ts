@@ -9,8 +9,9 @@ import axios from 'axios';
 import { getSequelize } from '../../src/db';
 import { Tenant, User } from '../../src/models';
 import { hashPassword } from '../../src/lib/password';
+import { apiBase } from '../helpers';
 
-const BASE = `http://localhost:${process.env.PORT ?? '3099'}`;
+const BASE = apiBase();
 
 async function api<T = unknown>(
   method: string,

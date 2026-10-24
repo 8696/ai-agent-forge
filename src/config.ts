@@ -146,6 +146,19 @@ const envSchema = z.object({
   // 思考模式预算 token；0 = 关闭（provider 不一定支持，见 docs/06 §6.4）
   CHAT_THINKING_BUDGET_TOKENS: z.coerce.number().int().nonnegative().default(0),
 
+  // === 摘要压缩（B1 · sessions.summary）===
+  // 总开关。关掉 = 只截断不压缩（跟摘要压缩上线前的行为完全一样）
+  CHAT_SUMMARY_ENABLED: z.preprocess(toBool, z.boolean().default(true)),
+  // 摘要段（固定说明 + 摘要正文）能占多少 token —— 从「单轮上下文总预算」里划
+  CHAT_SUMMARY_TOKEN_BUDGET: z.coerce.number().int().positive().default(600),
+  // 摘要正文的目标字数（写进摘要提示词，约束模型别写太长）
+  CHAT_SUMMARY_TARGET_CHARS: z.coerce.number().int().positive().default(300),
+  // 一次摘要调用的输入上限（token）。超了就把待摘要的对话分批消化，
+  // 避免一次塞进去几万 token
+  CHAT_SUMMARY_MAX_INPUT_TOKENS: z.coerce.number().int().positive().default(4000),
+  // 摘要调用的超时（毫秒）—— 超了就放弃这次压缩（下一轮会重试），不拖住用户请求
+  CHAT_SUMMARY_TIMEOUT_MS: z.coerce.number().int().positive().default(15000),
+
   // === JWT ===
   JWT_SECRET: z.string().min(32, 'JWT_SECRET 至少 32 字符'),
   JWT_EXPIRES_IN: z.string().default('7d'),
@@ -197,6 +210,18 @@ const envSchema = z.object({
   // 单个评测集最多多少条题。一条题 = 2 次 LLM 调用（生成 + 裁判），
   // 上限是成本闸门：防止一次误传 5000 条把额度烧光
   EVALUATION_MAX_ITEMS: z.coerce.number().int().positive().default(50),
+
+  // === 用户长期记忆（B4 · docs/12-b-需求-ai对话能力.md §B4）===
+  // 平台级总开关。关掉 = 不抽取也不注入（租户级和用户级的开关另算）
+  MEMORY_ENABLED: z.preprocess(toBool, z.boolean().default(true)),
+  // 单个用户最多保留多少条生效中的记忆，超出的从最不重要的开始归档
+  MEMORY_MAX_ACTIVE_PER_USER: z.coerce.number().int().nonnegative().default(50),
+  // 自动抽取的最低置信度：低于这个值就不入库（用户自己写的不受此限制）
+  MEMORY_MIN_CONFIDENCE: z.coerce.number().min(0).max(1).default(0.5),
+  // 一次记忆抽取的 LLM 调用超时（毫秒）—— 超了当这轮没抽到，不拖住对话。
+  // ⚠️ 别设太小：推理型模型（glm-5.3 等）光是「想」就要 10 秒以上，
+  // 8 秒会把每一次抽取都掐掉。抽取是 fire-and-forget 的，超时调大不影响用户体感。
+  MEMORY_EXTRACT_TIMEOUT_MS: z.coerce.number().int().positive().default(30000),
 
   // === 日志 ===
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
@@ -452,6 +477,13 @@ export const config = Object.freeze({
     TEMPERATURE: env.CHAT_TEMPERATURE,
     KEEPALIVE_MS: env.CHAT_KEEPALIVE_MS,
     THINKING_BUDGET_TOKENS: env.CHAT_THINKING_BUDGET_TOKENS,
+
+    // 摘要压缩（B1）。租户还能在「租户设置 → 记忆」里单独关掉摘要
+    SUMMARY_ENABLED: env.CHAT_SUMMARY_ENABLED,
+    SUMMARY_TOKEN_BUDGET: env.CHAT_SUMMARY_TOKEN_BUDGET,
+    SUMMARY_TARGET_CHARS: env.CHAT_SUMMARY_TARGET_CHARS,
+    SUMMARY_MAX_INPUT_TOKENS: env.CHAT_SUMMARY_MAX_INPUT_TOKENS,
+    SUMMARY_TIMEOUT_MS: env.CHAT_SUMMARY_TIMEOUT_MS,
   }),
 
   LLM_PROVIDER: env.LLM_PROVIDER,
@@ -499,6 +531,14 @@ export const config = Object.freeze({
   EVALUATION: Object.freeze({
     ENABLED: env.EVALUATION_ENABLED,
     MAX_ITEMS: env.EVALUATION_MAX_ITEMS,
+  }),
+
+  // 用户长期记忆（B4）
+  MEMORY: Object.freeze({
+    ENABLED: env.MEMORY_ENABLED,
+    MAX_ACTIVE_PER_USER: env.MEMORY_MAX_ACTIVE_PER_USER,
+    MIN_CONFIDENCE: env.MEMORY_MIN_CONFIDENCE,
+    EXTRACT_TIMEOUT_MS: env.MEMORY_EXTRACT_TIMEOUT_MS,
   }),
 
   LOG_LEVEL: env.LOG_LEVEL,

@@ -26,7 +26,19 @@ import { config } from '../config';
  * 这样「按租户查 span」不用 join traces。
  */
 
-export type TraceKind = 'chat' | 'api' | 'evaluation';
+/**
+ * trace 类型。
+ *
+ * - `chat`       一次对话请求（含检索 / LLM / 守卫 / 成本几段 span）
+ * - `api`        纯 API 调用
+ * - `evaluation` D1 评测跑批
+ * - `memory`     B4 记忆抽取 —— **独立的一条 trace**，
+ *   不挂在对话那条上：对话 trace 的 duration_ms 要保持「用户感知的耗时」，
+ *   把抽取塞进去会污染 p95 延迟指标。
+ * - `summary`    B1 会话摘要 —— 同样是独立的一条 trace，理由跟 memory 一样：
+ *   摘要是一次额外的 LLM 调用，耗时几秒，挂在对话 trace 上会把 p95 拉飞。
+ */
+export type TraceKind = 'chat' | 'api' | 'evaluation' | 'memory' | 'summary';
 
 export type SpanKind = 'http' | 'retrieval' | 'llm' | 'guard' | 'cost' | 'storage' | 'step';
 

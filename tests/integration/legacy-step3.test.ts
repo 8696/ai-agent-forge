@@ -8,8 +8,9 @@ import axios from 'axios';
 import { getSequelize } from '../../src/db';
 import { Tenant, User } from '../../src/models';
 import { hashPassword } from '../../src/lib/password';
+import { apiBase } from '../helpers';
 
-const BASE = `http://localhost:${process.env.PORT ?? '3099'}`;
+const BASE = apiBase();
 
 describe('legacy Step 3 · 三层登录 + 跨子系统防御', () => {
   const code = `step3-${Date.now()}`;

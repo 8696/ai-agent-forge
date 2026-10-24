@@ -16,9 +16,9 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import axios from 'axios';
 import { readdir } from 'node:fs/promises';
 import path from 'node:path';
-import { allHttpFromTokensFile, type AllHttp } from '../helpers';
+import { apiBase,  allHttpFromTokensFile, type AllHttp } from '../helpers';
 
-const BASE = `http://localhost:${process.env.PORT ?? '3099'}`;
+const BASE = apiBase();
 const TMP_DIR = path.resolve(process.cwd(), 'data', 'tmp');
 
 /** 统计 DATA_DIR/tmp 里的残留文件数（用于验证被拒的上传不留垃圾） */

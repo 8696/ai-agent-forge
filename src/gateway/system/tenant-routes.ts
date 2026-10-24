@@ -10,6 +10,7 @@ import {
   resetTenantAdminPasswordSchema,
 } from '../../lib/validators';
 import { writeAuditLog } from '../../lib/audit-log';
+import { getSystemStats } from '../../services/system-stats';
 import { NotFoundError, ValidationError } from '../../lib/errors';
 import { jwtAuth } from '../jwt-base';
 import { requireSystemUser } from './middleware';
@@ -28,6 +29,7 @@ import type { SystemJwtPayload } from '../../lib/jwt';
  *   PATCH  /tenants/:id/expires_at           F2：改到期时间（设或清空）
  *   PATCH  /tenants/:id/status               F2：启用 / 禁用（防系统租户自锁）
  *   POST   /tenants/:id/admin/reset-password 重置该租户 admin 的密码（F1）
+ *   GET    /stats                            平台方总览（跨租户 KPI + 趋势）
  *
  * F2 写审计：TENANT_STATUS_CHANGE / TENANT_EXPIRES_CHANGE → audit_logs
  *   tenant_id = NULL（系统级日志，操作人 = ctx.state.systemUser.id）
@@ -271,3 +273,10 @@ systemTenantRouter.post(
     };
   },
 );
+
+// ----- 平台方总览（docs/04-d §6.2）-----
+// 跨租户 KPI：租户数 / 用户数 / 今日对话与成本 / 7 天趋势 / 本月超预算的租户。
+// ⚠️ 这是**唯一**返回跨租户数字的端点，闸门是 requireSystemUser。
+systemTenantRouter.get('/stats', jwtAuth, requireSystemUser, async (ctx) => {
+  ctx.body = await getSystemStats();
+});
