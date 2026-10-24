@@ -38,6 +38,7 @@ import {
 } from './security-guard';
 import { checkBudgetAndAlert, recordLlmUsage } from './cost-tracking';
 import { getSettingValue } from './tenant-settings';
+import type { SpanHandle, TraceHandle } from './trace';
 
 /**
  * 对话服务层 —— B1 多轮对话 + LLM 流式（docs/12-b-需求-ai对话能力.md §B1）
@@ -570,6 +571,12 @@ export interface StreamContext {
   promptContent: string | null;
   /** 客户端 IP（写审计日志用） */
   ip?: string | null;
+  /**
+   * 观测句柄（D2）。路由层创建、这里消费：
+   * 检索 / 调模型 / 记账三段各自记成 span，流结束时把 trace 收掉。
+   * 不传 = 不采集（单测直接调 createChatStream 时就是这种情况）。
+   */
+  trace?: TraceHandle | undefined;
 }
 
 /**
@@ -592,6 +599,11 @@ export function createChatStream(ctxData: StreamContext) {
     blocked: false,
     reason: null,
   };
+
+  // LLM 调用的 span（D2）：execute 里开、onEnd 里关。
+  // 生成是流式的，execute 返回时模型可能还在吐字 —— 真正的耗时要等到
+  // usage promise resolve，所以不能在 execute 里就 end。
+  const llmSpanHolder: { span: SpanHandle | null | undefined } = { span: null };
 
   const guardActor: GuardActor = {
     tenantId: session.tenant_id,
@@ -625,6 +637,9 @@ export function createChatStream(ctxData: StreamContext) {
       let recallError: unknown = null;
       const startedAt = Date.now();
       let rawHits: HybridHit[] = [];
+      const retrievalSpan = ctxData.trace?.span('retrieval.search', 'retrieval', {
+        query_chars: userText.length,
+      });
       try {
         rawHits = await hybridSearch({
           query: userText,
@@ -640,6 +655,15 @@ export function createChatStream(ctxData: StreamContext) {
         recallError = err;
       }
       const tookMs = Date.now() - startedAt;
+      if (recallError !== null) {
+        retrievalSpan?.fail(recallError, { hit_count: rawHits.length, took_ms: tookMs });
+      } else {
+        retrievalSpan?.end({
+          hit_count: rawHits.length,
+          took_ms: tookMs,
+          failed_sources: [...failedSources],
+        });
+      }
 
       // 两路全挂 = 检索层故障；只挂一路 = 降级可用，答案仍然可用，不打扰用户
       const bothDown = failedSources.size >= 2;
@@ -751,6 +775,14 @@ export function createChatStream(ctxData: StreamContext) {
           : {}),
       });
       generation.usage = result.usage;
+      // LLM span 到 onEnd 里再关（流式生成真正结束才知道耗时和 token）
+      llmSpanHolder.span = ctxData.trace?.span('llm.generate', 'llm', {
+        provider: llm.provider,
+        model: llm.model,
+        system_chars: window.systemText.length,
+        history_turns: window.history.length,
+        retrieved: window.hits.length,
+      });
 
       writer.merge(toUIMessageStream({ stream: result.stream, sendReasoning: true }));
 
@@ -834,11 +866,29 @@ export function createChatStream(ctxData: StreamContext) {
         );
       }
 
+      // LLM span 收尾（D2）：流真正结束才知道耗时和 token，所以放在 onEnd
+      const llmSpan = llmSpanHolder.span;
+      if (llmSpan !== null && llmSpan !== undefined) {
+        const spanUsage = {
+          input_tokens: usage?.input_tokens ?? 0,
+          output_tokens: usage?.output_tokens ?? 0,
+          cache_read_tokens: usage?.cache_read_tokens ?? 0,
+          cache_write_tokens: usage?.cache_write_tokens ?? 0,
+        };
+        if (status === 'failed') {
+          llmSpan.fail(new Error('模型生成失败'), spanUsage);
+        } else {
+          llmSpan.end(spanUsage);
+        }
+      }
+
       // ---- 成本记账（D3）----
       // 放在最后：即使落库失败也要把账记上（反过来不行 —— 没生成内容就不该计费）。
+      let estimatedCost = 0;
       if (config.COST.TRACKING_ENABLED && usage !== null) {
+        const costSpan = ctxData.trace?.span('cost.record', 'cost');
         try {
-          await recordLlmUsage({
+          estimatedCost = await recordLlmUsage({
             tenantId: session.tenant_id,
             userId: session.user_id,
             sessionId: session.id,
@@ -852,6 +902,7 @@ export function createChatStream(ctxData: StreamContext) {
               cache_write_tokens: usage.cache_write_tokens ?? 0,
             },
           });
+          costSpan?.end({ cost_usd: estimatedCost });
 
           // 超预算 → 写审计告警（后台顶栏能看到）
           const budgetRaw = await getSettingValue(session.tenant_id, 'monthly_token_budget');
@@ -860,9 +911,51 @@ export function createChatStream(ctxData: StreamContext) {
             await checkBudgetAndAlert(session.tenant_id, budget);
           }
         } catch (err: unknown) {
+          costSpan?.fail(err);
           logger.error(
             { err: err instanceof Error ? err.message : String(err), sessionId: session.id },
             '成本记账失败',
+          );
+        }
+      }
+
+      // ---- trace 收尾（D2）----
+      // 「cancelled」（客户端断开）不算错误 —— 那是用户自己关掉了页面，
+      // 算进错误率会让指标失真。只有真的失败才算 error。
+      if (ctxData.trace !== undefined) {
+        const totalTokens =
+          usage === null
+            ? 0
+            : (usage.input_tokens ?? 0) +
+              (usage.output_tokens ?? 0) +
+              (usage.cache_read_tokens ?? 0) +
+              (usage.cache_write_tokens ?? 0);
+        try {
+          await ctxData.trace.end({
+            status: status === 'failed' ? 'error' : 'success',
+            provider: llm.provider,
+            model: llm.model,
+            usage:
+              usage === null
+                ? null
+                : {
+                    input_tokens: usage.input_tokens ?? 0,
+                    output_tokens: usage.output_tokens ?? 0,
+                    cache_read_tokens: usage.cache_read_tokens ?? 0,
+                    cache_write_tokens: usage.cache_write_tokens ?? 0,
+                    total_tokens: totalTokens,
+                    cost: estimatedCost,
+                  },
+            metadata: {
+              message_id: assistantRowId,
+              message_status: status,
+              moderation_blocked: moderation.blocked,
+            },
+          });
+        } catch (err: unknown) {
+          logger.error(
+            { err: err instanceof Error ? err.message : String(err), sessionId: session.id },
+            'trace 收尾失败',
           );
         }
       }

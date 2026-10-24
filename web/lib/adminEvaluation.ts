@@ -1,0 +1,186 @@
+import { adminApi } from './adminApi';
+
+/**
+ * admin 评测 API 客户端 —— 对应 src/gateway/admin/evaluation-routes.ts
+ * UI 详见 docs/04-c-ui-后台管理页面.md §5.6
+ */
+
+export interface EvaluationDatasetItem {
+  id: string;
+  question: string;
+  reference_answer: string | null;
+  scenario: string | null;
+  difficulty: string | null;
+}
+
+export interface EvaluationDataset {
+  id: string;
+  name: string;
+  version: string;
+  description: string | null;
+  item_count: number;
+  created_at: string;
+  updated_at: string;
+  /** 已经跑过几次 */
+  run_count: number;
+  /** 最近一次跑批的总分（null = 没跑过） */
+  latest_score: number | null;
+}
+
+export interface EvaluationScores {
+  accuracy: number;
+  completeness: number;
+  style: number;
+  safety: number;
+}
+
+export interface EvaluationRun {
+  id: string;
+  dataset_id: string;
+  dataset_name: string | null;
+  prompt_version: string | null;
+  model: string | null;
+  provider: string | null;
+  status: 'running' | 'completed' | 'failed';
+  total_items: number;
+  completed_items: number;
+  accuracy: number | null;
+  completeness: number | null;
+  style: number | null;
+  safety: number | null;
+  total_score: number | null;
+  total_tokens: number;
+  total_cost: number;
+  error_message: string | null;
+  started_at: string;
+  finished_at: string | null;
+}
+
+export interface EvaluationResult {
+  id: string;
+  item_id: string | null;
+  question: string;
+  answer: string;
+  reference_answer: string | null;
+  scores: EvaluationScores;
+  judge_reason: string | null;
+  latency_ms: number | null;
+}
+
+export interface Pagination {
+  page: number;
+  page_size: number;
+  total: number;
+  total_pages: number;
+}
+
+export async function fetchDatasets(): Promise<EvaluationDataset[]> {
+  const { data } = await adminApi.get<{ datasets: EvaluationDataset[] }>('/evaluation/datasets');
+  return data.datasets;
+}
+
+export async function fetchDataset(id: string): Promise<{
+  dataset: EvaluationDataset;
+  items: EvaluationDatasetItem[];
+}> {
+  const { data } = await adminApi.get<{
+    dataset: EvaluationDataset;
+    items: EvaluationDatasetItem[];
+  }>(`/evaluation/datasets/${encodeURIComponent(id)}`);
+  return data;
+}
+
+/** 新建评测集：给结构化题目数组，或给 JSONL 原文 */
+export async function createDataset(payload: {
+  name: string;
+  version?: string | undefined;
+  description?: string | null | undefined;
+  items?: Array<{
+    question: string;
+    reference_answer?: string | null | undefined;
+    scenario?: string | null | undefined;
+    difficulty?: string | null | undefined;
+  }> | undefined;
+  jsonl?: string | undefined;
+}): Promise<{ id: string; name: string; version: string; item_count: number; skipped: Array<{ line: number; message: string }> }> {
+  const { data } = await adminApi.post<{
+    id: string;
+    name: string;
+    version: string;
+    item_count: number;
+    skipped: Array<{ line: number; message: string }>;
+  }>('/evaluation/datasets', payload);
+  return data;
+}
+
+export async function deleteDataset(id: string): Promise<void> {
+  await adminApi.delete(`/evaluation/datasets/${encodeURIComponent(id)}`);
+}
+
+export async function fetchRuns(params: {
+  page?: number;
+  page_size?: number;
+  dataset_id?: string;
+}): Promise<{ runs: EvaluationRun[]; pagination: Pagination }> {
+  const { data } = await adminApi.get<{ runs: EvaluationRun[]; pagination: Pagination }>(
+    '/evaluation/runs',
+    { params },
+  );
+  return data;
+}
+
+export async function fetchRunDetail(
+  id: string,
+  params: { page?: number; page_size?: number } = {},
+): Promise<{
+  run: EvaluationRun;
+  results: EvaluationResult[];
+  pagination: Pagination;
+  /** 程序侧指标（docs/08-评测方案.md §8.2） */
+  stats: { p95_latency_ms: number; max_cost: number; avg_cost: number };
+}> {
+  const { data } = await adminApi.get<{
+    run: EvaluationRun;
+    results: EvaluationResult[];
+    pagination: Pagination;
+    stats: { p95_latency_ms: number; max_cost: number; avg_cost: number };
+  }>(`/evaluation/runs/${encodeURIComponent(id)}`, { params });
+  return data;
+}
+
+/** 触发跑批 —— 后台异步跑，接口立刻返回 run（status='running'） */
+export async function startRun(datasetId: string): Promise<{
+  id: string;
+  status: string;
+  total_items: number;
+  completed_items: number;
+  started_at: string;
+}> {
+  const { data } = await adminApi.post<{
+    id: string;
+    status: string;
+    total_items: number;
+    completed_items: number;
+    started_at: string;
+  }>('/evaluation/runs', { dataset_id: datasetId });
+  return data;
+}
+
+/**
+ * 从 axios 错误里取出后端返回的可读消息。
+ */
+export function evaluationErrorMessage(err: unknown, fallback: string): string {
+  const e = err as {
+    response?: { status?: number; data?: { message?: string } };
+    message?: string;
+  };
+  const status = e.response?.status;
+  const serverMessage = e.response?.data?.message;
+  if (status !== undefined && serverMessage !== undefined) {
+    return serverMessage;
+  }
+  if (status !== undefined) {
+    return `${fallback}（HTTP ${status}）`;
+  }
+  return e.message ?? fallback;
+}

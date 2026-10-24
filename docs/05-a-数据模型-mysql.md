@@ -1,7 +1,14 @@
 # 05-a · 数据模型 · MySQL
 
-> **本文件是 `05-数据模型.md` 的 §5.1-§5.5 节**（原主文件已拆分为 05-a / 05-b 两份）。本份负责**MySQL 12 张核心表的 DDL + 索引策略 + 数据量估算 + 备份 + 迁移管理**。
+> **本文件是 `05-数据模型.md` 的 §5.1-§5.5 节**（原主文件已拆分为 05-a / 05-b 两份）。本份负责**MySQL 核心表的 DDL + 索引策略 + 数据量估算 + 备份 + 迁移管理**。
 > 向量库 Qdrant 部分见 `05-b-数据模型-qdrant.md`。
+>
+> **已落地 18 张表**（`src/models/` 下有对应 Sequelize 模型）：
+> `tenants` / `users` / `system_users` / `api_keys` / `documents` / `sessions` / `messages` /
+> `prompt_versions` / `tenant_models` / `tenant_settings` / `audit_logs` / `cost_logs` /
+> `traces` / `spans` / `evaluation_datasets` / `evaluation_items` / `evaluation_runs` /
+> `evaluation_results`。
+> 另有 `tools` / `missions` 两张是 **Phase 2 规格**（工具管理 / 工作流），本期未建表。
 
 MySQL 8.0，字符集 `utf8mb4_unicode_ci`。所有时间字段用 `DATETIME(6)`（微秒精度，便于 trace 分析），主键统一 `VARCHAR(36)`（UUID）。
 
@@ -189,54 +196,88 @@ CREATE TABLE missions (
 ) COMMENT '任务表（Phase 2 启用）';
 ```
 
-### 评测集表（evaluation_datasets / evaluation_items）
+### 评测集表（evaluation_datasets / evaluation_items）✅ D1 已落地 2026-10-24
+
+> **落地实现**（迁移 `016-create-evaluation`）。跟初版设计稿的差异见下方说明。
 
 ```sql
 CREATE TABLE evaluation_datasets (
-  id VARCHAR(36) PRIMARY KEY COMMENT 'UUID',
+  id VARCHAR(36) PRIMARY KEY COMMENT 'nanoid 21',
   tenant_id VARCHAR(36) NOT NULL COMMENT '所属租户',
-  name VARCHAR(200) NOT NULL COMMENT '评测集名（如 "客服 V1"）',
-  version INT DEFAULT 1 COMMENT '版本（同名多次上传递增）',
-  item_count INT DEFAULT 0 COMMENT '条目数',
-  source VARCHAR(500) COMMENT '原始 JSONL 文件名',
-  created_at DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6) COMMENT '上传时间',
-  UNIQUE KEY uk_tenant_name_version (tenant_id, name, version)
+  name VARCHAR(100) NOT NULL COMMENT '评测集名（如 "客服 V1"）',
+  version VARCHAR(32) NOT NULL DEFAULT 'v1' COMMENT '版本（同名多次上传递增）',
+  description VARCHAR(500) COMMENT '备注',
+  item_count INT NOT NULL DEFAULT 0 COMMENT '条目数',
+  created_by VARCHAR(36) COMMENT '创建人',
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT '上传时间',
+  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT '更新时间',
+  INDEX idx_eval_datasets_tenant_created (tenant_id, created_at)
 ) COMMENT '评测集主表';
 
 CREATE TABLE evaluation_items (
-  id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '自增 ID',
+  id VARCHAR(36) PRIMARY KEY COMMENT 'nanoid 21',
   dataset_id VARCHAR(36) NOT NULL COMMENT '所属评测集',
+  tenant_id VARCHAR(36) NOT NULL COMMENT '所属租户（冗余一份，方便按租户直接查）',
   question TEXT NOT NULL COMMENT '测试问题',
-  reference_answer MEDIUMTEXT COMMENT '参考答案（人工写的）',
-  scenario VARCHAR(100) COMMENT '场景分类（退款 / 改地址 / 闲聊）',
-  difficulty ENUM('easy', 'medium', 'hard') DEFAULT 'medium' COMMENT '难度',
-  metadata JSON COMMENT '附加元数据',
-  INDEX idx_dataset (dataset_id)
+  reference_answer TEXT COMMENT '参考答案（人工写的；可空）',
+  scenario VARCHAR(64) COMMENT '场景分类（退款 / 改地址 / 闲聊）',
+  difficulty VARCHAR(16) COMMENT '难度：easy / medium / hard（其它值当未标注）',
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT '创建时间',
+  INDEX idx_eval_items_dataset (dataset_id)
 ) COMMENT '评测集条目';
 ```
 
-### 评测运行表（evaluation_runs）
+> **与初版设计稿的差异**：
+> - `version` 从 `INT` 改成 `VARCHAR(32)`：设计稿的 `INT` + `UNIQUE KEY (tenant_id, name, version)`
+>   意味着「同名同版本只能有一条」，但运营的实际用法是**每次上传都递增版本**
+>   （`v1` / `v2` / …），用字符串更直观，也不需要强约束卡住误操作
+> - `id` 用 `VARCHAR(36)` 而不是 `BIGINT AUTO_INCREMENT`：跟库里其它业务表（sessions / messages /
+>   prompt_versions）保持一致，前端拿到的 id 直接能当 URL 片段用
+> - `evaluation_items` 冗余了一份 `tenant_id`：不 join 就能按租户查条目
+> - `difficulty` 用 `VARCHAR(16)` 而不是 `ENUM`：评测集是租户自己的东西，
+>   多一个不该被数据库挡住；读取时 `normalizeDifficulty()` 只认三个值，别的当未标注
+> - `source`（原始 JSONL 文件名）没做：前端是把 JSONL 读进文本框再提交，
+>   服务端拿不到「文件名」这个概念
+
+### 评测运行表（evaluation_runs）✅ D1 已落地 2026-10-24
 
 ```sql
 CREATE TABLE evaluation_runs (
-  id VARCHAR(36) PRIMARY KEY COMMENT 'UUID',
+  id VARCHAR(36) PRIMARY KEY COMMENT 'nanoid 21',
   tenant_id VARCHAR(36) NOT NULL COMMENT '所属租户',
   dataset_id VARCHAR(36) NOT NULL COMMENT '使用的评测集',
-  prompt_version VARCHAR(50) COMMENT '跑评测时的提示词版本（追变更用的）',
+  dataset_name VARCHAR(100) COMMENT '评测集名称快照（评测集改名 / 删除后还能看）',
+  prompt_version VARCHAR(64) COMMENT '跑评测时的提示词版本（追变更用的）',
   model VARCHAR(100) COMMENT '跑评测用的模型',
-  status ENUM('queued', 'running', 'completed', 'failed') DEFAULT 'queued' COMMENT '运行状态',
-  total_count INT DEFAULT 0 COMMENT '总条目数',
-  completed_count INT DEFAULT 0 COMMENT '已完成数',
-  avg_accuracy DECIMAL(3,2) COMMENT '准确性平均分（1-5）',
-  avg_completeness DECIMAL(3,2) COMMENT '完整性平均分',
-  avg_style DECIMAL(3,2) COMMENT '风格平均分',
-  avg_safety DECIMAL(3,2) COMMENT '安全平均分',
-  total_cost DECIMAL(10,4) COMMENT '本次评测总花费',
-  started_at DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6) COMMENT '开始时间',
+  provider VARCHAR(32) COMMENT 'provider',
+  status VARCHAR(16) NOT NULL DEFAULT 'running' COMMENT 'running / completed / failed',
+  total_items INT NOT NULL DEFAULT 0 COMMENT '总条目数',
+  completed_items INT NOT NULL DEFAULT 0 COMMENT '已完成数（跑批中显示进度）',
+  accuracy FLOAT COMMENT '准确性平均分（0~5）',
+  completeness FLOAT COMMENT '完整性平均分（0~5）',
+  style FLOAT COMMENT '风格平均分（0~5）',
+  safety FLOAT COMMENT '安全平均分（0~5）',
+  total_score FLOAT COMMENT '四维平均（0~5）—— 趋势对比看这个',
+  total_tokens INT NOT NULL DEFAULT 0 COMMENT '本次跑批消耗的总 token（生成 + 裁判）',
+  total_cost DECIMAL(12,6) NOT NULL DEFAULT 0 COMMENT '本次评测总花费（USD，估算值）',
+  error_message VARCHAR(500) COMMENT '失败原因',
+  started_at DATETIME(6) NOT NULL COMMENT '开始时间',
   finished_at DATETIME(6) COMMENT '结束时间',
-  INDEX idx_dataset (dataset_id, started_at)
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT '创建时间',
+  INDEX idx_eval_runs_tenant_created (tenant_id, created_at),
+  INDEX idx_eval_runs_dataset_created (dataset_id, created_at)
 ) COMMENT '评测运行（每次跑一次一条）';
 ```
+
+> **与初版设计稿的差异**：
+> - `status` 用 `VARCHAR(16)` 而不是 `ENUM`：跟库里的 `documents.status` / `messages.status` 一致
+> - `avg_*` 四个字段改成 `accuracy` / `completeness` / `style` / `safety`：
+>   「avg」这个前缀在字段名里是冗余的（表本身就是聚合结果）
+> - 分数用 `FLOAT` 而不是 `DECIMAL(3,2)`：裁判的分是 0~5 的**整数**，
+>   多条平均后可能是 4.333…，`DECIMAL(3,2)` 存不下
+> - 额外加了 `total_score`（四维平均）、`total_tokens`、`provider`、`dataset_name` 快照
+> - 没有 `queued` 状态：跑批是「建行即开跑」，不需要排队
+
 
 ### LLM 调用成本流水表（cost_logs · D3）
 
@@ -264,41 +305,75 @@ CREATE TABLE cost_logs (
 > **D3 配套**。`total_tokens` 是预算闸门的依据；`cost` 是按内置价格表估的
 > （可用 `.env` 的 `COST_PRICE_TABLE` 覆盖），**只代表量级，不是账单金额**。
 
-### 调用链路表（traces / spans）
+### 调用链路表（traces / spans）✅ D2 已落地 2026-10-24
+
+> **落地实现**（迁移 `015-create-traces-spans`）。
 
 ```sql
 CREATE TABLE traces (
-  trace_id VARCHAR(36) PRIMARY KEY COMMENT 'UUID；一次请求一个 trace',
+  id VARCHAR(36) PRIMARY KEY COMMENT 'nanoid 21',
   tenant_id VARCHAR(36) NOT NULL COMMENT '所属租户',
-  session_id VARCHAR(36) COMMENT '所属会话',
   user_id VARCHAR(36) COMMENT '触发用户',
-  root_span_name VARCHAR(200) COMMENT '根 span 名（如 "agent_loop"）',
-  start_time DATETIME(6) COMMENT '开始时间',
-  end_time DATETIME(6) COMMENT '结束时间',
+  session_id VARCHAR(36) COMMENT '所属会话',
+  name VARCHAR(100) NOT NULL COMMENT 'trace 名（如 chat.message）',
+  kind VARCHAR(32) NOT NULL DEFAULT 'chat' COMMENT 'chat / api / evaluation',
+  status VARCHAR(16) NOT NULL DEFAULT 'success' COMMENT 'success / error',
+  channel VARCHAR(32) COMMENT '接入渠道（web / widget / api）',
+  provider VARCHAR(32) COMMENT 'LLM provider',
+  model VARCHAR(100) COMMENT '实际使用的模型 id',
+  input_tokens INT NOT NULL DEFAULT 0 COMMENT '输入 token',
+  output_tokens INT NOT NULL DEFAULT 0 COMMENT '输出 token',
+  cache_read_tokens INT NOT NULL DEFAULT 0 COMMENT '缓存读取 token',
+  cache_write_tokens INT NOT NULL DEFAULT 0 COMMENT '缓存写入 token',
+  total_tokens INT NOT NULL DEFAULT 0 COMMENT '合计 token',
+  cost DECIMAL(12,6) NOT NULL DEFAULT 0 COMMENT '估算花费（USD）',
   duration_ms INT COMMENT '总耗时（毫秒）',
-  status ENUM('ok', 'error') DEFAULT 'ok' COMMENT '整体状态',
-  total_input_tokens INT COMMENT '汇总输入 token',
-  total_output_tokens INT COMMENT '汇总输出 token',
-  total_cost DECIMAL(10,6) COMMENT '总花费',
-  INDEX idx_tenant_start (tenant_id, start_time),
-  INDEX idx_session (session_id)
-) COMMENT '调用链路（trace）';
+  error_message VARCHAR(500) COMMENT '失败原因（摘要，不记堆栈）',
+  metadata JSON COMMENT '附加信息',
+  started_at DATETIME(6) NOT NULL COMMENT '开始时间',
+  ended_at DATETIME(6) COMMENT '结束时间',
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT '入库时间',
+  INDEX idx_traces_tenant_started (tenant_id, started_at),
+  INDEX idx_traces_tenant_status_started (tenant_id, status, started_at),
+  INDEX idx_traces_session (session_id),
+  INDEX idx_traces_user (user_id)
+) COMMENT '一次对话/请求的调用链（D2 观测）';
 
 CREATE TABLE spans (
-  span_id VARCHAR(36) PRIMARY KEY COMMENT 'UUID；每步一个 span',
+  id VARCHAR(36) PRIMARY KEY COMMENT 'nanoid 21',
   trace_id VARCHAR(36) NOT NULL COMMENT '所属 trace',
-  parent_span_id VARCHAR(36) COMMENT '父 span（NULL 表示根 span）',
-  name VARCHAR(200) NOT NULL COMMENT 'span 名（如 "rag_search" / "llm_call"）',
-  start_time DATETIME(6) COMMENT '开始时间',
-  end_time DATETIME(6) COMMENT '结束时间',
-  duration_ms INT COMMENT '本步耗时（毫秒）',
-  attributes JSON COMMENT 'span 属性（tokens / cost / 工具调用详情）',
-  events JSON COMMENT 'span 生命周期事件',
-  status ENUM('ok', 'error') DEFAULT 'ok' COMMENT '本步状态',
-  INDEX idx_trace (trace_id, start_time),
-  INDEX idx_parent (parent_span_id)
-) COMMENT '调用链路步骤（span）';
+  tenant_id VARCHAR(36) NOT NULL COMMENT '所属租户（冗余一份，方便按租户直接查）',
+  parent_span_id VARCHAR(36) COMMENT '父 span（NULL = 直接挂在 trace 下）',
+  name VARCHAR(100) NOT NULL COMMENT 'span 名（如 retrieval.search）',
+  kind VARCHAR(32) NOT NULL DEFAULT 'step' COMMENT 'http / retrieval / llm / guard / cost / storage',
+  status VARCHAR(16) NOT NULL DEFAULT 'success' COMMENT 'success / error',
+  duration_ms INT COMMENT '耗时（毫秒）',
+  input JSON COMMENT '入参摘要',
+  output JSON COMMENT '出参摘要',
+  error_message VARCHAR(500) COMMENT '失败原因（摘要）',
+  started_at DATETIME(6) NOT NULL COMMENT '开始时间',
+  ended_at DATETIME(6) COMMENT '结束时间',
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT '入库时间',
+  INDEX idx_spans_trace (trace_id),
+  INDEX idx_spans_tenant_started (tenant_id, started_at)
+) COMMENT '调用链里的一步（D2 观测）';
 ```
+
+> **与初版设计稿的差异**：
+> - 主键用 `id`（不是 `trace_id` / `span_id`）：跟库里其它表一致，前端 id 直接当 URL 片段用
+> - 时间字段用 `started_at` / `ended_at`（不是 `start_time` / `end_time`）：
+>   跟 `sessions` 表一致
+> - `status` 用 `VARCHAR(16)` + `success` / `error`（不是 `ENUM('ok','error')`）
+> - `root_span_name` 改成 `name` + `kind`：trace 自己的名字（`chat.message`）
+>   和类型分开，`kind` 用来区分 chat / api / evaluation
+> - `spans` 的 `attributes` / `events` 两个 JSON 合成 `input` / `output`：
+>   「这一步吃了什么 / 吐了什么」比「生命周期事件列表」更好读，
+>   而且 `events` 那一层在 MVP 里没有实际用途
+> - 额外加了 `channel` / `provider` / `model` / 缓存 token / `total_tokens` / `cost`：
+>   成本分析页要按模型 / 渠道拆，trace 行自带这些就不用 join
+> - **不加外键**：跟 `audit_logs` / `cost_logs` 一致；
+>   trace 结束时在一个事务里把 trace + spans 一起写，不存在孤儿 span
+
 
 ### 审核日志表（audit_logs）
 
@@ -463,33 +538,45 @@ CREATE TABLE tenant_settings (
 > **三态语义**（`PUT /config/settings`）：`undefined` = 不改 / `null` = **清除覆盖回落到 .env** /
 > 值 = 覆盖。`null` 那条特别容易写错成 no-op，后果是「用户一旦设过就再也改不回默认」。
 
-### 评测结果明细表（evaluation_run_items · 每条 case 的分数）
+### 评测结果明细表（evaluation_results · 每条 case 的分数）✅ D1 已落地 2026-10-24
 
 > **D1 配套**。`evaluation_runs` 只存**平均分**；每条 case 的具体分数 + 裁判理由存在这张表。
+>
+> **表名跟初版设计稿不同**：设计稿写的是 `evaluation_run_items`，落地时用了
+> `evaluation_results` —— 「result」跟 `evaluation_runs`（一次跑批）配对更清楚，
+> 而且跟 `evaluation_items`（题目）区分得开：items 是**输入**，results 是**输出**。
 
 ```sql
-CREATE TABLE evaluation_run_items (
-  id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '自增 ID',
+CREATE TABLE evaluation_results (
+  id VARCHAR(36) PRIMARY KEY COMMENT 'nanoid 21',
   run_id VARCHAR(36) NOT NULL COMMENT '所属评测运行',
-  item_id BIGINT NOT NULL COMMENT '关联 evaluation_items.id',
-  actual_answer MEDIUMTEXT COMMENT '模型这次的实际回答',
-  score_accuracy TINYINT COMMENT '准确性 1-5 分',
-  score_completeness TINYINT COMMENT '完整性 1-5 分',
-  score_style TINYINT COMMENT '风格 1-5 分',
-  score_safety TINYINT COMMENT '安全 1-5 分',
-  total_score TINYINT COMMENT '4 维平均（1-5）',
-  judge_reasoning TEXT COMMENT '大模型裁判给的解释',
-  input_tokens INT COMMENT '本条 input tokens',
-  output_tokens INT COMMENT '本条 output tokens',
-  cost DECIMAL(10,6) COMMENT '本条花费',
-  duration_ms INT COMMENT '本条耗时',
-  created_at DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6) COMMENT '评分时间',
-  INDEX idx_run (run_id),
-  INDEX idx_item (item_id)
+  tenant_id VARCHAR(36) NOT NULL COMMENT '所属租户',
+  item_id VARCHAR(36) COMMENT '对应 evaluation_items.id',
+  question TEXT NOT NULL COMMENT '题目快照',
+  answer TEXT NOT NULL COMMENT '模型这次的实际回答',
+  reference_answer TEXT COMMENT '参考答案快照',
+  scores JSON NOT NULL COMMENT '4 维分数 {accuracy, completeness, style, safety}（各 0~5）',
+  judge_reason TEXT COMMENT '大模型裁判给的解释',
+  input_tokens INT NOT NULL DEFAULT 0 COMMENT '生成 + 裁判消耗的输入 token',
+  output_tokens INT NOT NULL DEFAULT 0 COMMENT '生成 + 裁判消耗的输出 token',
+  cost DECIMAL(12,6) NOT NULL DEFAULT 0 COMMENT '本条花费（USD，估算值）',
+  latency_ms INT COMMENT '本条总耗时（毫秒）',
+  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT '评分时间',
+  INDEX idx_eval_results_run (run_id)
 ) COMMENT '评测每条 case 明细';
 ```
 
+> **与初版设计稿的差异**：
+> - 四个 `score_*` 字段合成一个 `scores` JSON：四个 0~5 的整数塞进 JSON 比四个 TINYINT 列更灵活
+>   （以后加维度不用改表结构），代价是不能直接对某一维建索引 —— 但查询都是「按 run 取全部」，
+>   没有按单维筛选的场景
+> - 多了 `question` / `answer` / `reference_answer` 三个快照：
+>   评测集改了 / 删了之后，历史跑批的明细仍然能读出来（跟 `evaluation_runs.dataset_name` 快照同理）
+> - `duration_ms` 改名 `latency_ms`：跟 `traces.duration_ms` / `spans.duration_ms` 统一
+> - `item_id` 从 `BIGINT` 改成 `VARCHAR(36)`：跟 `evaluation_items.id` 对齐
+
 ---
+
 
 ## 5.2 关键索引策略
 
@@ -509,7 +596,7 @@ CREATE TABLE evaluation_run_items (
 | documents                              | ~50      | ~2 万    | ~200 MB          |
 | evaluation_datasets / evaluation_items | ~1 条/月 | ~2000    | ~50 MB           |
 | evaluation_runs                        | 4        | ~1500    | ~1 MB            |
-| evaluation_run_items                   | ~800     | ~30 万   | ~80 MB           |
+| evaluation_results                    | ~800     | ~30 万   | ~80 MB           |
 | traces                                 | ~3000    | ~110 万  | ~800 MB          |
 | spans                                  | ~30000   | ~1100 万 | ~5 GB            |
 | api_keys                               | < 1      | ~10      | < 1 MB           |

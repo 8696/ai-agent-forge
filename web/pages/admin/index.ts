@@ -12,3 +12,8 @@ export { KnowledgeSearchPage } from './KnowledgeSearchPage';
 export { ModelListPage } from './ModelListPage';
 export { SettingsPage } from './SettingsPage';
 export { PromptEditorPage } from './PromptEditorPage';
+export { ObservabilityTraceListPage } from './ObservabilityTraceListPage';
+export { ObservabilityTraceDetailPage } from './ObservabilityTraceDetailPage';
+export { ObservabilityCostPage } from './ObservabilityCostPage';
+export { EvaluationDatasetsPage } from './EvaluationDatasetsPage';
+export { EvaluationRunsPage } from './EvaluationRunsPage';

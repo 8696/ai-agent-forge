@@ -8,6 +8,8 @@ import { Table, Column, Model, PrimaryKey, DataType, CreatedAt } from 'sequelize
  *  - PROMPT_INJECTION_BLOCKED  D4：输入被注入检测拦下（403）
  *  - CONTENT_MODERATION_BLOCKED D4：输入 / 输出被内容审核拦下（403）
  *  - COST_BUDGET_EXCEEDED      D3：租户本月 token 用量超阈值（告警）
+ *  - EVALUATION_SCORE_DROPPED  D1：评测分数较上次下跌超过阈值（告警）
+ *  - EVALUATION_DATASET_CREATED / _DELETED / EVALUATION_RUN_STARTED  D1：评测操作留痕
  *
  * 写入时不强校验（writeAuditLog 的 action 收 string），加类型只是给调用处
  * 一个提示 —— 不想因为漏改联合类型就编译不过。
@@ -18,7 +20,11 @@ export type AuditAction =
   | 'RATE_LIMIT_EXCEEDED'
   | 'PROMPT_INJECTION_BLOCKED'
   | 'CONTENT_MODERATION_BLOCKED'
-  | 'COST_BUDGET_EXCEEDED';
+  | 'COST_BUDGET_EXCEEDED'
+  | 'EVALUATION_SCORE_DROPPED'
+  | 'EVALUATION_DATASET_CREATED'
+  | 'EVALUATION_DATASET_DELETED'
+  | 'EVALUATION_RUN_STARTED';
 
 /**
  * 审计日志表 —— 详见 docs/05-a-数据模型-mysql.md §5.1

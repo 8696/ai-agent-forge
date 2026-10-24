@@ -33,6 +33,12 @@
   **D5 限流 + 审计**（进程内 Map，租户 + 用户双维度，429 带 `Retry-After`）、
   **D3 成本控制**（`cost_logs` 表 + 月度 token 预算 + 后台顶栏告警条）。
   验收见 [12-d](./docs/12-d-需求-运维稳定.md) §D3 §D4 §D5
+- **D1 评测 + D2 观测**（2026-10-24）：**D1**（评测集 JSONL + LLM-as-Judge 四维打分 + 后台异步跑批 +
+  分数跌 10% 告警）、**D2**（`traces`/`spans` 两张表 + 一次对话 5 段 span 时间线 +
+  `logs/trace-*.jsonl` 副本 + 成本分析 4 维度拆解 + p95/错误率/单条成本告警）。
+  后台新增 5 个页面：`/admin/observability/traces`（+ 详情）、`/admin/observability/cost`、
+  `/admin/evaluation/datasets`、`/admin/evaluation/runs`。
+  验收见 [12-d](./docs/12-d-需求-运维稳定.md) §D1 §D2
 
 **已知限制**（不主动修，等你派活）：
 
@@ -43,6 +49,20 @@
   真摘要压缩（调 LLM 总结写 `sessions.summary`）是下一轮
 - **Prompt Caching 未接**：`cache_read_tokens` 字段已落库但提示词没打 `cacheControl`，必然是 0
 - 公开聊天挂件（免登录 `/widget/:tenantId`）属 E1，未做；附件 / 图片上传、联网开关、收藏未做
+- **D1 评测的三个已知边界**（详见 [12-d](./docs/12-d-需求-运维稳定.md) §D1）：
+  - **跑批是后台异步的**（接口返 202），不是同步跑完
+  - **单次跑批最多 50 题**（`EVALUATION_MAX_ITEMS`）：一条题 = 2 次 LLM 调用（生成 + 裁判），
+    这是成本闸门；200 条的评测集可以建，要分批跑
+  - **「每天凌晨 2 点自动跑全量」和「prompt 改动自动跑小规模回归」都没做**：
+    要做先得定「跑哪些租户的哪些评测集」，是运营决策
+- **D2 观测的五个已知边界**（详见 [12-d](./docs/12-d-需求-运维稳定.md) §D2）：
+  - **trace 是结束时一次性写的**（内存里攒 → 一个事务写 trace + spans）：
+    进程在请求中途被 kill 会丢这一条 trace
+  - **观测指标是实时聚合查询**，没有分钟级聚合表（`docs/09` §9.2 的 `metrics_minutely`）：
+    trace 到百万级时查询会变慢
+  - **指标告警的窗口是「今天」不是 5 分钟**（`docs/09` §9.4 的设计稿是 5 分钟）
+  - **告警阈值是代码常量**，后台不能改；`docs/04-c` §5.7.4 的「告警规则」页没做
+  - **「客户端断开」不算错误**（记 success）：否则用户自己关页面会把错误率刷高
 - `messages.tool_results` 被重载装 AI SDK 的 data part，做工具调用前要先加迁移挪走
 - **租户自定义 apiKey 必须配 `CONFIG_ENCRYPTION_KEY`**：不配就禁止保存密钥（不降级成明文）；
   配了之后**不能换**，换了对不上的旧密文解不开（会降级到平台默认凭据并告警）
@@ -64,6 +84,9 @@
   - **LLM 调用重试（指数退避 + 抖动）没做**，目前靠 AI SDK 自带的 provider 级重试
 - **测试基建有个坑已修**：`vitest 5` 移除了 `poolOptions.forks.singleFork`（写了会被静默忽略），
   导致测试文件并行跑、互相踩状态而随机失败 —— 现在改用 `test.fileParallelism: false`
+- **`yarn lint` 跑不起来**（既有环境问题，不是代码问题）：`typescript-eslint` 不支持
+  TypeScript 7.0，eslint 在**加载配置阶段**就报错退出，还没开始扫文件。
+  改 `yarn typecheck` 当静态检查（这个是好的）
 
 **未交付部分**：你正在重新思考中，由你口头告诉 AI 工程师下一步要做什么、用什么技术、按什么顺序。
 

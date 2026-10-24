@@ -24,6 +24,13 @@ export type {
 export { AuditLog } from './AuditLog';
 export type { AuditAction } from './AuditLog';
 export { CostLog } from './CostLog';
+export { Trace } from './Trace';
+export { Span } from './Span';
+export { EvaluationDataset } from './EvaluationDataset';
+export { EvaluationItem } from './EvaluationItem';
+export { EvaluationRun } from './EvaluationRun';
+export { EvaluationResult } from './EvaluationResult';
+export type { EvaluationScores } from './EvaluationResult';
 export { PromptVersion } from './PromptVersion';
 export type { PromptVersionStatus } from './PromptVersion';
 export { TenantModel } from './TenantModel';

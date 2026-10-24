@@ -16,6 +16,8 @@ import * as m011 from './011-add-tenant-chat-params';
 import * as m012 from './012-split-tenant-chat-settings';
 import * as m013 from './013-restructure-tenant-config';
 import * as m014 from './014-create-cost-logs';
+import * as m015 from './015-create-traces-spans';
+import * as m016 from './016-create-evaluation';
 
 /**
  * umzug 迁移 runner（详见 docs/03-技术栈与规范.md §B.2）
@@ -105,6 +107,16 @@ export function buildMigrator(): Umzug<QueryInterface> {
         name: '014-create-cost-logs',
         up: (params) => m014.up(params),
         down: (params) => m014.down(params),
+      },
+      {
+        name: '015-create-traces-spans',
+        up: (params) => m015.up(params),
+        down: (params) => m015.down(params),
+      },
+      {
+        name: '016-create-evaluation',
+        up: (params) => m016.up(params),
+        down: (params) => m016.down(params),
       },
     ],
   });

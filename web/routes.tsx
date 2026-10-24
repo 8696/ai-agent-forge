@@ -17,6 +17,11 @@ import {
   ModelListPage,
   PromptEditorPage,
   SettingsPage,
+  ObservabilityTraceListPage,
+  ObservabilityTraceDetailPage,
+  ObservabilityCostPage,
+  EvaluationDatasetsPage,
+  EvaluationRunsPage,
 } from './pages/admin';
 import { CustomerLoginPage, ChatPage } from './pages/customer';
 import { SystemLayout } from './layouts/system/SystemLayout';
@@ -66,6 +71,11 @@ const routes: RouteObject[] = [
       { path: 'models', element: <ModelListPage /> },
       { path: 'prompts', element: <PromptEditorPage /> },
       { path: 'settings', element: <SettingsPage /> },
+      { path: 'observability/traces', element: <ObservabilityTraceListPage /> },
+      { path: 'observability/traces/:id', element: <ObservabilityTraceDetailPage /> },
+      { path: 'observability/cost', element: <ObservabilityCostPage /> },
+      { path: 'evaluation/datasets', element: <EvaluationDatasetsPage /> },
+      { path: 'evaluation/runs', element: <EvaluationRunsPage /> },
     ],
   },
 

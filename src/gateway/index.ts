@@ -28,6 +28,8 @@ export {
   adminAuthRouter,
   adminKnowledgeRouter,
   adminConfigRouter,
+  adminObservabilityRouter,
+  adminEvaluationRouter,
   requireAdmin,
 } from './admin';
 export { customerAuthRouter, customerChatRouter, requireCustomer } from './customer';

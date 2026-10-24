@@ -8,6 +8,10 @@ import { fetchAlerts, type AdminAlert } from '../../lib/adminConfig';
 import { DashboardOutlined, FileSearchOutlined, TeamOutlined, UploadOutlined, SlidersOutlined,
   EditOutlined,
   SettingOutlined,
+  LineChartOutlined,
+  FundOutlined,
+  ExperimentOutlined,
+  TrophyOutlined,
 } from '@ant-design/icons';
 
 /**
@@ -47,6 +51,30 @@ const SIDEBAR: SidebarItem[] = [
     icon: <SettingOutlined />,
     label: '租户设置',
     to: '/admin/settings',
+  },
+  {
+    key: '/admin/observability/traces',
+    icon: <LineChartOutlined />,
+    label: '观测',
+    to: '/admin/observability/traces',
+  },
+  {
+    key: '/admin/observability/cost',
+    icon: <FundOutlined />,
+    label: '成本分析',
+    to: '/admin/observability/cost',
+  },
+  {
+    key: '/admin/evaluation/datasets',
+    icon: <ExperimentOutlined />,
+    label: '评测集',
+    to: '/admin/evaluation/datasets',
+  },
+  {
+    key: '/admin/evaluation/runs',
+    icon: <TrophyOutlined />,
+    label: '评测结果',
+    to: '/admin/evaluation/runs',
   },
 ];
 

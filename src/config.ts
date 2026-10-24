@@ -186,6 +186,18 @@ const envSchema = z.object({
   // 自定义价格表（JSON，美元 / 100 万 token）：{"模型id": {"input": 0.6, "output": 2.2}}
   COST_PRICE_TABLE: z.string().default(''),
 
+  // === 观测（D2）===
+  // 采集 trace / span。关掉后调用方拿到的是空实现 handle（不用改业务代码）
+  TRACE_ENABLED: z.preprocess(toBool, z.boolean().default(true)),
+  // 同时往 logs/trace-YYYY-MM-DD.jsonl 写一份副本（docs/09-观测方案.md §9.1）
+  TRACE_FILE_ENABLED: z.preprocess(toBool, z.boolean().default(true)),
+
+  // === 评测（D1）===
+  EVALUATION_ENABLED: z.preprocess(toBool, z.boolean().default(true)),
+  // 单个评测集最多多少条题。一条题 = 2 次 LLM 调用（生成 + 裁判），
+  // 上限是成本闸门：防止一次误传 5000 条把额度烧光
+  EVALUATION_MAX_ITEMS: z.coerce.number().int().positive().default(50),
+
   // === 日志 ===
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
 });
@@ -475,6 +487,18 @@ export const config = Object.freeze({
     TRACKING_ENABLED: env.COST_TRACKING_ENABLED,
     BUDGET_BLOCK: env.COST_BUDGET_BLOCK,
     PRICE_TABLE: env.COST_PRICE_TABLE,
+  }),
+
+  // 观测（D2）
+  OBSERVABILITY: Object.freeze({
+    TRACE_ENABLED: env.TRACE_ENABLED,
+    TRACE_FILE_ENABLED: env.TRACE_FILE_ENABLED,
+  }),
+
+  // 评测（D1）
+  EVALUATION: Object.freeze({
+    ENABLED: env.EVALUATION_ENABLED,
+    MAX_ITEMS: env.EVALUATION_MAX_ITEMS,
   }),
 
   LOG_LEVEL: env.LOG_LEVEL,

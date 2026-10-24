@@ -16,6 +16,8 @@ import {
   adminAuthRouter,
   adminKnowledgeRouter,
   adminConfigRouter,
+  adminObservabilityRouter,
+  adminEvaluationRouter,
   customerAuthRouter,
   customerChatRouter,
 } from './gateway';
@@ -59,6 +61,12 @@ async function bootstrap(): Promise<void> {
   app.use(
     adminConfigRouter.routes(),
   ).use(adminConfigRouter.allowedMethods()); // admin 模型 & 提示词配置
+  app.use(
+    adminObservabilityRouter.routes(),
+  ).use(adminObservabilityRouter.allowedMethods()); // admin 观测（trace / 成本）
+  app.use(
+    adminEvaluationRouter.routes(),
+  ).use(adminEvaluationRouter.allowedMethods()); // admin 评测（评测集 / 跑批）
   app.use(customerAuthRouter.routes()).use(customerAuthRouter.allowedMethods()); // customer login
   app.use(customerChatRouter.routes()).use(customerChatRouter.allowedMethods()); // customer 对话（SSE）
 

@@ -14,6 +14,12 @@ import { TenantModel } from './models/TenantModel';
 import { TenantSetting } from './models/TenantSetting';
 import { AuditLog } from './models/AuditLog';
 import { CostLog } from './models/CostLog';
+import { Trace } from './models/Trace';
+import { Span } from './models/Span';
+import { EvaluationDataset } from './models/EvaluationDataset';
+import { EvaluationItem } from './models/EvaluationItem';
+import { EvaluationRun } from './models/EvaluationRun';
+import { EvaluationResult } from './models/EvaluationResult';
 
 /**
  * Sequelize 实例（单例）。
@@ -58,6 +64,12 @@ function buildSequelize(): SequelizeType {
   TenantSetting,
   AuditLog,
   CostLog,
+  Trace,
+  Span,
+  EvaluationDataset,
+  EvaluationItem,
+  EvaluationRun,
+  EvaluationResult,
 ]);
   return instance;
 }

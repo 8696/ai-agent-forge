@@ -56,10 +56,13 @@ export function monthRange(now: Date = new Date()): { start: Date; end: Date } {
 /**
  * 写一条成本流水，并把 token 记进进程内累计。
  *
+ * 返回这一笔的估算花费（USD）—— 调用方（比如 trace 收尾）要拿它填 trace 的 cost 字段，
+ * 不用自己再算一遍价格表。
+ *
  * 写库失败不抛错 —— 成本记账失败不该让用户的回答失败。
  * 但要 warn 一行，不能静默丢数据。
  */
-export async function recordLlmUsage(record: LlmUsageRecord): Promise<void> {
+export async function recordLlmUsage(record: LlmUsageRecord): Promise<number> {
   const { usage } = record;
   const totalTokens =
     usage.input_tokens + usage.output_tokens + usage.cache_read_tokens + usage.cache_write_tokens;
@@ -88,6 +91,7 @@ export async function recordLlmUsage(record: LlmUsageRecord): Promise<void> {
   }
 
   addToAccumulator(record.tenantId, totalTokens);
+  return cost;
 }
 
 /** 累加进程内计数（跨月自动重置） */
