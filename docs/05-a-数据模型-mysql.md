@@ -238,6 +238,32 @@ CREATE TABLE evaluation_runs (
 ) COMMENT '评测运行（每次跑一次一条）';
 ```
 
+### LLM 调用成本流水表（cost_logs · D3）
+
+```sql
+CREATE TABLE cost_logs (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '自增 ID',
+  tenant_id VARCHAR(36) NOT NULL COMMENT '所属租户',
+  user_id VARCHAR(36) COMMENT '触发调用的用户',
+  session_id VARCHAR(36) COMMENT '所属会话',
+  message_id VARCHAR(36) COMMENT '关联的 assistant 消息 id',
+  provider VARCHAR(32) COMMENT 'provider 标识（zhipu / minimax / ...）',
+  model VARCHAR(100) COMMENT '实际使用的模型 id',
+  input_tokens INT NOT NULL DEFAULT 0 COMMENT '输入 token',
+  output_tokens INT NOT NULL DEFAULT 0 COMMENT '输出 token',
+  cache_read_tokens INT NOT NULL DEFAULT 0 COMMENT '缓存命中 token',
+  cache_write_tokens INT NOT NULL DEFAULT 0 COMMENT '缓存写入 token',
+  total_tokens INT NOT NULL DEFAULT 0 COMMENT '合计 token（预算闸门按这个算）',
+  cost DECIMAL(12,6) NOT NULL DEFAULT 0 COMMENT '估算花费（USD）；不在价格表里时为 0 = 未知',
+  created_at DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6) COMMENT '调用时间',
+  INDEX idx_cost_logs_tenant_created (tenant_id, created_at),
+  INDEX idx_cost_logs_session (session_id)
+) COMMENT 'LLM 调用成本流水（一行一次调用）';
+```
+
+> **D3 配套**。`total_tokens` 是预算闸门的依据；`cost` 是按内置价格表估的
+> （可用 `.env` 的 `COST_PRICE_TABLE` 覆盖），**只代表量级，不是账单金额**。
+
 ### 调用链路表（traces / spans）
 
 ```sql

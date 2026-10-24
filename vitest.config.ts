@@ -24,11 +24,18 @@ export default defineConfig({
     // 测试进程强制注入 env —— 让 src/config.ts 的 NODE_ENV=test 分支生效，
     // 这样后端 + 测试都默认跑在 3099，不会跟 dev/prod 的 3000 冲突
     env: { NODE_ENV: 'test', PORT: '3099' },
+    //
+    // ⚠️ **必须关掉文件级并行**：多个测试文件共享同一个 MySQL + 同一个后端进程，
+    //    并行跑会互相踩状态（改密码 / 建会话 / 改租户启停互相打架），
+    //    表现为随机失败 —— 跟被测代码无关，是测试之间串扰。
+    //
+    //    ⚠️ vitest 5 **已经移除了 `poolOptions.forks.singleFork`**：
+    //    写在那里会被静默忽略（不报错、也不生效），串扰就是这么来的。
+    //    替代品是 `fileParallelism: false`（写在 test 里，实测只有这里生效）。
+    fileParallelism: false,
   },
   // vitest 5 起 pool / poolOptions 提到顶层（之前嵌在 test 下，DEPRECATED 警告）
-  // 单 worker 顺序跑：避免多个测试同时 seed 互相覆盖
   pool: 'forks',
-  poolOptions: { forks: { singleFork: true } },
   // 路径别名要跟 tsconfig.json 的 paths 对齐 —— vite/vitest 不读 tsconfig 的 paths，
   // 不显式配的话 `@shared/xxx` 在测试里会解析失败（源码里 tsx 能解析，vitest 不能）
   resolve: {

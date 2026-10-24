@@ -15,6 +15,7 @@ import * as m010 from './010-create-prompt-versions-llm-config';
 import * as m011 from './011-add-tenant-chat-params';
 import * as m012 from './012-split-tenant-chat-settings';
 import * as m013 from './013-restructure-tenant-config';
+import * as m014 from './014-create-cost-logs';
 
 /**
  * umzug 迁移 runner（详见 docs/03-技术栈与规范.md §B.2）
@@ -99,6 +100,11 @@ export function buildMigrator(): Umzug<QueryInterface> {
         name: '013-restructure-tenant-config',
         up: (params) => m013.up(params),
         down: (params) => m013.down(params),
+      },
+      {
+        name: '014-create-cost-logs',
+        up: (params) => m014.up(params),
+        down: (params) => m014.down(params),
       },
     ],
   });

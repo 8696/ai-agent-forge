@@ -32,6 +32,7 @@ import {
   updatePromptDraft,
 } from '../../services/prompt-registry';
 import type { TenantUserJwtPayload } from '../../lib/jwt';
+import { listAdminAlerts } from '../../services/alerts';
 
 /**
  * 租户级配置路由 —— docs/12-c §C3（提示词配置）/ §C4（模型选择）、docs/12-e §E2
@@ -416,4 +417,19 @@ adminConfigRouter.post('/config/prompts/:version/rollback', async (ctx) => {
     ip: ctx.ip,
   });
   ctx.body = { version: row.version, status: row.status };
+});
+
+// ============================================================
+// 告警（D3 / D4 / D5）
+// ============================================================
+
+/**
+ * 后台顶栏的告警条数据源 —— docs/09-观测方案.md §9.4「控制台告警条」
+ *
+ * 三类信号：成本超预算（实时状态）、限流命中（近 1 小时）、安全拦截（近 24 小时）。
+ * 跨租户隔离：所有查询都强制带 ctx.state.adminUser.tenant_id。
+ */
+adminConfigRouter.get('/config/alerts', async (ctx) => {
+  const u = currentUser(ctx);
+  ctx.body = { alerts: await listAdminAlerts(u.tenant_id) };
 });

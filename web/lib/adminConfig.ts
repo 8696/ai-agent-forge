@@ -154,6 +154,23 @@ export async function saveSettings(payload: Record<string, unknown>): Promise<Se
 }
 
 // ============================================================
+// 告警（D3 / D4 / D5）
+// ============================================================
+
+export interface AdminAlert {
+  id: string;
+  level: 'error' | 'warning';
+  title: string;
+  detail: string;
+  created_at: string | null;
+}
+
+export async function fetchAlerts(): Promise<AdminAlert[]> {
+  const { data } = await adminApi.get<{ alerts: AdminAlert[] }>('/config/alerts');
+  return data.alerts;
+}
+
+// ============================================================
 // 提示词
 // ============================================================
 

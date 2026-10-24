@@ -30,6 +30,14 @@ import { resolveLlmSettings, type ResolvedLlmSettings } from './llm-settings';
 import { resolveTenantPrompt } from './prompt-registry';
 import { hybridSearch, type HybridHit, type RecallSource } from '../rag/hybrid-search';
 import type { TenantUserJwtPayload } from '../lib/jwt';
+import { withTimeout } from '../lib/async';
+import {
+  guardAssistantOutput,
+  OUTPUT_BLOCKED_TEXT,
+  type GuardActor,
+} from './security-guard';
+import { checkBudgetAndAlert, recordLlmUsage } from './cost-tracking';
+import { getSettingValue } from './tenant-settings';
 
 /**
  * 对话服务层 —— B1 多轮对话 + LLM 流式（docs/12-b-需求-ai对话能力.md §B1）
@@ -560,6 +568,8 @@ export interface StreamContext {
   llm: ResolvedLlmSettings;
   /** 租户生效的提示词正文（docs/12-c §C3）；null = 用内置默认 */
   promptContent: string | null;
+  /** 客户端 IP（写审计日志用） */
+  ip?: string | null;
 }
 
 /**
@@ -575,6 +585,20 @@ export function createChatStream(ctxData: StreamContext) {
   // 用对象包一层而不是裸 let —— 赋值发生在回调里，TS 的控制流分析会把裸变量
   // 在 onEnd 处误判成初始值（null），直接 optional chain 会报 never。
   const generation: { usage: PromiseLike<LanguageModelUsage> | null } = { usage: null };
+
+  // 输出审核结果：execute 里判出来，onEnd 里用来决定「落什么进 messages」。
+  // 同样用对象包一层，理由同上。
+  const moderation: { blocked: boolean; reason: string | null } = {
+    blocked: false,
+    reason: null,
+  };
+
+  const guardActor: GuardActor = {
+    tenantId: session.tenant_id,
+    userId: session.user_id,
+    llm: { apiKey: llm.apiKey, baseUrl: llm.baseUrl, model: llm.model },
+    ip: ctxData.ip ?? null,
+  };
 
   return createUIMessageStream<ChatUIMessage>({
     // 客户端看到的 message.id === messages 表主键（重新生成时也是同一条）
@@ -729,6 +753,29 @@ export function createChatStream(ctxData: StreamContext) {
       generation.usage = result.usage;
 
       writer.merge(toUIMessageStream({ stream: result.stream, sendReasoning: true }));
+
+      // ---- 输出审核（D4）----
+      //
+      // ⚠️ SSE 的固有约束：正文已经逐字发给浏览器了，收不回来。
+      //    这一层能做到的是「不把原文落进 messages + 通知前端把气泡换成拦截文案」。
+      //
+      // result.text 和 result.stream 可以同时用（SDK 内部把流 tee 成两份，
+      // 一份给 merge、一份给 text 的累积），但客户端断连时 text 可能永远
+      // 不 resolve —— 所以套一层超时，判不出来就放行。
+      const fullText = await withTimeout(result.text, config.SECURITY.GUARD_TIMEOUT_MS, '');
+      if (fullText.trim() !== '') {
+        const verdict = await guardAssistantOutput(fullText, guardActor);
+        if (verdict.blocked) {
+          moderation.blocked = true;
+          moderation.reason = verdict.reason;
+          writer.write({
+            type: 'data-moderation',
+            id: 'moderation',
+            data: { blocked: true, reason: verdict.reason ?? '内容违规' },
+          });
+        }
+      }
+
       writer.setOutcome({ status: 'completed' });
     },
     // onEnd 在 flush 和 cancel 时都会触发：断连 / 中止 / 失败都有官方信号，
@@ -765,12 +812,16 @@ export function createChatStream(ctxData: StreamContext) {
         status = 'complete';
       }
 
+      // 输出审核拦下时：**原文不落库**，只留一句拦截文案。
+      // （前端已经看到流出来的字节了，靠 data-moderation part 换成这段文案）
+      const finalContent = moderation.blocked ? OUTPUT_BLOCKED_TEXT : content;
+
       // ⚠️ 这里绝不能 throw：onEnd 是在流的 flush/cancel 里被 await 的，
       // 抛出去会让已经写了一半的响应出问题。失败就记日志，让这行停在 streaming
       // （下次读历史时会被 markStaleStreamingAsFailed 自愈成 failed）。
       try {
         await finalizeAssistantMessage(assistantRowId, {
-          content,
+          content: finalContent,
           thinking: thinking === '' ? null : thinking,
           dataParts: extractDataParts(parts),
           usage,
@@ -781,6 +832,39 @@ export function createChatStream(ctxData: StreamContext) {
           { err: err instanceof Error ? err.message : String(err), assistantRowId },
           '回填 assistant 消息失败',
         );
+      }
+
+      // ---- 成本记账（D3）----
+      // 放在最后：即使落库失败也要把账记上（反过来不行 —— 没生成内容就不该计费）。
+      if (config.COST.TRACKING_ENABLED && usage !== null) {
+        try {
+          await recordLlmUsage({
+            tenantId: session.tenant_id,
+            userId: session.user_id,
+            sessionId: session.id,
+            messageId: assistantRowId,
+            provider: llm.provider,
+            model: llm.model,
+            usage: {
+              input_tokens: usage.input_tokens ?? 0,
+              output_tokens: usage.output_tokens ?? 0,
+              cache_read_tokens: usage.cache_read_tokens ?? 0,
+              cache_write_tokens: usage.cache_write_tokens ?? 0,
+            },
+          });
+
+          // 超预算 → 写审计告警（后台顶栏能看到）
+          const budgetRaw = await getSettingValue(session.tenant_id, 'monthly_token_budget');
+          const budget = typeof budgetRaw === 'number' ? budgetRaw : 0;
+          if (budget > 0) {
+            await checkBudgetAndAlert(session.tenant_id, budget);
+          }
+        } catch (err: unknown) {
+          logger.error(
+            { err: err instanceof Error ? err.message : String(err), sessionId: session.id },
+            '成本记账失败',
+          );
+        }
       }
     },
   });

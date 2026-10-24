@@ -112,6 +112,30 @@ export function chatStreamUrl(sessionId: string): string {
  * 从 axios 错误里取出后端返回的可读消息。
  * 与 adminKnowledge.ts 的同名函数同构（后端错误体 { code, message, details }）。
  */
+/**
+ * 流式对话的错误文案。
+ *
+ * ⚠️ useChat 的 transport 失败时抛的是**普通 Error**，`message` 里塞的是
+ *    后端的原始响应体（JSON 字符串），不是 `response.data.message`：
+ *      {"code":"CONTENT_BLOCKED","message":"检测到提示词注入，已拒绝该请求",...}
+ *    直接把 `error.message` 显示给用户会看到一坨 JSON —— 这里解析成中文文案。
+ */
+export function streamErrorMessage(err: unknown, fallback: string): string {
+  const raw = (err as { message?: string } | undefined)?.message ?? '';
+  if (raw === '') {
+    return fallback;
+  }
+  try {
+    const parsed = JSON.parse(raw) as { message?: unknown };
+    if (typeof parsed.message === 'string' && parsed.message !== '') {
+      return parsed.message;
+    }
+  } catch {
+    // 不是 JSON（比如网络错误），用原文
+  }
+  return raw;
+}
+
 export function errorMessage(err: unknown, fallback: string): string {
   const e = err as {
     response?: { status?: number; data?: { message?: string } };

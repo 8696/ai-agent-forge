@@ -43,6 +43,7 @@ import {
   fetchSessions,
   renameSession,
   sendFeedback,
+  streamErrorMessage,
 } from '../../lib/customerChat';
 import { PageHeader } from '../../components/shell';
 
@@ -84,6 +85,21 @@ function thinkingOf(m: ChatUIMessage): string {
     .filter((p): p is Extract<typeof p, { type: 'reasoning' }> => p.type === 'reasoning')
     .map((p) => p.text)
     .join('');
+}
+
+/**
+ * 输出审核结果（D4）—— 后端判定这条回答没过审时会下发 data-moderation part。
+ *
+ * ⚠️ SSE 的固有约束：正文已经流到浏览器了，收不回来。
+ *    后端保证的是「原文不落库」；前端这边把气泡正文换成拦截提示。
+ */
+function moderationOf(m: ChatUIMessage): { blocked: boolean; reason: string } | null {
+  for (const part of m.parts) {
+    if (part.type === 'data-moderation') {
+      return part.data;
+    }
+  }
+  return null;
 }
 
 export function ChatPage(): ReactElement {
@@ -486,7 +502,12 @@ function ChatPanel({
           />
         )}
         {error !== undefined && (
-          <Alert type="error" showIcon message={error.message} style={{ marginBottom: 8 }} />
+          <Alert
+            type="error"
+            showIcon
+            message={streamErrorMessage(error, '请求失败，请稍后重试')}
+            style={{ marginBottom: 8 }}
+          />
         )}
         <Flex gap={8} align="flex-end">
           <Input.TextArea
@@ -565,6 +586,9 @@ function AssistantBubble({
   const text = textOf(msg);
   const thinking = thinkingOf(msg);
   const citations = citationsOf(msg);
+  const moderation = moderationOf(msg);
+  // 没过审的回答：正文已经被后端拦下，这里不渲染原文，只显示拦截提示
+  const blocked = moderation !== null && moderation.blocked;
   const isStreaming = busy && text === '';
 
   return (
@@ -610,6 +634,13 @@ function AssistantBubble({
           <Spin size="small" />
           <Text type="secondary">思考中…</Text>
         </Space>
+      ) : blocked ? (
+        <Alert
+          type="warning"
+          showIcon
+          message={moderation?.reason ?? '该回答未通过内容审核，已被拦截'}
+          description="回答内容触发了安全策略，已被拦截且不会保存到对话记录。"
+        />
       ) : (
         <div
           style={{
@@ -624,7 +655,7 @@ function AssistantBubble({
         </div>
       )}
 
-      {!isStreaming && text !== '' && (
+      {!isStreaming && !blocked && text !== '' && (
         <Space size={4} wrap>
           <Tooltip title={feedback === 1 ? '已点赞' : '有帮助'}>
             <Button

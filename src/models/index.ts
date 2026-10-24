@@ -23,6 +23,7 @@ export type {
 } from './Message';
 export { AuditLog } from './AuditLog';
 export type { AuditAction } from './AuditLog';
+export { CostLog } from './CostLog';
 export { PromptVersion } from './PromptVersion';
 export type { PromptVersionStatus } from './PromptVersion';
 export { TenantModel } from './TenantModel';

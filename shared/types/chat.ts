@@ -65,6 +65,18 @@ export type ChatDataTypes = {
     dropped_turns: number;
     message: string;
   };
+  /**
+   * 输出审核结果（D4）
+   *
+   * blocked=true 表示这条回答没过内容审核：
+   *  - 后端**没有**把原文写进 messages，只写了拦截文案
+   *  - 前端要把气泡里的正文换成拦截文案（原文已经在流里发出去了，收不回来）
+   */
+  moderation: {
+    blocked: boolean;
+    /** 拦截原因（给用户看的中文文案） */
+    reason: string;
+  };
 };
 
 /**

@@ -1,7 +1,10 @@
 import type { ReactElement } from 'react';
+import { useEffect, useState } from 'react';
 import { Navigate, Outlet, useLocation } from 'react-router-dom';
+import { Alert } from 'antd';
 import { SharedShellLayout } from '../SharedShellLayout';
 import type { SidebarItem } from '../SharedShellLayout';
+import { fetchAlerts, type AdminAlert } from '../../lib/adminConfig';
 import { DashboardOutlined, FileSearchOutlined, TeamOutlined, UploadOutlined, SlidersOutlined,
   EditOutlined,
   SettingOutlined,
@@ -72,8 +75,48 @@ export function AdminLayout(): ReactElement {
       roleHint="租户后台"
       sidebarItems={SIDEBAR}
     >
+      <AlertBanner />
       <Outlet />
     </SharedShellLayout>
+  );
+}
+
+/**
+ * 顶部告警条 —— D3 / D4 / D5（docs/09-观测方案.md §9.4「控制台告警条」）
+ *
+ * 三类信号：成本超预算、限流命中、安全拦截。
+ * 拉不到就当没有（后台不该因为告警接口挂了就整个打不开）。
+ */
+function AlertBanner(): ReactElement | null {
+  const [alerts, setAlerts] = useState<AdminAlert[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const data = await fetchAlerts();
+        if (!cancelled) {
+          setAlerts(data);
+        }
+      } catch {
+        // 拿不到就不显示
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (alerts.length === 0) {
+    return null;
+  }
+
+  return (
+    <div style={{ marginBottom: 16, display: 'flex', flexDirection: 'column', gap: 8 }}>
+      {alerts.map((a) => (
+        <Alert key={a.id} type={a.level} showIcon message={a.title} description={a.detail} />
+      ))}
+    </div>
   );
 }
 

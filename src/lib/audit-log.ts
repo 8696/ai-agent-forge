@@ -47,7 +47,9 @@ export async function writeAuditLog(params: WriteAuditLogParams): Promise<void> 
     const msg = err.message ?? String(e);
     const isTableMissing =
       err.original?.code === 'ER_NO_SUCH_TABLE' ||
-      /Table .*(doesn't|not) exist/i.test(msg);
+      /Table .*(doesn't|not) exist/i.test(msg) ||
+      // 模型没注册到 Sequelize 实例上（纯单元测试里 import 了 service 但没连 DB）
+      /needs to be added to a Sequelize instance/i.test(msg);
     const level = isTableMissing ? 'debug' : 'warn';
     logger[level](
       {

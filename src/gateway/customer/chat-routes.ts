@@ -6,7 +6,7 @@ import { config } from '../../config';
 import { Message, Session, Tenant } from '../../models';
 import { jwtAuth } from '../jwt-base';
 import { requireCustomer } from './middleware';
-import { AppError, NotFoundError } from '../../lib/errors';
+import { AppError, BudgetExceededError, ContentBlockedError, NotFoundError, RateLimitError } from '../../lib/errors';
 import { logger } from '../../logger';
 import type { TenantUserJwtPayload } from '../../lib/jwt';
 import {
@@ -26,6 +26,10 @@ import {
 } from '../../services/chat';
 import { resolveLlmSettings } from '../../services/llm-settings';
 import { resolveTenantPrompt } from '../../services/prompt-registry';
+import { checkRateLimit } from '../../services/rate-limit';
+import { guardUserInput } from '../../services/security-guard';
+import { getBudgetStatus } from '../../services/cost-tracking';
+import { getSettingValue } from '../../services/tenant-settings';
 
 /**
  * customer 对话路由 —— 详见 docs/12-b-需求-ai对话能力.md §B1（多轮对话 + LLM 流式）
@@ -151,12 +155,41 @@ customerChatRouter.post('/sessions/:id/messages', async (ctx) => {
   // 1) 会话归属（跨租户 / 跨用户一律 404）
   const session = await loadOwnedSession(sessionId, actor);
 
-  // 2) 租户级配置 + 凭据 —— 必须排在入参校验之前：
+  // 2) 限流（D5）。**必须在任何花钱的动作之前** —— 限流就是为了挡住
+  //    「疯狂重试 / 刷接口」这类请求，排在 LLM 调用后面就没有意义了。
+  const rateLimit = await checkRateLimit(session.tenant_id, actor.userId);
+  if (!rateLimit.allowed) {
+    const retryAfterSec = Math.max(1, Math.ceil(rateLimit.retryAfterMs / 1000));
+    ctx.set('Retry-After', String(retryAfterSec));
+    throw new RateLimitError(
+      `请求过于频繁，请 ${retryAfterSec} 秒后再试`,
+      rateLimit.retryAfterMs,
+    );
+  }
+
+  // 3) 成本预算（D3）。默认只告警不拦截；COST_BUDGET_BLOCK=true 时才真的拒。
+  //    只在「真的要拦」时才去读租户配置 —— 默认配置下这一段不产生任何 DB 查询
+  //    （告警那条路在流结束时算，见 src/services/chat.ts 的 onEnd）。
+  if (config.COST.BUDGET_BLOCK) {
+    const budgetRaw = await getSettingValue(session.tenant_id, 'monthly_token_budget');
+    const budget = typeof budgetRaw === 'number' ? budgetRaw : 0;
+    if (budget > 0) {
+      const status = await getBudgetStatus(session.tenant_id, budget);
+      if (status.exceeded) {
+        throw new BudgetExceededError('本月用量已超出预算，请联系管理员调整配额', {
+          used_tokens: status.used,
+          limit_tokens: status.limit,
+        });
+      }
+    }
+  }
+
+  // 4) 租户级配置 + 凭据 —— 必须排在入参校验之前：
   //    「单条消息多长算超长」是租户可配的（tenant_settings.max_input_chars），
   //    拿不到租户值就没法判。缺凭据也要在这里报出来，否则用户只看到一个空流。
   const llm = await resolveLlmSettings(session.tenant_id);
 
-  // 3) 入参（AI SDK 的 HttpChatTransport 协议：{ id, messages, trigger, messageId }）
+  // 5) 入参（AI SDK 的 HttpChatTransport 协议：{ id, messages, trigger, messageId }）
   const parsed = parseChatRequest(ctx.request.body as ChatRequestBody, llm.maxInputChars);
   if (llm.apiKey.trim() === '' || llm.baseUrl.trim() === '' || llm.model.trim() === '') {
     throw new AppError(
@@ -166,26 +199,40 @@ customerChatRouter.post('/sessions/:id/messages', async (ctx) => {
     );
   }
 
-  // 4) 落库 user 行。「重新生成」时不再重复插 —— 那条已经在库里了
+  // 6) 安全防护（D4）：脱敏 → 敏感词 → 注入检测。
+  //    **必须排在落库之前** —— 拦截的请求不能留下 user 行，
+  //    脱敏后的文本才是允许落库和送进模型的内容。
+  const guard = await guardUserInput(parsed.userText, {
+    tenantId: session.tenant_id,
+    userId: actor.userId,
+    llm: { apiKey: llm.apiKey, baseUrl: llm.baseUrl, model: llm.model },
+    ip: ctx.ip,
+  });
+  if (guard.blocked) {
+    throw new ContentBlockedError(guard.reason ?? '内容违规', guard.category ?? 'sensitive');
+  }
+  const safeUserText = guard.text;
+
+  // 7) 落库 user 行。「重新生成」时不再重复插 —— 那条已经在库里了
   if (!parsed.isRegenerate) {
-    await insertUserMessage(session, parsed.userText);
+    await insertUserMessage(session, safeUserText);
   }
 
-  // 5) 落库 assistant 占位行。重新生成时复用原行 id，
+  // 8) 落库 assistant 占位行。重新生成时复用原行 id，
   //    配合 createUIMessageStream 的 generateId 实现「覆盖同一条」而不是多插一行
   const assistantRowId = await insertAssistantPlaceholder(
     session,
     parsed.regenerateTargetId ?? undefined,
   );
 
-  // 6) 读历史（开流之前查完：DB 挂了还能正常返 500）
+  // 9) 读历史（开流之前查完：DB 挂了还能正常返 500）
   const historyRows = await loadHistoryRows(
     session.id,
     parsed.regenerateTargetId === null ? [] : [parsed.regenerateTargetId],
   );
 
-  // 7) 租户级配置：模型 / 温度 / 缓存开关（§C4）+ 生效的提示词正文（§C3）
-  //    都在开流之前查完；租户没配就回落 .env 进程默认 + 内置默认提示词
+  // 10) 租户级配置：模型 / 温度 / 缓存开关（§C4）+ 生效的提示词正文（§C3）
+  //     都在开流之前查完；租户没配就回落 .env 进程默认 + 内置默认提示词
   const tenant = await Tenant.findByPk(session.tenant_id);
   const tenantName = tenant?.name ?? '本公司';
   const llmSettings = await resolveLlmSettings(session.tenant_id);
@@ -203,10 +250,11 @@ customerChatRouter.post('/sessions/:id/messages', async (ctx) => {
     tenantName,
     tenantSettings: tenant?.settings ?? null,
     assistantRowId,
-    userText: parsed.userText,
+    userText: safeUserText,
     historyRows,
     llm: llmSettings,
     promptContent: resolvedPrompt.origin === 'tenant' ? resolvedPrompt.text : null,
+    ip: ctx.ip,
   });
 
   logger.info(

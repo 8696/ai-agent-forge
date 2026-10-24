@@ -150,6 +150,42 @@ const envSchema = z.object({
   JWT_SECRET: z.string().min(32, 'JWT_SECRET 至少 32 字符'),
   JWT_EXPIRES_IN: z.string().default('7d'),
 
+  // === 安全防护（D4 · docs/12-d-需求-运维稳定.md §D4）===
+  // 敏感数据脱敏（身份证 / 银行卡 / 手机号 → ***）：无条件开着，关掉就等于往历史里存明文
+  SECURITY_PII_MASK_ENABLED: z.preprocess(toBool, z.boolean().default(true)),
+  // 敏感词库审核（暴力 / 色情 / 政治 / 歧视）
+  SECURITY_SENSITIVE_WORDS_ENABLED: z.preprocess(toBool, z.boolean().default(true)),
+  // 提示词注入检测（规则层）
+  SECURITY_INJECTION_ENABLED: z.preprocess(toBool, z.boolean().default(true)),
+  // 注入检测的大模型二次确认策略：
+  //   confirm = 只在规则命中时问模型（默认，省钱）
+  //   always  = 每条输入都问模型（最严，也最贵）
+  //   off     = 不问模型，只用规则
+  SECURITY_INJECTION_LLM_MODE: z.enum(['confirm', 'always', 'off']).default('confirm'),
+  // 输出审核的大模型复核（默认关：一次回答要额外一次 LLM 调用，且 SSE 已经把字节发出去了，
+  // 复核只能事后纠正、不能真正「不返回给用户」；词库那层是常开的）
+  SECURITY_OUTPUT_LLM_CHECK: z.preprocess(toBool, z.boolean().default(false)),
+  // 审核类 LLM 调用的超时（毫秒）—— 超了就按「判不出来」处理，不拖住用户请求
+  SECURITY_GUARD_TIMEOUT_MS: z.coerce.number().int().positive().default(8000),
+
+  // === 限流（D5 · docs/12-d-需求-运维稳定.md §D5）===
+  RATE_LIMIT_ENABLED: z.preprocess(toBool, z.boolean().default(true)),
+  // 限流窗口长度（毫秒）
+  RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(60000),
+  // 单租户窗口内最大请求数（0 = 不限）；租户可在「租户设置」里覆盖
+  RATE_LIMIT_MAX_REQUESTS: z.coerce.number().int().nonnegative().default(100),
+  // 单用户窗口内最大请求数（0 = 不限）；租户可在「租户设置」里覆盖
+  RATE_LIMIT_MAX_REQUESTS_PER_USER: z.coerce.number().int().nonnegative().default(30),
+
+  // === 成本控制（D3 · docs/12-d-需求-运维稳定.md §D3）===
+  COST_TRACKING_ENABLED: z.preprocess(toBool, z.boolean().default(true)),
+  // 超过租户月度 token 阈值时是否**直接拒绝**新请求。
+  // 默认只告警不拦截 —— 拦掉意味着租户的用户直接用不了 AI，
+  // 那是运营决策（该在后台看到告警后自己降配额 / 提示用户），不该由平台默认替租户做。
+  COST_BUDGET_BLOCK: z.preprocess(toBool, z.boolean().default(false)),
+  // 自定义价格表（JSON，美元 / 100 万 token）：{"模型id": {"input": 0.6, "output": 2.2}}
+  COST_PRICE_TABLE: z.string().default(''),
+
   // === 日志 ===
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
 });
@@ -415,6 +451,31 @@ export const config = Object.freeze({
 
   CONFIG_ENCRYPTION_KEY: env.CONFIG_ENCRYPTION_KEY,
   CONFIG_ALLOW_PRIVATE_LLM_ENDPOINT: env.CONFIG_ALLOW_PRIVATE_LLM_ENDPOINT,
+
+  // 安全防护（D4）
+  SECURITY: Object.freeze({
+    PII_MASK_ENABLED: env.SECURITY_PII_MASK_ENABLED,
+    SENSITIVE_WORDS_ENABLED: env.SECURITY_SENSITIVE_WORDS_ENABLED,
+    INJECTION_ENABLED: env.SECURITY_INJECTION_ENABLED,
+    INJECTION_LLM_MODE: env.SECURITY_INJECTION_LLM_MODE,
+    OUTPUT_LLM_CHECK: env.SECURITY_OUTPUT_LLM_CHECK,
+    GUARD_TIMEOUT_MS: env.SECURITY_GUARD_TIMEOUT_MS,
+  }),
+
+  // 限流（D5）
+  RATE_LIMIT: Object.freeze({
+    ENABLED: env.RATE_LIMIT_ENABLED,
+    WINDOW_MS: env.RATE_LIMIT_WINDOW_MS,
+    MAX_REQUESTS: env.RATE_LIMIT_MAX_REQUESTS,
+    MAX_REQUESTS_PER_USER: env.RATE_LIMIT_MAX_REQUESTS_PER_USER,
+  }),
+
+  // 成本控制（D3）
+  COST: Object.freeze({
+    TRACKING_ENABLED: env.COST_TRACKING_ENABLED,
+    BUDGET_BLOCK: env.COST_BUDGET_BLOCK,
+    PRICE_TABLE: env.COST_PRICE_TABLE,
+  }),
 
   LOG_LEVEL: env.LOG_LEVEL,
 });

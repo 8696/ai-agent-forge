@@ -1,14 +1,24 @@
 import { Table, Column, Model, PrimaryKey, DataType, CreatedAt } from 'sequelize-typescript';
 
 /**
- * 操作类型枚举（F2 引入 + Step 12 会扩充）
- *  - TENANT_STATUS_CHANGE   F2：租户 status 被 SaaS 平台方改成 active/disabled
- *  - TENANT_EXPIRES_CHANGE  F2：租户 expires_at 被 SaaS 平台方改写（包括清空）
- *  - LOGIN_FAILURE ...      Step 12 引入
- *  - CONFIG_CHANGE ...      Step 12 引入
- *  ...
+ * 操作类型枚举（F2 引入 + D5 扩充）
+ *  - TENANT_STATUS_CHANGE      F2：租户 status 被 SaaS 平台方改成 active/disabled
+ *  - TENANT_EXPIRES_CHANGE     F2：租户 expires_at 被 SaaS 平台方改写（包括清空）
+ *  - RATE_LIMIT_EXCEEDED       D5：请求被限流拦下（429）
+ *  - PROMPT_INJECTION_BLOCKED  D4：输入被注入检测拦下（403）
+ *  - CONTENT_MODERATION_BLOCKED D4：输入 / 输出被内容审核拦下（403）
+ *  - COST_BUDGET_EXCEEDED      D3：租户本月 token 用量超阈值（告警）
+ *
+ * 写入时不强校验（writeAuditLog 的 action 收 string），加类型只是给调用处
+ * 一个提示 —— 不想因为漏改联合类型就编译不过。
  */
-export type AuditAction = 'TENANT_STATUS_CHANGE' | 'TENANT_EXPIRES_CHANGE';
+export type AuditAction =
+  | 'TENANT_STATUS_CHANGE'
+  | 'TENANT_EXPIRES_CHANGE'
+  | 'RATE_LIMIT_EXCEEDED'
+  | 'PROMPT_INJECTION_BLOCKED'
+  | 'CONTENT_MODERATION_BLOCKED'
+  | 'COST_BUDGET_EXCEEDED';
 
 /**
  * 审计日志表 —— 详见 docs/05-a-数据模型-mysql.md §5.1

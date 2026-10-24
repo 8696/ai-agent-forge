@@ -13,6 +13,7 @@ import { PromptVersion } from './models/PromptVersion';
 import { TenantModel } from './models/TenantModel';
 import { TenantSetting } from './models/TenantSetting';
 import { AuditLog } from './models/AuditLog';
+import { CostLog } from './models/CostLog';
 
 /**
  * Sequelize 实例（单例）。
@@ -56,6 +57,7 @@ function buildSequelize(): SequelizeType {
   TenantModel,
   TenantSetting,
   AuditLog,
+  CostLog,
 ]);
   return instance;
 }

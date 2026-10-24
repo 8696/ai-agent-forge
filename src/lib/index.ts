@@ -32,3 +32,8 @@ export {
 } from './login-lock';
 export { writeAuditLog, type WriteAuditLogParams } from './audit-log';
 export { assertTenantAccessible } from './tenant-gate';
+export { consumeRateLimit, peekRateLimit, resetRateLimits } from './rate-limit';
+export type { RateLimitRule, RateLimitOutcome } from './rate-limit';
+export { withTimeout } from './async';
+export { estimateCostUsd, findModelPrice } from './cost-pricing';
+export type { ModelPrice } from './cost-pricing';

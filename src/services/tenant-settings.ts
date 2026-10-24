@@ -107,6 +107,30 @@ export const SETTINGS_REGISTRY: SettingSpec[] = [
     max: 32000,
     fallback: 0,
   },
+  {
+    key: 'monthly_token_budget',
+    label: '月度 token 预算',
+    category: '成本',
+    description:
+      '本租户每月可用的 token 上限，**0 = 不限**。超了会写告警（后台顶栏 + 审计日志）；' +
+      '是否直接拒绝新请求由服务端 .env 的 COST_BUDGET_BLOCK 决定',
+    type: 'number',
+    min: 0,
+    max: 1_000_000_000,
+    fallback: 0,
+  },
+  {
+    key: 'rate_limit_per_minute',
+    label: '每分钟请求上限',
+    category: '安全',
+    description:
+      '本租户每分钟最多能发多少轮对话，**0 = 用平台默认**（.env 的 RATE_LIMIT_MAX_REQUESTS）。' +
+      '超了返回 429',
+    type: 'number',
+    min: 0,
+    max: 100000,
+    fallback: 0,
+  },
 ];
 
 const REGISTRY_BY_KEY = new Map(SETTINGS_REGISTRY.map((s) => [s.key, s]));
