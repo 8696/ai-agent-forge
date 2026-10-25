@@ -7,7 +7,7 @@ const { Text } = Typography;
 
 /**
  * 页脚右侧「当前激活模型」展示组件（system / admin / customer 三个 layout 共用）
- * 详见 docs/04-a §0.2 + docs/06-API接口.md §6.4 + docs/04-d §7.x
+ * 详见 docs/04-a §0.2 + docs/03-b-技术栈-后端栈.md §6.4 + docs/04-d §7.x
  *
  * 展示规则：
  *  - LLM：`provider · model`，未拿到 → 「—」

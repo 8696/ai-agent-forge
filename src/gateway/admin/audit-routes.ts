@@ -18,9 +18,9 @@ import { listAuditActions, listAuditLogs } from '../../lib/audit-log';
  * 系统级日志（tenant_id IS NULL —— 平台方改租户启停那类）**不会**出现在这里，
  * 详见 listAuditLogs 的注释。
  *
- * ⚠️ **本文件的路由当前是临时挂在 adminUserRouter 上的**
- *    （见 src/gateway/admin/index.ts）—— 因为本轮不能动 src/server.ts。
- *    迁移到 server.ts 常规注册方式后，这里的 export 也要一起挪。
+ * 路由由 `src/server.ts` 常规注册（`adminAuditRouter`）——
+ * ⚠️ 以前这里挂的是 adminUserRouter，注释写着「本轮不能动 src/server.ts」，
+ *    那个限制早就没了，注释是过期的。
  */
 
 export const adminAuditRouter = new Router({ prefix: '/api/v1/admin' });

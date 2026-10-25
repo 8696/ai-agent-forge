@@ -1,5 +1,5 @@
 /**
- * 自定义错误类 —— 详见 docs/03-技术栈与规范.md §A.13
+ * 自定义错误类 —— 详见 docs/03-a-技术栈-工程化规范.md §A.13
  */
 export class AppError extends Error {
   public readonly code: string;
@@ -30,6 +30,20 @@ export class AuthError extends AppError {
 export class NotFoundError extends AppError {
   constructor(resource: string) {
     super(`${resource} not found`, 'NOT_FOUND', 404);
+  }
+}
+
+/**
+ * 已认证但不允许做这件事 —— 403。
+ *
+ * 典型场景：账号被强制要求改密码（`must_change_password`）时，
+ * 除了 `/me` 和 `/change-password` 之外的请求全被挡住。
+ * 跟 401 的区别很关键 —— **401 会让前端以为「登录过期了」**，
+ * 从而把用户踢回登录页（而他正被要求改密，改完才能用）。
+ */
+export class ForbiddenError extends AppError {
+  constructor(message = 'Forbidden', details?: unknown) {
+    super(message, 'FORBIDDEN', 403, details);
   }
 }
 

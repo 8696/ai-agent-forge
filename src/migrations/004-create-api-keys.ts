@@ -2,7 +2,7 @@ import { DataTypes, type QueryInterface } from 'sequelize';
 import type { MigrationFn } from 'umzug';
 
 /**
- * 创建 api_keys 表 —— 对应 docs/05-数据模型.md §5.1
+ * 创建 api_keys 表 —— 对应 docs/05-a-数据模型-mysql.md §5.1
  * 租户 API 密钥；DB 只存 hash，完整 key 仅创建时返回一次
  *
  * API key 的生成 / 吊销 / 校验端点本身在 E1（Step 9+），Step 2 只建表

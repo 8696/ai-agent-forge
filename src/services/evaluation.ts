@@ -10,6 +10,7 @@ import {
   type EvaluationScores,
 } from '../models';
 import { logger } from '../logger';
+import { withRetry } from '../lib/retry';
 import { config } from '../config';
 import { buildContextWindow } from './chat';
 import { hybridSearch } from '../rag/hybrid-search';
@@ -803,14 +804,27 @@ async function generateAnswer(input: {
   });
 
   const anthropic = createAnthropic({ apiKey: llm.apiKey, baseURL: llm.baseUrl });
-  const result = await generateText({
-    model: anthropic(llm.model),
-    // 系统提示词必须走 system 参数（塞进 messages 的 system 角色会被智谱 400）
-    system: window.systemText,
-    messages: [{ role: 'user', content: input.question }],
-    temperature: llm.temperature,
-    maxOutputTokens: llm.maxOutputTokens,
-  });
+  // ⚠️ maxRetries: 0 —— 重试统一由 withRetry 负责（带抖动，见 src/lib/retry.ts）
+  const result = await withRetry(
+    () =>
+      generateText({
+        model: anthropic(llm.model),
+        // 系统提示词必须走 system 参数（塞进 messages 的 system 角色会被智谱 400）
+        system: window.systemText,
+        messages: [{ role: 'user', content: input.question }],
+        temperature: llm.temperature,
+        maxOutputTokens: llm.maxOutputTokens,
+        maxRetries: 0,
+      }),
+    {
+        onRetry: (attempt: number, delayMs: number, err: unknown) => {
+          logger.warn(
+            { attempt, delayMs, err: err instanceof Error ? err.message : String(err) },
+            'LLM 调用失败，准备重试',
+          );
+        },
+      },
+  );
 
   const usage = {
     input_tokens: result.usage.inputTokens ?? 0,
@@ -853,23 +867,35 @@ async function judgeAnswer(input: {
   const { llm } = input;
   const anthropic = createAnthropic({ apiKey: llm.apiKey, baseURL: llm.baseUrl });
 
-  const result = await generateText({
-    model: anthropic(llm.model),
-    system: JUDGE_SYSTEM_PROMPT,
-    messages: [
-      {
-        role: 'user',
-        content: renderJudgeInput({
-          question: input.question,
-          referenceAnswer: input.referenceAnswer,
-          answer: input.answer,
-        }),
+  const result = await withRetry(
+    () =>
+      generateText({
+        model: anthropic(llm.model),
+        system: JUDGE_SYSTEM_PROMPT,
+        messages: [
+          {
+            role: 'user',
+            content: renderJudgeInput({
+              question: input.question,
+              referenceAnswer: input.referenceAnswer,
+              answer: input.answer,
+            }),
+          },
+        ],
+        // 裁判要稳定：温度 0
+        temperature: 0,
+        maxOutputTokens: 800,
+        maxRetries: 0,
+      }),
+    {
+        onRetry: (attempt: number, delayMs: number, err: unknown) => {
+          logger.warn(
+            { attempt, delayMs, err: err instanceof Error ? err.message : String(err) },
+            'LLM 调用失败，准备重试',
+          );
+        },
       },
-    ],
-    // 裁判要稳定：温度 0
-    temperature: 0,
-    maxOutputTokens: 800,
-  });
+  );
 
   const usage = {
     input_tokens: result.usage.inputTokens ?? 0,

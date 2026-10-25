@@ -101,5 +101,5 @@
 | LLM API 挂   | 高   | Vercel AI SDK 自动重试 + 主备切换（换 model 参数）          |
 | 成本失控     | 高   | 每租户 token 配额 + 超阈值告警 + Prompt Caching + lru-cache |
 | 提示词注入   | 高   | 规则匹配 + 大模型二次确认 + 命中转人工                      |
-| 检索召回率低 | 中   | 混合检索（BM25 + 向量）+ bge-reranker 重排序                |
+| 检索召回率低 | 中   | 混合检索（BM25 + 向量）+ bge-reranker 重排序（需在 `.env` 配 `RERANK_API_URL` 才生效） |
 | 数据泄露     | 中   | 脱敏（身份证 / 银行卡 / 手机号）+ audit_logs 全留痕         |

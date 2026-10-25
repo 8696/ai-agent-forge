@@ -1,6 +1,6 @@
 /**
  * 模型 barrel —— 对外只通过此文件导出，禁止外部直接 import 具体模型文件。
- * 详见 docs/03-技术栈-工程化规范.md §A.15
+ * 详见 docs/03-a-技术栈-工程化规范.md §A.15
  */
 export { Tenant } from './Tenant';
 export type { TenantPlan, TenantStatus, TenantSettings } from './Tenant';
@@ -19,7 +19,7 @@ export {
 } from './UserMemory';
 export { SystemUser } from './SystemUser';
 export type { SystemUserRole } from './SystemUser';
-export { ApiKey } from './ApiKey';
+export { ApiKey, type ApiKeyScope } from './ApiKey';
 export { Document } from './Document';
 export type { DocumentStatus, DocumentFileType, DocumentMetadata } from './Document';
 export { Session } from './Session';

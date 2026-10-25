@@ -3,6 +3,9 @@
  *
  * - auth-routes  只暴露 auth（POST /login）
  * - chat-routes  会话 CRUD + 历史消息 + ★ 流式对话（SSE）+ 反馈
+ * - memory-routes  我的长期记忆（B4）
+ * - profile-routes  租户信息 + 首页配置（B7 前台首页工作台）
+ * - knowledge-routes 知识库文档概览（只读元信息，B7）
  * - middleware   requireCustomer（role=customer）
  *
  * 另外导出 `runChatTurn` —— E1 的公开挂件（/api/v1/public/widget/*）和
@@ -19,4 +22,6 @@ export { customerAuthRouter } from './auth-routes';
 export { customerChatRouter, runChatTurn } from './chat-routes';
 export type { ChatTurnOptions, ChatTurnResult } from './chat-routes';
 export { customerMemoryRouter } from './memory-routes';
+export { customerProfileRouter } from './profile-routes';
+export { customerKnowledgeRouter } from './knowledge-routes';
 export { requireCustomer } from './middleware';

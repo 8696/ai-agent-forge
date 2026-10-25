@@ -1,6 +1,7 @@
 import type { ReactElement } from 'react';
-import { Navigate, Outlet, useLocation } from 'react-router-dom';
+import { Outlet, useLocation } from 'react-router-dom';
 import { SharedShellLayout } from '../SharedShellLayout';
+import { RequireAuth } from '../../components/RequireAuth';
 import type { SidebarItem } from '../SharedShellLayout';
 import { DashboardOutlined, ShopOutlined } from '@ant-design/icons';
 
@@ -22,40 +23,24 @@ const SIDEBAR: SidebarItem[] = [
 export function SystemLayout(): ReactElement {
   const location = useLocation();
 
-  if (location.pathname === '/system/login') {
+  // 登录页 / 改密页：整屏（AuthShell 自带整页背景），不套后台外壳。
+  // ⚠️ system 用户**没有** must_change_password 标志（`system_users` 表里没这列），
+  //    所以这里不存在「强制改密」—— 平台方账号由平台自己管。
+  if (location.pathname === '/system/login' || location.pathname === '/system/change-password') {
     return <Outlet />;
   }
 
-  if (typeof window !== 'undefined') {
-    const token = window.localStorage.getItem('agent_platform_token');
-    if (token === null) {
-      return <Navigate to="/system/login" replace />;
-    }
-    const roleFromToken = readRoleFromToken(token);
-    if (roleFromToken !== null && roleFromToken !== 'system') {
-      return <Navigate to="/" replace />;
-    }
-  }
-
   return (
-    <SharedShellLayout
-      role="system"
-      brandLabel="平台管理"
-      roleHint="平台管理"
-      sidebarItems={SIDEBAR}
-    >
-      <Outlet />
-    </SharedShellLayout>
+    <RequireAuth role="system" loginPath="/system/login">
+      <SharedShellLayout
+        role="system"
+        brandLabel="平台管理"
+        roleHint="平台管理"
+        sidebarItems={SIDEBAR}
+      >
+        <Outlet />
+      </SharedShellLayout>
+    </RequireAuth>
   );
 }
 
-function readRoleFromToken(token: string): string | null {
-  try {
-    const parts = token.split('.');
-    if (parts.length !== 3) return null;
-    const payload = JSON.parse(atob(parts[1] ?? '')) as { role?: unknown };
-    return typeof payload.role === 'string' ? payload.role : null;
-  } catch {
-    return null;
-  }
-}

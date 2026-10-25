@@ -5,7 +5,9 @@ import { pipeUIMessageStreamToResponse } from 'ai';
 import { config } from '../../config';
 import { Session, Tenant } from '../../models';
 import { AppError, NotFoundError, ValidationError } from '../../lib/errors';
-import { apiKeyAuth, type ApiKeyPrincipal } from '../../lib/api-key-auth';
+import { apiKeyAuth, requireApiScope, type ApiKeyPrincipal } from '../../lib/api-key-auth';
+import { hybridSearch } from '../../rag/hybrid-search';
+import { getSettingValue } from '../../services/tenant-settings';
 import { runChatTurn } from '../customer';
 
 /**
@@ -19,8 +21,14 @@ import { runChatTurn } from '../customer';
  *    它能访问什么完全由「这把 key 属于哪个租户」决定。
  *
  * 端点：
+ *   GET  /search       只读：知识库检索（**不调 LLM、不花钱、不留会话**）
  *   POST /chat         ★ 提问（一次性 JSON 回答）
  *   POST /chat/stream  ★ 提问（SSE 流式）
+ *
+ * 权限分级（docs/10-安全方案.md §10）：
+ *   read  = 只调 GET /search
+ *   write = 只读 + 发起对话（默认；存量 key 全是这个）
+ *   admin = 预留（目前对外 API 没有 admin 专属端点）
  *
  * 两条端点复用跟 customer 前台**完全相同**的 RAG + LLM 链路
  * （runChatTurn，见 src/gateway/customer/chat-routes.ts）：
@@ -185,9 +193,60 @@ async function collectStream(stream: ReadableStream<unknown>): Promise<Collected
   return { text, citations, moderation, errorText };
 }
 
+// ===== ★ 只读：知识库检索 =====
+
+/**
+ * 只读端点 —— **不调 LLM、不花钱、不留会话记录**。
+ *
+ * 存在的意义：让「只读」这个 scope 有意义。
+ * 一把 read 级的 key 只能查知识库（拿原文片段），
+ * 发起对话会被闸门挡下（403）—— 因为对话要花钱、要写 messages。
+ *
+ * 外部集成方的典型用法：「帮我查一下文档里怎么写的」—— 拿到原文片段自己处理，
+ * 不用把问题交给模型。
+ */
+const searchQuerySchema = z.object({
+  /** 检索词 */
+  q: z.string().trim().min(1, 'q 不能为空').max(500),
+  /** 返回几条 */
+  top_k: z.coerce.number().int().min(1).max(20).default(5),
+});
+
+publicApiRouter.get('/search', requireApiScope('read'), async (ctx) => {
+  const principal = currentApiKey(ctx);
+  const input = searchQuerySchema.parse(ctx.request.query);
+  const tenant = await resolveTenant(ctx, principal);
+
+  // 租户可以在后台关掉自己的重排（docs/12-c §C4）
+  const rerankEnabled = await getSettingValue(tenant.id, 'rerank_enabled');
+
+  const startedAt = Date.now();
+  const hits = await hybridSearch({
+    query: input.q,
+    tenantId: tenant.id,
+    topK: input.top_k,
+    rerankEnabled: rerankEnabled === null ? undefined : rerankEnabled === true,
+  });
+
+  ctx.body = {
+    query: input.q,
+    took_ms: Date.now() - startedAt,
+    hits: hits.map((h) => ({
+      doc_id: h.doc_id,
+      chunk_index: h.chunk_index,
+      source: h.source,
+      text: h.text,
+      /** 相关度 [0,1]（重排生效时是重排分，否则是归一化 RRF 分） */
+      score: Number(h.score.toFixed(4)),
+      /** 哪几路召回的 */
+      sources: h.sources,
+    })),
+  };
+});
+
 // ===== ★ 提问（JSON）=====
 
-publicApiRouter.post('/chat', async (ctx) => {
+publicApiRouter.post('/chat', requireApiScope('write'), async (ctx) => {
   const principal = currentApiKey(ctx);
   const input = askBodySchema.parse(ctx.request.body ?? {});
   const tenant = await resolveTenant(ctx, principal);
@@ -225,7 +284,7 @@ publicApiRouter.post('/chat', async (ctx) => {
 
 // ===== ★ 提问（SSE 流式）=====
 
-publicApiRouter.post('/chat/stream', async (ctx) => {
+publicApiRouter.post('/chat/stream', requireApiScope('write'), async (ctx) => {
   const principal = currentApiKey(ctx);
   const input = askBodySchema.parse(ctx.request.body ?? {});
   const tenant = await resolveTenant(ctx, principal);

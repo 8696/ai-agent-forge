@@ -1,4 +1,4 @@
-import { Op } from 'sequelize';
+import { Op, type Transaction } from 'sequelize';
 import { getSequelize } from '../db';
 import { TenantSetting } from '../models';
 import { ValidationError } from '../lib/errors';
@@ -32,9 +32,32 @@ export interface SettingSpec {
   /** 类型 number 时的取值范围 */
   min?: number;
   max?: number;
+  /**
+   * 类型 string 时的字数上限。
+   * 字符串类型以前没有配置项，这个上限是随「首页文案」一起加的 ——
+   * 没有上限的话租户能往 KV 里塞几 MB 的文本，后台页面会被撑爆。
+   */
+  maxLength?: number;
+  /**
+   * 类型 string 时是否为「一行一条」的列表（后台渲染成多行输入框）。
+   * 存进去的仍然是普通字符串，读取方按换行拆开。
+   */
+  multiline?: boolean;
   /** 进程级默认值（配置表与 .env 的 CHAT_* 对齐） */
   fallback: number | boolean | string;
+  /**
+   * **true = 不在通用配置页渲染**（但仍可读写、仍要过类型校验）。
+   *
+   * 用它装「由专用页面管理」的键 —— 比如 `prompt_version` 只能通过
+   * 「提示词配置」页的发布 / 回滚来改，通用配置页不该给它一个自由输入框
+   * （填错版本号 = 提示词静默回落内置默认，很难排查）。
+   */
+  hidden?: boolean;
 }
+
+/** 多行文本的行数 / 单行长度上限（推荐问题这类「一行一条」的列表） */
+const MULTILINE_MAX_LINES = 8;
+const MULTILINE_MAX_LINE_LENGTH = 100;
 
 /**
  * 已知配置项注册表
@@ -74,6 +97,17 @@ export const SETTINGS_REGISTRY: SettingSpec[] = [
     min: 100,
     max: 20000,
     fallback: 2500,
+  },
+  {
+    key: 'rerank_enabled',
+    label: '开启重排序',
+    category: '知识库',
+    description:
+      '是否对召回结果做重排：用重排模型把候选片段逐条跟问题对读再打分，改掉 RRF 融合的排序。' +
+      '**排序通常更准**（尤其「问法跟原文不一样」的场景），代价是每轮多一次模型调用、更慢一点。' +
+      '**关掉不影响能不能召回**，只是退回 RRF 排序。平台没配重排服务时这项无效',
+    type: 'boolean',
+    fallback: true,
   },
   {
     key: 'context_token_budget',
@@ -190,6 +224,89 @@ export const SETTINGS_REGISTRY: SettingSpec[] = [
     max: 4000,
     fallback: 600,
   },
+  {
+    key: 'home_welcome_message',
+    label: '首页欢迎语',
+    category: '首页',
+    description:
+      '显示在用户中心首页顶部的欢迎语。**留空则用默认文案**（自动带上租户名），' +
+      '不会让首页变成一片空白',
+    type: 'string',
+    maxLength: 200,
+    fallback: '',
+  },
+  {
+    key: 'home_suggested_questions',
+    label: '首页推荐问题',
+    category: '首页',
+    description:
+      '首页「你可以这样问」的问题列表，**一行一个**。点一下就直接开新会话发出去，' +
+      '所以要写成用户真的会问出口的话（而不是「请问有什么可以帮我」这种）。' +
+      '**留空则首页不显示这一块**。最多 8 条，每条 100 字以内',
+    type: 'string',
+    multiline: true,
+    maxLength: 2000,
+    fallback: '',
+  },
+  {
+    key: 'query_rewrite_enabled',
+    label: '开启查询改写',
+    category: '知识库',
+    description:
+      '把口语化的问题改写成更贴近知识库原文的检索词，提高召回率。' +
+      '**默认关闭** —— 每轮会多一次模型调用（多 1~3 秒 + 一份花费），' +
+      '而短问题（「年假几天」）改写基本没收益。只有「问法跟原文差很远」时收益才明显',
+    type: 'boolean',
+    fallback: false,
+  },
+  {
+    key: 'alert_p95_latency_ms',
+    label: 'p95 延迟告警阈值',
+    category: '成本',
+    description:
+      '今天对话的 p95 延迟超过这个毫秒数就告警。**默认 5000 ms（5 秒）** —— ' +
+      '延迟高的常见原因是模型慢或检索命中太多。设 0 = 不看这一项',
+    type: 'number',
+    min: 0,
+    max: 120000,
+    fallback: 5000,
+  },
+  {
+    key: 'alert_error_rate',
+    label: '错误率告警阈值',
+    category: '成本',
+    description:
+      '今天对话的错误率超过这个比例就告警。**默认 0.05（5%）**。' +
+      '注意「客户端断开」不算错误（算进错误率会让指标失真）。设 0 = 不看这一项',
+    type: 'number',
+    min: 0,
+    max: 1,
+    fallback: 0.05,
+  },
+  {
+    key: 'alert_single_cost_usd',
+    label: '单条对话成本告警阈值',
+    category: '成本',
+    description:
+      '单条对话的花费（美元，估算值）超过这个数就告警。**默认 0.5**。' +
+      '通常是检索命中太多或提示词太长。设 0 = 不看这一项',
+    type: 'number',
+    min: 0,
+    max: 100,
+    fallback: 0.5,
+  },
+  {
+    key: 'prompt_version',
+    label: '当前生效的提示词版本',
+    category: '提示词',
+    description:
+      '指向本租户哪一版提示词生效。**在「提示词配置」页发布或回滚时自动改这里**，' +
+      '通用配置页不提供输入框（填错版本号会让提示词静默回落成内置默认，很难排查）',
+    type: 'string',
+    maxLength: 50,
+    fallback: '',
+    hidden: true,
+  },
 ];
 
 const REGISTRY_BY_KEY = new Map(SETTINGS_REGISTRY.map((s) => [s.key, s]));
@@ -219,7 +336,41 @@ export function coerceSettingValue(spec: SettingSpec, raw: unknown): string {
     }
     return raw ? 'true' : 'false';
   }
-  return String(raw);
+  const text = String(raw);
+  if (spec.maxLength !== undefined && text.length > spec.maxLength) {
+    throw new ValidationError(`${spec.label}：不能超过 ${spec.maxLength} 个字符`);
+  }
+  if (spec.multiline === true) {
+    // 「一行一条」的列表：去掉空行和首尾空白后存回去，读取方按换行拆
+    const lines = text
+      .split('\n')
+      .map((l) => l.trim())
+      .filter((l) => l !== '');
+    if (lines.length > MULTILINE_MAX_LINES) {
+      throw new ValidationError(`${spec.label}：最多 ${MULTILINE_MAX_LINES} 行`);
+    }
+    for (const line of lines) {
+      if (line.length > MULTILINE_MAX_LINE_LENGTH) {
+        throw new ValidationError(`${spec.label}：每行不能超过 ${MULTILINE_MAX_LINE_LENGTH} 个字`);
+      }
+    }
+    return lines.join('\n');
+  }
+  return text;
+}
+
+/**
+ * 把「一行一条」的字符串配置拆成数组。
+ * 空值 → 空数组（调用方据此决定「不显示这一块」）。
+ */
+export function parseMultilineList(raw: string | null | undefined): string[] {
+  if (raw === null || raw === undefined || raw === '') {
+    return [];
+  }
+  return raw
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => l !== '');
 }
 
 /** 库里的字符串 → 真正的值；解析不出来就回落到 spec.fallback */
@@ -249,6 +400,10 @@ export interface SettingView {
   type: SettingValueType;
   min?: number;
   max?: number;
+  /** 类型 string 时的字数上限 */
+  maxLength?: number;
+  /** 类型 string 时是否渲染成多行输入框 */
+  multiline?: boolean;
   /** 生效中的值（租户覆盖 or 进程默认） */
   value: number | boolean | string;
   /** 平台默认值，页面上用来提示 */
@@ -263,7 +418,8 @@ export async function listSettings(tenantId: string): Promise<SettingView[]> {
   const rows = await TenantSetting.findAll({ where: { tenant_id: tenantId } });
   const byKey = new Map(rows.map((r) => [r.config_key, r]));
 
-  return SETTINGS_REGISTRY.map((spec) => {
+  // hidden 的键（prompt_version）不在通用配置页露出 —— 它由「提示词配置」页管理
+  return SETTINGS_REGISTRY.filter((spec) => spec.hidden !== true).map((spec) => {
     const row = byKey.get(spec.key);
     return {
       key: spec.key,
@@ -273,6 +429,8 @@ export async function listSettings(tenantId: string): Promise<SettingView[]> {
       type: spec.type,
       ...(spec.min === undefined ? {} : { min: spec.min }),
       ...(spec.max === undefined ? {} : { max: spec.max }),
+      ...(spec.maxLength === undefined ? {} : { maxLength: spec.maxLength }),
+      ...(spec.multiline === undefined ? {} : { multiline: spec.multiline }),
       value: parseSettingValue(spec, row?.config_value),
       fallback: spec.fallback,
       overridden: row !== undefined,
@@ -342,13 +500,17 @@ export async function saveSettings(
   tenantId: string,
   userId: string,
   payload: Record<string, unknown>,
+  opts?: { transaction?: Transaction | undefined; allowHidden?: boolean | undefined },
 ): Promise<void> {
   const sequelize = getSequelize();
-  await sequelize.transaction(async (t) => {
+  const run = async (t: Transaction): Promise<void> => {
     for (const [key, raw] of Object.entries(payload)) {
       const spec = settingSpec(key);
       if (spec === undefined) {
         throw new ValidationError(`未知的配置项：${key}`);
+      }
+      if (spec.hidden === true && opts?.allowHidden !== true) {
+        throw new ValidationError(`「${spec.label}」由专用页面管理，请在对应页面修改`);
       }
       if (raw === null) {
         await TenantSetting.destroy({ where: { tenant_id: tenantId, config_key: key }, transaction: t });
@@ -370,5 +532,10 @@ export async function saveSettings(
         await existing.save({ transaction: t });
       }
     }
-  });
+  };
+  if (opts?.transaction) {
+    await run(opts.transaction);
+  } else {
+    await sequelize.transaction(run);
+  }
 }

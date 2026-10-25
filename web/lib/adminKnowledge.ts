@@ -50,10 +50,12 @@ export interface SearchHit {
   chunk_index: number;
   source: string;
   text: string;
-  /** 归一化相关度 [0,1] */
+  /** 相关度 [0,1]（重排生效时是重排分，否则是归一化 RRF 分） */
   score: number;
   /** 原始 RRF 分（0.016~0.033） */
   rrf_score: number;
+  /** 重排原始分；null = 这一条没经过重排 */
+  rerank_score: number | null;
   /** 命中来源：vector=语义 / bm25=关键词 */
   sources: Array<'vector' | 'bm25'>;
   vector_rank: number | null;
@@ -63,6 +65,8 @@ export interface SearchHit {
 export interface SearchResult {
   query: string;
   took_ms: number;
+  /** 这次的排序是不是重排模型给的（false = 没配服务 / 租户关了 / 调用失败降级） */
+  rerank_applied: boolean;
   hits: SearchHit[];
 }
 

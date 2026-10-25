@@ -8,7 +8,11 @@
 > `prompt_versions` / `tenant_models` / `tenant_settings` / `audit_logs` / `cost_logs` /
 > `traces` / `spans` / `evaluation_datasets` / `evaluation_items` / `evaluation_runs` /
 > `evaluation_results`。
-> 另有 `tools` / `missions` 两张是 **Phase 2 规格**（工具管理 / 工作流），本期未建表。
+> 另有 `tools` / `missions` 两张是 **暂不做的规格**（工具管理 / 工作流），本期未建表 ——
+> 这两条需求的定位见 [12-b §B3 §B5 §B6](./12-b-需求-ai对话能力.md) 与
+> [12-c §C2](./12-c-需求-管理员可配置.md)（2026-10-25 起从「Phase 2」改成
+> 「暂不做 · 等外部系统接入需求」）。两张表的 DDL 已于 2026-10-25 修正过，
+> 下方每张表下面都写了改了什么、为什么。
 
 MySQL 8.0，字符集 `utf8mb4_unicode_ci`。所有时间字段用 `DATETIME(6)`（微秒精度，便于 trace 分析），主键统一 `VARCHAR(36)`（UUID）。
 
@@ -125,7 +129,7 @@ CREATE TABLE messages (
 > 表不存在 → 建全；表存在 → 补缺列、补缺索引，并 `MODIFY` 把 `channel` 收敛到含 `web` 的定义
 > （MySQL 不支持直接给 ENUM 追加值，只能 MODIFY）。
 >
-> **`tool_results` 的语义被重载**：DDL 原意是「工具调用的输出」（Phase 2 才有工具），
+> **`tool_results` 的语义被重载**：DDL 原意是「工具调用的输出」（工具调用做起来才有值），
 > 但 B1 需要把 AI SDK 的 `data-citations` / `data-status` 这些 data part 落库
 > （否则刷新页面后历史回答的「来源」角标就丢了），所以本期这一列只装
 > `{ data_parts: [...] }`。**做工具调用之前必须先加一条迁移把 data part 挪走**
@@ -170,15 +174,54 @@ CREATE TABLE documents (
 ```sql
 CREATE TABLE tools (
   id VARCHAR(36) PRIMARY KEY COMMENT 'UUID',
+  tenant_id VARCHAR(36) NOT NULL COMMENT '所属租户',
   name VARCHAR(100) NOT NULL COMMENT '工具名（英文，调用时用）',
   description TEXT COMMENT '工具描述（给 LLM 看，决定是否调用）',
-  type ENUM('builtin', 'mcp') DEFAULT 'builtin' COMMENT 'builtin=项目自带；mcp=外部 MCP 服务',
-  config JSON COMMENT '配置：mcp_server_url / mcp_server_path / headers 等',
+  type ENUM('builtin', 'http', 'mcp') DEFAULT 'builtin' COMMENT 'builtin=平台自带；http=租户自己的 HTTP 接口；mcp=外部 MCP 服务',
+  config JSON COMMENT '配置：builtin=工具标识；http=url/method/headers/body_template/parameters；mcp=mcp_server_url/mcp_server_path/headers',
   enabled BOOLEAN DEFAULT TRUE COMMENT '是否启用',
   created_at DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6) COMMENT '创建时间',
-  INDEX idx_tenant_name (tenant_id, name)
-) COMMENT '工具注册表（Phase 2 启用）';
+  UNIQUE INDEX uk_tenant_name (tenant_id, name),
+  INDEX idx_tenant_enabled (tenant_id, enabled)
+) COMMENT '工具注册表（暂不做 · 等外部系统接入需求）';
 ```
+
+> ⚠️ **2026-10-25 修正**（原设计稿的三个错，已在上方改掉）：
+>
+> - **漏了 `tenant_id` 列**：原 DDL 只有 `INDEX idx_tenant_name (tenant_id, name)`，
+>   却没有 `tenant_id` 这个列 —— 按原样建表会直接报 MySQL 1072
+>   （Key column 'tenant_id' doesn't exist in table）。
+> - **索引不是唯一的**：C2 的验收要求「工具名在租户内唯一，重名返回 400」，
+>   原 `INDEX` 不保证唯一 → 改成 `UNIQUE INDEX uk_tenant_name (tenant_id, name)`，
+>   唯一性由数据库兜（应用层仍要 catch 唯一键冲突返 400）。
+> - **`type` 枚举少了一类**：原本只有 `builtin` / `mcp`。
+>   `builtin` 的内置工具集本期不定，`mcp` 又要求客户那边跑 MCP server ——
+>   **中间那类最常见的「租户自己有 REST 接口」无处可落**。
+>   现在补上 `http` 类型（`config` 装 `url` / `method` / `headers` / `body_template`）。
+>
+> `type='http'` 的工具要**调租户自己的接口**，安全边界见下面的说明 ——
+> 它跟「租户填 LLM Base URL」不是同一套策略，不能直接套用。
+
+> ⚠️ **`type='http'` 的出网策略要单独定，不能照抄 LLM Base URL 那套**（2026-10-25 记下）：
+>
+> 现有的 SSRF 闸在 `src/lib/llm-endpoint.ts`（`checkLlmEndpoint` / `assertLlmEndpoint`），
+> 生产默认**禁止回环 / 私网 / 链路本地 / 云元数据**（见 [12-c §C4](./12-c-需求-管理员可配置.md)）。
+> 但 `http` 工具的**正常用法就是调租户自己的内网系统** ——
+> ERP 在 `10.x`、工单系统在 `192.168.x`、自建服务在 `127.0.0.1`。
+> 照搬那套策略会把**正当用途全挡掉**。
+>
+> 需要单独定的三件事（实现 B3/C2 时落）：
+>
+> 1. **云元数据地址永远禁**（`169.254.169.254` / `fd00:ec2::254`）——
+>    这条没有例外，任何租户的任何工具都不许碰
+> 2. **RFC1918 私网段按租户开关放行**：给租户一个独立的
+>    「允许工具访问内网」开关（跟 `CONFIG_ALLOW_PRIVATE_LLM_ENDPOINT` 分开，
+>    别共用一个 —— LLM 端点能连内网，不代表工具能连）
+> 3. **出网前复查**：`url` 存的时候校验一次、**每次调用前再校验一次**
+>    （存的时候域名解析出的 IP 可能跟调用时不一样，DNS 会被改）
+>
+> `headers` 里的密钥走 AES-256-GCM 加密存储（复用 `src/lib/crypto.ts`），
+> 接口**永不回明文**。
 
 ### 任务表（missions，工作流主表）
 
@@ -195,9 +238,17 @@ CREATE TABLE missions (
   created_at DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6) COMMENT '创建时间',
   updated_at DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6) COMMENT '更新时间',
   INDEX idx_session (session_id),
+  INDEX idx_tenant_state (tenant_id, state),
   INDEX idx_state (state, updated_at)
-) COMMENT '任务表（Phase 2 启用）';
+) COMMENT '任务表（暂不做 · 等外部系统接入需求）';
 ```
+
+> ⚠️ **2026-10-25 修正**：原 DDL 只有 `idx_session` / `idx_state`，
+> **没有 `tenant_id` 开头的索引** —— 而 B5 的验收要求「`missions` 强制按 `tenant_id` 过滤」，
+> 过滤条件没索引会全表扫。补上 `idx_tenant_state (tenant_id, state)`
+> （「本租户处于某状态的任务」是这个表最常见的查询）。
+>
+> （`missions` 的 `tenant_id` 列本身原来就有，这次只补索引。）
 
 ### 评测集表（evaluation_datasets / evaluation_items）✅ D1 已落地 2026-10-24
 
@@ -430,6 +481,7 @@ CREATE TABLE api_keys (
   name VARCHAR(100) NOT NULL COMMENT '租户自己起的名字（"生产环境 / 测试环境"）',
   key_prefix VARCHAR(10) NOT NULL COMMENT 'key 前 8 位（用于 UI 显示识别，不存完整 key）',
   key_hash VARCHAR(255) NOT NULL COMMENT '完整 key 的 bcrypt hash',
+  scope ENUM('read', 'write', 'admin') NOT NULL DEFAULT 'write' COMMENT '权限分级：read=只读（不能发起对话）/ write=可发起对话 / admin=预留',
   last_used_at DATETIME(6) NULL COMMENT '最后使用时间',
   expires_at DATETIME(6) NULL COMMENT '过期时间；NULL = 不过期',
   revoked_at DATETIME(6) NULL COMMENT '撤销时间（软删除）',
@@ -441,6 +493,19 @@ CREATE TABLE api_keys (
 ```
 
 > 完整 key **只在创建时返回一次**（UI 上「复制」按钮），DB 只存 hash。丢了只能重新生成。
+>
+> **`scope` 列（迁移 `020-add-api-key-scope.ts`，2026-10-25 补）**：
+> 规格里（[10-安全方案.md §10](./10-安全方案.md)）写着「API Key：每个租户一个，权限按 scope 分
+> （只读 / 写入 / 管理员）」，但这张表**从来没有 scope 列** —— 一把 key 能调该租户的全部对外端点。
+> 对外的 key 是**发到客户系统里**的，泄露一次就是「整租户的问答能力 + token 花费」全敞。
+>
+> | scope | 能做什么 |
+> | ----- | -------- |
+> | `read` | 只能调 `GET /api/v1/public/search`（查知识库原文片段，**不调 LLM、不花钱、不留会话**） |
+> | `write` | 只读 + 发起对话（`POST /chat`、`/chat/stream`）—— **默认**，存量 key 全是这个 |
+> | `admin` | 预留：对外 API 目前没有 admin 专属端点 |
+>
+> 包含关系：`write ⊇ read`，`admin ⊇ write`。
 
 ### 提示词版本表（prompt_versions · 提示词管理）
 
@@ -667,14 +732,23 @@ CREATE TABLE user_memories (
 
 ## 5.4 备份策略
 
-- MySQL 每日全量备份：`mysqldump`（开发与小规模生产）；大规模生产换 Percona XtraBackup 做物理备份
-- 备份文件上传到对象存储
-- 保留 30 天，月初归档到冷存储
-- 关键表（`tenants`、`users`、`documents`）单独做异地备份
+- MySQL 手动全量备份：`mysqldump`（命令见 [11-部署运维与成本.md §11.4](./11-部署运维与成本.md)）
+- 大规模生产换 Percona XtraBackup 做物理备份
+- **不做的事**（本项目不部署到云，见 [11 §11.6](./11-部署运维与成本.md)）：
+  - ❌ 备份文件上传到对象存储
+  - ❌ 保留 30 天 + 月初归档到冷存储
+  - ❌ 关键表异地备份
+
+> ⚠️ 这一段以前写的是「上传对象存储 / 保留 30 天 / 冷存储 / 异地备份」——
+> 那是**云部署时期**的残留，跟 [11 §11.6](./11-部署运维与成本.md) 明确写的
+> 「❌ 异地备份 / 冷存储归档」**直接矛盾**。以 11 为准（本项目不上云）。
 
 ## 5.5 迁移与版本管理
 
 - 用 `sequelize-cli` + `umzug` 管理 schema 变更；每个迁移写 `up(sql)` + `down(sql)` 函数
 - 模型定义在 `src/models/`（`sequelize-typescript` 装饰器风格），迁移文件在 `src/migrations/`
 - 重大变更（删字段、改字段类型）走 PR 评审 + staging 验证 + 灰度
-- 文档归档：每个发版记录 schema 变更日志，写在 `docs/changelog/db.md`
+- **schema 变更历史在哪**：`src/migrations/` 里的迁移文件本身就是变更日志
+  （每个文件一个可回滚的变更）；「哪些已经应用了」看 `sequelize_meta` 表。
+  ⚠️ 以前这里写的是「每个发版记录 schema 变更日志，写在 `docs/changelog/db.md`」——
+  **那个文件从来不存在**（docs/ 下没有 changelog/ 目录）

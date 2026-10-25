@@ -3,7 +3,7 @@ import { config, resolveEmbedding, resolveLlm } from '../config';
 
 /**
  * 公共「当前激活配置」端点 —— 供前端页脚展示当前 LLM / Embedding 模型。
- * 详见 docs/06-API接口.md §6.4。
+ * 详见 docs/03-b-技术栈-后端栈.md §6.4。
  *
  * 设计要点：
  *  - 无需鉴权：3 个子系统页脚都要用，登录页也可能要展示

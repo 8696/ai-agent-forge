@@ -30,10 +30,9 @@ import {
   ReloadOutlined,
   SendOutlined,
 } from '@ant-design/icons';
-import Markdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
 import { useChat } from '@ai-sdk/react';
 import { DefaultChatTransport } from 'ai';
+import { useSearchParams } from 'react-router-dom';
 import type { ChatUIMessage, CitationHit, SessionListItem } from '@shared/types/chat';
 import {
   chatTransportOptions,
@@ -47,6 +46,8 @@ import {
   streamErrorMessage,
 } from '../../lib/customerChat';
 import { PageHeader } from '../../components/shell';
+import { Markdown } from '../../components/Markdown';
+import { formatMessageTime } from '../../lib/datetime';
 
 /**
  * B1 · 租户前台聊天页 —— 详见 docs/04-b-ui-登录与聊天挂件.md §4
@@ -105,12 +106,21 @@ function moderationOf(m: ChatUIMessage): { blocked: boolean; reason: string } | 
 
 export function ChatPage(): ReactElement {
   const { token } = theme.useToken();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [sessions, setSessions] = useState<SessionListItem[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [renaming, setRenaming] = useState<SessionListItem | null>(null);
   const [renameValue, setRenameValue] = useState('');
+  /**
+   * 待自动发出的问题（首页点「推荐问题 / 资料」跳过来时带 ?q=）。
+   * 记着 sessionId —— 只往「当初为这个问题建的那个会话」里发，
+   * 用户切到别的会话时不会把同一个问题再问一遍。
+   */
+  const [pendingQuestion, setPendingQuestion] = useState<{ sessionId: string; text: string } | null>(null);
+  /** 只跑一次的初始化标记（StrictMode 下 effect 会跑两遍） */
+  const bootstrappedRef = useRef(false);
 
   const reloadSessions = useCallback(async (): Promise<void> => {
     try {
@@ -130,15 +140,63 @@ export function ChatPage(): ReactElement {
     })();
   }, [reloadSessions]);
 
+  // ===== 从首页带参数进来 =====
+  //
+  //   ?q=<问题>     → 为这个问题开一个新会话，并自动把它发出去
+  //   ?session=<id> → 直接打开某个会话（首页「最近会话」点进来）
+  //
+  // 两个参数都不带的话就是普通进入 —— 什么都不做。
+  useEffect(() => {
+    if (bootstrappedRef.current) {
+      return;
+    }
+    bootstrappedRef.current = true;
+
+    const q = searchParams.get('q');
+    const sid = searchParams.get('session');
+
+    if (q !== null && q.trim() !== '') {
+      void (async () => {
+        try {
+          const s = await createSession();
+          await reloadSessions();
+          setActiveId(s.id);
+          setPendingQuestion({ sessionId: s.id, text: q.trim() });
+          // 把 URL 换成 session 形式 —— 刷新页面不会把这个问题再问一遍
+          setSearchParams({ session: s.id }, { replace: true });
+        } catch (err: unknown) {
+          message.error(errorMessage(err, '新建会话失败'));
+        }
+      })();
+      return;
+    }
+
+    if (sid !== null && sid !== '') {
+      setActiveId(sid);
+    }
+  }, [searchParams, reloadSessions, setSearchParams]);
+
+  /** 切会话：顺手把 URL 同步成 ?session=<id>，刷新页面还停在这个会话 */
+  const selectSession = useCallback(
+    (id: string): void => {
+      setPendingQuestion(null);
+      setActiveId(id);
+      setSearchParams({ session: id }, { replace: true });
+    },
+    [setSearchParams],
+  );
+
   const onNewSession = useCallback(async (): Promise<void> => {
     try {
       const s = await createSession();
       await reloadSessions();
+      setPendingQuestion(null);
       setActiveId(s.id);
+      setSearchParams({ session: s.id }, { replace: true });
     } catch (err: unknown) {
       message.error(errorMessage(err, '新建会话失败'));
     }
-  }, [reloadSessions]);
+  }, [reloadSessions, setSearchParams]);
 
   const onDeleteSession = useCallback(
     async (id: string): Promise<void> => {
@@ -190,7 +248,7 @@ export function ChatPage(): ReactElement {
                   cursor: 'pointer',
                   background: s.id === activeId ? 'rgba(47, 84, 235, 0.08)' : undefined,
                 }}
-                onClick={() => setActiveId(s.id)}
+                onClick={() => selectSession(s.id)}
               >
                 <MessageOutlined style={{ color: token.colorTextQuaternary }} />
                 <Text
@@ -293,6 +351,7 @@ export function ChatPage(): ReactElement {
             <SessionLoader
               key={activeId}
               sessionId={activeId}
+              autoSend={pendingQuestion?.sessionId === activeId ? pendingQuestion.text : undefined}
               onSessionsChanged={() => void reloadSessions()}
             />
           )}
@@ -312,9 +371,12 @@ export function ChatPage(): ReactElement {
  */
 function SessionLoader({
   sessionId,
+  autoSend,
   onSessionsChanged,
 }: {
   sessionId: string;
+  /** 挂上之后自动发出去的问题（首页 ?q= 跳过来时才有） */
+  autoSend?: string | undefined;
   onSessionsChanged: () => void;
 }): ReactElement {
   const [initial, setInitial] = useState<ChatUIMessage[] | null>(null);
@@ -357,6 +419,7 @@ function SessionLoader({
     <ChatPanel
       sessionId={sessionId}
       initialMessages={initial}
+      autoSend={autoSend}
       onSessionsChanged={onSessionsChanged}
     />
   );
@@ -365,10 +428,12 @@ function SessionLoader({
 function ChatPanel({
   sessionId,
   initialMessages,
+  autoSend,
   onSessionsChanged,
 }: {
   sessionId: string;
   initialMessages: ChatUIMessage[];
+  autoSend?: string | undefined;
   onSessionsChanged: () => void;
 }): ReactElement {
   const { token } = theme.useToken();
@@ -405,6 +470,31 @@ function ChatPanel({
   });
 
   const busy = status === 'submitted' || status === 'streaming';
+
+  /**
+   * 自动发出带过来的问题（首页点「推荐问题 / 资料」跳过来）。
+   *
+   * ⚠️ **必须延后一拍（setTimeout 0）再发，不能直接在 effect 里发**：
+   *    StrictMode 下 mount effect 跑完会立刻 cleanup，而 `useChat` 在 unmount 时
+   *    会调 `chat.stop()` —— `sendMessage` 内部「消息准备」阶段（第一个 await 之前）
+   *    挂着 abort controller，被 stop() 一取消，消息就**永远发不出去，而且不报错**
+   *    （sendMessage 正常 resolve，messages 一直空着，看起来像「卡在检索中」）。
+   *    延后一拍让 cleanup 先过去，避开这个窗口。
+   */
+  const autoSentRef = useRef(false);
+  useEffect(() => {
+    if (autoSend === undefined || autoSend === '' || autoSentRef.current) {
+      return;
+    }
+    autoSentRef.current = true;
+    setPhase('retrieving');
+    const timer = window.setTimeout(() => {
+      void sendMessage({ text: autoSend });
+    }, 0);
+    // ⚠️ 故意**不** clearTimeout：cleanup 里清掉就等于又踩回上面那个坑
+    //    （StrictMode 的 cleanup 正好跑在 timer 之前）。
+    //    用户在同一个 tick 里切走会话的概率极低，代价只是白发一次请求。
+  }, [autoSend, sendMessage]);
 
   // 消息增长时滚到底
   useEffect(() => {
@@ -473,7 +563,7 @@ function ChatPanel({
         ) : (
           messages.map((m) =>
             m.role === 'user' ? (
-              <UserBubble key={m.id} text={textOf(m)} />
+              <UserBubble key={m.id} message={m} />
             ) : (
               <AssistantBubble
                 key={m.id}
@@ -550,16 +640,24 @@ function ChatPanel({
   );
 }
 
-function UserBubble({ text }: { text: string }): ReactElement {
+function UserBubble({ message }: { message: ChatUIMessage }): ReactElement {
+  const { token } = theme.useToken();
+  const text = textOf(message);
+  // 右上角小时间戳（docs/04-b §4.2）——
+  // 历史消息带 created_at（后端从 messages.created_at 带出来）；
+  // 实时流式的新消息没有，用本地时间兜底。
+  const stamp = formatMessageTime(message.metadata?.created_at) ?? formatMessageTime(new Date().toISOString());
+
   return (
-    <Flex justify="flex-end">
+    <Flex justify="flex-end" vertical align="flex-end" gap={2}>
+      <span style={{ fontSize: 11, color: token.colorTextTertiary, lineHeight: 1 }}>{stamp}</span>
       <div
         style={{
           maxWidth: '76%',
           padding: '10px 14px',
           borderRadius: 12,
           borderBottomRightRadius: 4,
-          background: '#2f54eb',
+          background: token.colorPrimary,
           color: '#fff',
           whiteSpace: 'pre-wrap',
           wordBreak: 'break-word',
@@ -655,7 +753,7 @@ function AssistantBubble({
             wordBreak: 'break-word',
           }}
         >
-          <Markdown remarkPlugins={[remarkGfm]}>{text}</Markdown>
+          <Markdown>{text}</Markdown>
         </div>
       )}
 

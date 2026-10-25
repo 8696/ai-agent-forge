@@ -49,6 +49,7 @@ export type AuditAction =
   // —— 租户后台：对外 API 密钥 ——
   | 'API_KEY_CREATED'
   | 'API_KEY_REVOKED'
+  | 'API_KEY_SCOPE_CHANGED'
   // —— 租户后台：评测 ——
   | 'EVALUATION_DATASET_CREATED'
   | 'EVALUATION_DATASET_DELETED'
@@ -66,6 +67,8 @@ export type AuditAction =
   | 'USER_MEMORY_CLEARED'
   | 'USER_MEMORY_TOGGLED'
   | 'USER_MEMORY_EXTRACTED'
+  // —— 账号安全（A4 · 自助改密）——
+  | 'PASSWORD_CHANGED'
   // —— 平台级信号（限流 / 安全 / 成本）——
   | 'RATE_LIMIT_EXCEEDED'
   | 'PROMPT_INJECTION_BLOCKED'

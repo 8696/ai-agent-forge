@@ -4,7 +4,7 @@
 #   docker compose down           # 停止
 #   docker compose down -v        # 停止并清空数据
 #
-# 详见 docs/12-部署运维与成本.md
+# 详见 docs/11-部署运维与成本.md
 
 services:
   mysql:

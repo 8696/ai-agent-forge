@@ -10,11 +10,16 @@ import path from 'node:path';
  *    不在这里跑 —— 它们自己用 tsx 跑；新写的集成测试必须用 .test.ts + vitest
  *  - globalSetup：跑测试前自动 yarn seed 等价的 fixture seed
  *  - testTimeout：60s（LLM 调用 + SSE 流式可能要等）
- *  - 不跑 web/ 下的前端代码（前端测试未来用 Playwright，放 tests/e2e/）
+ *  - **页面级**的前端验收用 Playwright（放 tests/e2e/）；
+ *    但**组件级**的渲染断言（比如 Markdown 的代码块高亮）走 vitest，
+ *    所以 include 里带了 `.test.tsx` —— 它 import 的是 web/ 下的组件，
+ *    不等于「跑前端应用」
  */
 export default defineConfig({
   test: {
-    include: ['tests/**/*.test.ts'],
+    // `.test.tsx` 是前端的**组件级**单元测试（渲染断言，比如 Markdown 的代码块高亮）。
+    // 页面级的端到端验收仍然走 Playwright（tests/e2e/）—— 见下方注释。
+    include: ['tests/**/*.test.ts', 'tests/**/*.test.tsx'],
     exclude: ['node_modules/**', 'dist/**'],
     globals: false,
     testTimeout: 60_000,

@@ -12,7 +12,7 @@ import {
 import { nanoid } from 'nanoid';
 
 /**
- * 系统超级管理员角色 —— 与 docs/05-数据模型.md §5.1 system_users 一致
+ * 系统超级管理员角色 —— 与 docs/05-a-数据模型-mysql.md §5.1 system_users 一致
  * 当前只有 system 一种（建租户 / 跨租户运营）
  */
 export type SystemUserRole = 'system';

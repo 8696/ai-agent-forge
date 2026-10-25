@@ -24,7 +24,7 @@ import { EvaluationResult } from './models/EvaluationResult';
 
 /**
  * Sequelize 实例（单例）。
- * 详见 docs/13-后端代码示例.md §13.1
+ * 详见 docs/03-b-技术栈-后端栈.md §13.1
  */
 let sequelizeInstance: SequelizeType | null = null;
 

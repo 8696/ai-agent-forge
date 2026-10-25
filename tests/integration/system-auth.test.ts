@@ -1,7 +1,7 @@
 /**
  * tests/integration/system-auth.test.ts
  * 对应 src/gateway/system/auth-routes.ts（1 个端点：POST /login）
- * 详见 docs/18-测试流程规范.md §18.3
+ * 详见 docs/12-d-需求-运维稳定.md §D6
  *
  * （/me + /change-password 端点已删除，测试同步移除）
  */

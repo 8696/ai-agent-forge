@@ -1,7 +1,7 @@
 /**
  * tests/integration/customer-auth.test.ts
  * 对应 src/gateway/customer/auth-routes.ts（1 个端点：POST /login）
- * 详见 docs/18-测试流程规范.md §18.3
+ * 详见 docs/12-d-需求-运维稳定.md §D6
  *
  * 注意：customer 子系统其他端点（/me / change-password / chat / sessions）已清空，
  * 所以这里只测 login。

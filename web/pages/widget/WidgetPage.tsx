@@ -14,6 +14,7 @@ import {
   Tag,
   Tooltip,
   Typography,
+  theme,
 } from 'antd';
 import {
   CloseOutlined,
@@ -25,11 +26,11 @@ import {
   ReloadOutlined,
   SendOutlined,
 } from '@ant-design/icons';
-import Markdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
 import { useChat } from '@ai-sdk/react';
 import { DefaultChatTransport } from 'ai';
 import type { ChatUIMessage, CitationHit } from '@shared/types/chat';
+import { Markdown } from '../../components/Markdown';
+import { formatMessageTime } from '../../lib/datetime';
 import {
   clearWidgetToken,
   createWidgetSession,
@@ -99,6 +100,10 @@ function moderationOf(m: ChatUIMessage): { blocked: boolean; reason: string } | 
 export function WidgetPage(): ReactElement {
   const params = useParams();
   const tenantCode = params['tenantCode'] ?? '';
+  // 底板颜色跟深色模式走 —— 写死浅色的话，暗色下挂件整页是白底。
+  // ⚠️ 叫 uiToken 不叫 token：这个文件里 `token` 已经被「匿名会话 token」占用了
+  // （readWidgetToken / ensureSession），同名会互相遮蔽。
+  const { token: uiToken } = theme.useToken();
 
   const [tenantName, setTenantName] = useState<string>('');
   const [initialMessages, setInitialMessages] = useState<ChatUIMessage[] | null>(null);
@@ -154,7 +159,7 @@ export function WidgetPage(): ReactElement {
           alignItems: 'center',
           justifyContent: 'center',
           padding: 24,
-          background: '#f5f7fa',
+          background: uiToken.colorBgLayout,
         }}
       >
         <Card style={{ maxWidth: 420, width: '100%' }}>
@@ -166,7 +171,7 @@ export function WidgetPage(): ReactElement {
 
   if (!open) {
     return (
-      <div style={{ minHeight: '100vh', background: '#f5f7fa' }}>
+      <div style={{ minHeight: '100vh', background: uiToken.colorBgLayout }}>
         <Tooltip title="打开在线客服" placement="left">
           <Button
             type="primary"
@@ -185,7 +190,7 @@ export function WidgetPage(): ReactElement {
     <div
       style={{
         minHeight: '100vh',
-        background: '#f5f7fa',
+        background: uiToken.colorBgLayout,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
@@ -199,7 +204,7 @@ export function WidgetPage(): ReactElement {
           height: 'min(720px, calc(100vh - 48px))',
           display: 'flex',
           flexDirection: 'column',
-          background: '#fff',
+          background: uiToken.colorBgContainer,
           borderRadius: 12,
           boxShadow: '0 10px 40px rgba(0, 0, 0, 0.12)',
           overflow: 'hidden',
@@ -239,6 +244,7 @@ function WidgetChat({
   initialMessages: ChatUIMessage[];
   onClose: () => void;
 }): ReactElement {
+  const { token: uiToken } = theme.useToken();
   const [input, setInput] = useState('');
   const [phase, setPhase] = useState<Phase>('idle');
   const [notice, setNotice] = useState<string | null>(null);
@@ -346,8 +352,8 @@ function WidgetChat({
           alignItems: 'center',
           gap: 8,
           padding: '0 12px 0 16px',
-          borderBottom: '1px solid #f0f0f0',
-          background: '#fff',
+          borderBottom: `1px solid ${uiToken.colorBorder}`,
+          background: uiToken.colorBgContainer,
         }}
       >
         <Text style={{ fontSize: 16 }}>🏢</Text>
@@ -378,7 +384,7 @@ function WidgetChat({
           display: 'flex',
           flexDirection: 'column',
           gap: 16,
-          background: '#fff',
+          background: uiToken.colorBgContainer,
         }}
       >
         {messages.length === 0 ? (
@@ -389,7 +395,7 @@ function WidgetChat({
         ) : (
           messages.map((m) =>
             m.role === 'user' ? (
-              <UserBubble key={m.id} text={textOf(m)} />
+              <UserBubble key={m.id} message={m} />
             ) : (
               <AssistantBubble
                 key={m.id}
@@ -485,16 +491,25 @@ function WidgetChat({
 }
 
 /** 用户气泡 —— 右对齐，主题色背景白字（docs/04-b §4.2） */
-function UserBubble({ text }: { text: string }): ReactElement {
+function UserBubble({ message }: { message: ChatUIMessage }): ReactElement {
+  const { token: uiToken } = theme.useToken();
+  const text = textOf(message);
+  // 右上角小时间戳（docs/04-b §4.2）——
+  // 历史消息带 created_at（后端从 messages.created_at 带出来）；
+  // 实时流式的新消息没有，用本地时间兜底。
+  const stamp =
+    formatMessageTime(message.metadata?.created_at) ?? formatMessageTime(new Date().toISOString());
+
   return (
-    <Flex justify="flex-end">
+    <Flex justify="flex-end" vertical align="flex-end" gap={2}>
+      <span style={{ fontSize: 11, color: uiToken.colorTextTertiary, lineHeight: 1 }}>{stamp}</span>
       <div
         style={{
           maxWidth: '76%',
           padding: '10px 14px',
           borderRadius: 12,
           borderBottomRightRadius: 4,
-          background: '#2f54eb',
+          background: uiToken.colorPrimary,
           color: '#fff',
           whiteSpace: 'pre-wrap',
           wordBreak: 'break-word',
@@ -522,6 +537,7 @@ function AssistantBubble({
   onCopy: () => void;
   onRegenerate: () => void;
 }): ReactElement {
+  const { token: uiToken } = theme.useToken();
   const text = textOf(msg);
   const thinking = thinkingOf(msg);
   const citations = citationsOf(msg);
@@ -581,14 +597,14 @@ function AssistantBubble({
       ) : (
         <div
           style={{
-            background: '#f5f7fa',
+            background: uiToken.colorBgLayout,
             borderRadius: 12,
             borderBottomLeftRadius: 4,
             padding: '10px 14px',
             wordBreak: 'break-word',
           }}
         >
-          <Markdown remarkPlugins={[remarkGfm]}>{text}</Markdown>
+          <Markdown>{text}</Markdown>
         </div>
       )}
 
@@ -610,6 +626,7 @@ function AssistantBubble({
  * 引用片段卡片 —— 文档名 + 段号 + 相关度 + 召回标签，正文可展开（docs/04-b §4.2）
  */
 function CitationList({ hits }: { hits: CitationHit[] }): ReactElement {
+  const { token: uiToken } = theme.useToken();
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
       {hits.map((h) => (
@@ -617,8 +634,10 @@ function CitationList({ hits }: { hits: CitationHit[] }): ReactElement {
           key={`${h.doc_id}-${h.chunk_index}`}
           size="small"
           style={{
-            borderLeft: `3px solid ${h.sources.length > 1 ? '#52c41a' : '#d9d9d9'}`,
-            background: '#fafafa',
+            borderLeft: `3px solid ${
+              h.sources.length > 1 ? uiToken.colorSuccess : uiToken.colorBorder
+            }`,
+            background: uiToken.colorBgSpotlight,
           }}
           styles={{ body: { padding: 10 } }}
         >

@@ -7,6 +7,7 @@ import { NotFoundError } from '../../lib/errors';
 import type { TenantUserJwtPayload } from '../../lib/jwt';
 import { writeAuditLog } from '../../lib/audit-log';
 import {
+  countUserMemories,
   createMemory,
   deleteAllMemoriesPermanently,
   deleteOwnedMemoryPermanently,
@@ -57,6 +58,8 @@ const listQuerySchema = z.object({
   /** active = 只看生效中的；archived = 只看归档的；all = 都要 */
   status: z.enum(['active', 'archived', 'all']).default('active'),
   category: z.enum(USER_MEMORY_CATEGORIES).optional(),
+  /** 只取最近 N 条（首页概览卡用；不传 = 全给） */
+  limit: z.coerce.number().int().min(1).max(50).optional(),
 });
 
 const createBodySchema = z.object({
@@ -89,15 +92,18 @@ customerMemoryRouter.get('/memories', async (ctx) => {
   const u = currentUser(ctx);
   const input = listQuerySchema.parse(ctx.query);
 
-  const memories = await listUserMemories(u.tenant_id, u.sub, {
+  const filter = {
     // ⚠️ 'all' 要原样传下去 —— 折成 undefined 会被当成「只查生效中」
     status: input.status,
     ...(input.category === undefined ? {} : { category: input.category }),
-  });
+  };
+
+  const memories = await listUserMemories(u.tenant_id, u.sub, filter, input.limit);
 
   ctx.body = {
     memories,
-    total: memories.length,
+    // ⚠️ 是**符合条件的总条数**，不是本次返回的条数（传了 limit 时两者不相等）
+    total: await countUserMemories(u.tenant_id, u.sub, filter),
     memory_enabled: await isMemoryEnabledFor(u.tenant_id, u.sub),
   };
 });

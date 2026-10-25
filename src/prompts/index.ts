@@ -38,9 +38,13 @@ export interface ResolvedPrompt {
 /**
  * 按租户设置挑提示词。
  *
- * 租户级**真实**覆盖（自带提示词正文）是 C3 的需求，本期不实现：
- * 这里只把读取口子留好，认不出的版本号 warn 一下回落默认值 —— 不报错，
- * 因为对终端用户来说「用默认提示词答错了」远好过「整轮对话 500」。
+ * ⚠️ **这是兜底路径，不是主路径**：
+ * 租户自带的提示词正文由 `src/services/prompt-registry.ts` 从 `prompt_versions` 表解析，
+ * 通过 `buildPrompt` 的 `overrideContent` 传进来（那是 C3 的正常流程）。
+ *
+ * 走到这里说明**没拿到租户正文** —— 常见原因是配置指向的版本号在库里不存在
+ * （版本被删了 / 配置写错了）。此时回落内置默认并 warn 一行，不报错：
+ * 对终端用户来说「用默认提示词答错了」远好过「整轮对话 500」。
  */
 export function resolvePrompt(
   tenantName: string,
@@ -57,7 +61,7 @@ export function resolvePrompt(
 
   logger.warn(
     { tenantName, requested },
-    '租户指定的提示词版本不存在（提示词仓库属 C3，本期未实现），回落默认版本',
+    '租户配置的提示词版本没有解析出正文（版本可能已被删除），回落内置默认',
   );
   return {
     text: renderSystemPrompt(DEFAULT_SYSTEM_PROMPT, tenantName),

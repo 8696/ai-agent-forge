@@ -140,7 +140,17 @@ export async function updateTenantModel(
 ): Promise<TenantModel> {
   const row = await getTenantModel(tenantId, id);
 
-  // api_key 不带 = 保持原样；带了才重新校验（编辑时不必重填密钥）
+  // ⚠️ **base_url 不管有没有重填 api_key 都要过 SSRF 闸门**。
+  //
+  // 「编辑时留空 API Key = 保持原样」是后台的**默认路径**
+  // （docs/04-c §5.4.1 明写「编辑时留空 API Key = 保持原样，不重填也能改别的字段」）。
+  // 之前这条路径走的是 `row.base_url = input.base_url` —— 不解析 DNS、
+  // 不判私网 / 回环 / 云元数据、也不做 /v1 归一化，
+  // 等于**绕开了新建时的闸门**：租户 admin 在生产环境能把端点指到
+  // `169.254.169.254` 读云元数据，或指到内网打穿。
+  const baseUrl = await normalizeBaseUrl(input.base_url);
+
+  // api_key 不带 = 保持原样；带了才重新加密（编辑时不必重填密钥）
   const keepsExistingKey = input.api_key === undefined;
   const normalized = keepsExistingKey
     ? null
@@ -148,12 +158,13 @@ export async function updateTenantModel(
         base_url: input.base_url,
         model_id: input.model_id,
         api_key: input.api_key ?? '',
+        checkedBaseUrl: baseUrl,
       });
 
   row.name = input.name;
   row.provider = input.provider;
   row.model_id = input.model_id;
-  row.base_url = normalized?.baseUrl ?? input.base_url;
+  row.base_url = baseUrl;
   row.temperature = input.temperature;
   row.max_output_tokens = input.max_output_tokens;
   row.prompt_cache_enabled = input.prompt_cache_enabled;
@@ -297,6 +308,17 @@ export async function resolveActiveModel(
 // ============================================================
 
 /**
+ * base_url 的校验 + 归一化 —— **新建和编辑共用**。
+ *
+ * SSRF 闸门在这里（src/lib/llm-endpoint.ts）：生产默认拦内网 / 回环 / 云元数据地址。
+ * 单独抽出来是因为「编辑模型」这条路径也需要它 —— 见 updateTenantModel 的注释。
+ */
+export async function normalizeBaseUrl(rawBaseUrl: string): Promise<string> {
+  await assertLlmEndpoint(rawBaseUrl);
+  return normalizeAnthropicBaseUrl(rawBaseUrl);
+}
+
+/**
  * 校验并规范化新模型的连接参数。
  * 独立成函数是为了让「新建」和「编辑」共用同一套校验 —— 少一处规则就少一处漏网。
  */
@@ -304,12 +326,17 @@ export async function normalizeModelInput(input: {
   base_url: string;
   model_id: string;
   api_key: string | null;
+  /**
+   * 已经过 SSRF 校验 + 归一化的 base_url。
+   * 编辑路径会先自己校验一次再传进来 —— 复用结果，避免重复解析 DNS。
+   */
+  checkedBaseUrl?: string | undefined;
 }): Promise<{ baseUrl: string; encrypted: { cipher: Buffer; hint: string } }> {
   if (input.model_id.trim() === '') {
     throw new ValidationError('模型 id 不能为空');
   }
   // SSRF 校验：生产默认拦内网 / 云元数据地址（src/lib/llm-endpoint.ts）
-  await assertLlmEndpoint(input.base_url);
+  const baseUrl = input.checkedBaseUrl ?? (await normalizeBaseUrl(input.base_url));
   const key = input.api_key;
   if (key === null || key.trim() === '') {
     throw new ValidationError('API Key 不能为空');
@@ -321,7 +348,7 @@ export async function normalizeModelInput(input: {
   }
   const trimmed = key.trim();
   return {
-    baseUrl: normalizeAnthropicBaseUrl(input.base_url),
+    baseUrl,
     encrypted: { cipher: encryptSecret(trimmed), hint: secretHint(trimmed) },
   };
 }

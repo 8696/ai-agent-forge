@@ -1,13 +1,14 @@
 import type { ReactElement } from 'react';
-import { Navigate, Outlet, useLocation } from 'react-router-dom';
+import { Outlet, useLocation } from 'react-router-dom';
 import { SharedShellLayout } from '../SharedShellLayout';
+import { RequireAuth } from '../../components/RequireAuth';
 import type { SidebarItem } from '../SharedShellLayout';
 import { MessageOutlined, DashboardOutlined, BookOutlined } from '@ant-design/icons';
 
 /**
  * customer 子系统 Layout（租户前台）
  * - role=customer 才能进
- * - 侧栏：首页（= 聊天页）/ 智能问答 / 我的记忆
+ * - 侧栏：首页（工作台）/ 智能问答 / 我的记忆
  */
 const SIDEBAR: SidebarItem[] = [
   { key: '/customer', icon: <DashboardOutlined />, label: '首页', to: '/customer' },
@@ -18,40 +19,29 @@ const SIDEBAR: SidebarItem[] = [
 export function CustomerLayout(): ReactElement {
   const location = useLocation();
 
-  if (location.pathname === '/customer/login') {
+  // 登录页 / 改密页：整屏（AuthShell 自带整页背景），不套前台外壳
+  if (
+    location.pathname === '/customer/login' ||
+    location.pathname === '/customer/change-password'
+  ) {
     return <Outlet />;
   }
 
-  if (typeof window !== 'undefined') {
-    const token = window.localStorage.getItem('agent_platform_token');
-    if (token === null) {
-      return <Navigate to="/customer/login" replace />;
-    }
-    const roleFromToken = readRoleFromToken(token);
-    if (roleFromToken !== null && roleFromToken !== 'customer') {
-      return <Navigate to="/" replace />;
-    }
-  }
-
   return (
-    <SharedShellLayout
+    <RequireAuth
       role="customer"
-      brandLabel="用户中心"
-      roleHint="用户中心"
-      sidebarItems={SIDEBAR}
+      loginPath="/customer/login"
+      changePasswordPath="/customer/change-password"
     >
-      <Outlet />
-    </SharedShellLayout>
+      <SharedShellLayout
+        role="customer"
+        brandLabel="用户中心"
+        roleHint="用户中心"
+        sidebarItems={SIDEBAR}
+      >
+        <Outlet />
+      </SharedShellLayout>
+    </RequireAuth>
   );
 }
 
-function readRoleFromToken(token: string): string | null {
-  try {
-    const parts = token.split('.');
-    if (parts.length !== 3) return null;
-    const payload = JSON.parse(atob(parts[1] ?? '')) as { role?: unknown };
-    return typeof payload.role === 'string' ? payload.role : null;
-  } catch {
-    return null;
-  }
-}

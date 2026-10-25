@@ -3,7 +3,7 @@ import axios from 'axios';
 
 /**
  * 当前激活的 LLM / Embedding 配置（公共元信息，无需鉴权）
- * 详见 docs/06-API接口.md §6.4
+ * 详见 docs/03-b-技术栈-后端栈.md §6.4
  *
  * 用途：3 个子系统页脚展示「当前生效」的模型。
  * 设计：

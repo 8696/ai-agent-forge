@@ -9,6 +9,7 @@ import {
   Input,
   Modal,
   Popconfirm,
+  Select,
   Space,
   Table,
   Tag,
@@ -23,7 +24,9 @@ import {
   createApiKey,
   fetchApiKeys,
   revokeApiKey,
+  updateApiKeyScope,
   type ApiKeyItem,
+  type ApiKeyScope,
   type CreatedApiKey,
 } from '../../lib/adminApiKeys';
 
@@ -45,6 +48,31 @@ const STATE_TAG: Record<KeyState, { color: string; label: string }> = {
 };
 
 /**
+ * 权限分级的展示 —— docs/10-安全方案.md §10
+ *
+ * read  = 只读：只能查知识库（GET /search），发起对话会被挡（403）
+ * write = 可发起对话（默认）
+ * admin = 预留
+ */
+const SCOPE_LABEL: Record<ApiKeyScope, string> = {
+  read: '只读',
+  write: '可提问',
+  admin: '管理员',
+};
+
+const SCOPE_COLOR: Record<ApiKeyScope, string> = {
+  read: 'default',
+  write: 'blue',
+  admin: 'purple',
+};
+
+const SCOPE_OPTIONS: Array<{ value: ApiKeyScope; label: string }> = [
+  { value: 'read', label: '只读（只能查知识库，不能提问）' },
+  { value: 'write', label: '可提问（默认）' },
+  { value: 'admin', label: '管理员（预留）' },
+];
+
+/**
  * /admin/api-keys —— 租户后台的「API 密钥」
  *
  * 外部系统拿这个 key 调对外 REST API（POST /api/v1/public/chat）。
@@ -63,7 +91,11 @@ export function AdminApiKeysPage(): ReactElement {
 
   // 新建
   const [creating, setCreating] = useState(false);
-  const [createForm] = Form.useForm<{ name: string; expires_at: Dayjs | null | undefined }>();
+  const [createForm] = Form.useForm<{
+    name: string;
+    expires_at: Dayjs | null | undefined;
+    scope: ApiKeyScope;
+  }>();
 
   // 刚创建出来的 key（完整形态）—— 只在这一次弹窗里出现
   const [fresh, setFresh] = useState<CreatedApiKey | null>(null);
@@ -95,6 +127,7 @@ export function AdminApiKeysPage(): ReactElement {
         // ⚠️ DatePicker 用户没碰过时 antd 给的是 **undefined**（不是 null），
         //    直接 .toISOString() 会抛 "Cannot read properties of undefined"
         expires_at: v.expires_at == null ? undefined : v.expires_at.toISOString(),
+        scope: v.scope ?? 'write',
       });
       setCreating(false);
       createForm.resetFields();
@@ -103,6 +136,16 @@ export function AdminApiKeysPage(): ReactElement {
     } catch (e: unknown) {
       const status = (e as { response?: { status?: number } }).response?.status;
       message.error(status === 400 ? '请求参数不合法' : '创建 API 密钥失败');
+    }
+  };
+
+  const onScopeChange = async (row: ApiKeyItem, scope: ApiKeyScope): Promise<void> => {
+    try {
+      await updateApiKeyScope(row.id, scope);
+      message.success(`「${row.name}」的权限已改成「${SCOPE_LABEL[scope]}」`);
+      await load();
+    } catch {
+      message.error('改权限失败');
     }
   };
 
@@ -146,6 +189,17 @@ export function AdminApiKeysPage(): ReactElement {
       ),
     },
     {
+      title: '权限',
+      dataIndex: 'scope',
+      key: 'scope',
+      width: 96,
+      render: (scope: ApiKeyScope) => (
+        <Tag color={SCOPE_COLOR[scope]} style={{ fontWeight: 500 }}>
+          {SCOPE_LABEL[scope]}
+        </Tag>
+      ),
+    },
+    {
       title: '状态',
       key: 'state',
       width: 90,
@@ -184,21 +238,30 @@ export function AdminApiKeysPage(): ReactElement {
     {
       title: '操作',
       key: 'actions',
-      width: 90,
+      width: 170,
       render: (_: unknown, row) =>
         row.revoked_at === null ? (
-          <Popconfirm
-            title={`确认撤销「${row.name}」？`}
-            description="撤销后这把 key 立刻失效，调用方会拿到 401。"
-            okText="撤销"
-            cancelText="取消"
-            okButtonProps={{ danger: true }}
-            onConfirm={() => void onRevoke(row)}
-          >
-            <Button type="link" size="small" danger>
-              撤销
-            </Button>
-          </Popconfirm>
+          <Space size={4}>
+            <Select
+              size="small"
+              value={row.scope}
+              style={{ width: 92 }}
+              options={SCOPE_OPTIONS.map((o) => ({ value: o.value, label: SCOPE_LABEL[o.value] }))}
+              onChange={(v: ApiKeyScope) => void onScopeChange(row, v)}
+            />
+            <Popconfirm
+              title={`确认撤销「${row.name}」？`}
+              description="撤销后这把 key 立刻失效，调用方会拿到 401。"
+              okText="撤销"
+              cancelText="取消"
+              okButtonProps={{ danger: true }}
+              onConfirm={() => void onRevoke(row)}
+            >
+              <Button type="link" size="small" danger>
+                撤销
+              </Button>
+            </Popconfirm>
+          </Space>
         ) : (
           <Text type="secondary" style={{ fontSize: 12 }}>
             已撤销
@@ -244,6 +307,8 @@ export function AdminApiKeysPage(): ReactElement {
         <Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 0, fontSize: 12 }}>
           完整 key 只在创建的那一次显示 —— 服务端只存 bcrypt 哈希，谁也拿不回去。
           丢了就撤销重建一把。
+          <br />
+          权限可在表格里随时改，改完立刻生效（服务端会清掉鉴权缓存）。
         </Paragraph>
       </Card>
 
@@ -272,6 +337,14 @@ export function AdminApiKeysPage(): ReactElement {
             extra="不填 = 永不过期。过期后这把 key 自动失效。"
           >
             <DatePicker showTime style={{ width: '100%' }} placeholder="留空表示永不过期" />
+          </Form.Item>
+          <Form.Item
+            name="scope"
+            label="权限"
+            initialValue="write"
+            extra="对外的 key 是发到客户系统里的 —— 权限给小了才安全。只读级别只能查知识库，发起提问会被拒绝。"
+          >
+            <Select options={SCOPE_OPTIONS} />
           </Form.Item>
         </Form>
       </Modal>

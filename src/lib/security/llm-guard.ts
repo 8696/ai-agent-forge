@@ -1,6 +1,7 @@
 import { generateText } from 'ai';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { logger } from '../../logger';
+import { withRetry } from '../retry';
 
 /**
  * 大模型二次确认 —— docs/10-安全方案.md §10.1 / §10.2
@@ -85,14 +86,27 @@ async function judge(
   }
   try {
     const anthropic = createAnthropic({ apiKey: llm.apiKey, baseURL: llm.baseUrl });
-    const result = await generateText({
-      model: anthropic(llm.model),
-      system,
-      prompt: content,
-      maxOutputTokens: 32,
-      temperature: 0,
-      abortSignal: AbortSignal.timeout(timeoutMs),
-    });
+    // ⚠️ maxRetries: 0 —— 重试统一由 withRetry 负责（带抖动，见 src/lib/retry.ts）
+    const result = await withRetry(
+      () =>
+        generateText({
+          model: anthropic(llm.model),
+          system,
+          prompt: content,
+          maxOutputTokens: 32,
+          temperature: 0,
+          abortSignal: AbortSignal.timeout(timeoutMs),
+          maxRetries: 0,
+        }),
+      {
+        onRetry: (attempt: number, delayMs: number, err: unknown) => {
+          logger.warn(
+            { attempt, delayMs, err: err instanceof Error ? err.message : String(err) },
+            'LLM 调用失败，准备重试',
+          );
+        },
+      },
+    );
     const parsed = parseVerdict(result.text);
     if (parsed === null) {
       logger.warn({ model: llm.model, raw: result.text.slice(0, 80) }, '审核模型回答无法解析，按未命中处理');

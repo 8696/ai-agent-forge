@@ -13,6 +13,7 @@ import {
   Space,
   Table,
   Tag,
+  Tooltip,
   Typography,
   message,
 } from 'antd';
@@ -33,6 +34,10 @@ interface UserRow {
   must_change_password: boolean;
   last_login_at: string | null;
   created_at: string;
+  /** active=正常 / locked=锁定中（登录失败太多被锁的） */
+  status: 'active' | 'locked';
+  /** 锁定到什么时候；null = 没锁 */
+  locked_until: string | null;
 }
 
 /**
@@ -68,6 +73,8 @@ export function AdminUsersPage(): ReactElement {
   // client-side 检索 / 筛选（后端 list 端点还没接 filter 参数）
   const [search, setSearch] = useState('');
   const [roleFilter, setRoleFilter] = useState<'all' | UserRole>('all');
+  /** 状态筛选（04-c §5.8）—— 活跃 / 已锁定 */
+  const [statusFilter, setStatusFilter] = useState<'all' | UserRow['status']>('all');
 
   // 创建 Modal
   const [creatingOpen, setCreatingOpen] = useState(false);
@@ -76,7 +83,7 @@ export function AdminUsersPage(): ReactElement {
 
   // 编辑 Drawer
   const [editing, setEditing] = useState<UserRow | null>(null);
-  const [editForm] = Form.useForm<{ email: string; password?: string }>();
+  const [editForm] = Form.useForm<{ email: string; password?: string; role?: UserRole }>();
   const [editSubmitting, setEditSubmitting] = useState(false);
 
   const load = async (): Promise<void> => {
@@ -100,10 +107,11 @@ export function AdminUsersPage(): ReactElement {
     const q = search.trim().toLowerCase();
     return data.filter((r) => {
       if (roleFilter !== 'all' && r.role !== roleFilter) return false;
+      if (statusFilter !== 'all' && r.status !== statusFilter) return false;
       if (q !== '' && !r.email.toLowerCase().includes(q)) return false;
       return true;
     });
-  }, [rows, search, roleFilter]);
+  }, [rows, search, roleFilter, statusFilter]);
 
   // ===== 创建 =====
   const submitCreate = async (): Promise<void> => {
@@ -131,7 +139,7 @@ export function AdminUsersPage(): ReactElement {
 
   // ===== 编辑 =====
   const openEdit = (row: UserRow): void => {
-    editForm.setFieldsValue({ email: row.email, password: '' });
+    editForm.setFieldsValue({ email: row.email, password: '', role: row.role });
     setEditing(row);
   };
 
@@ -139,9 +147,13 @@ export function AdminUsersPage(): ReactElement {
     if (editing === null) return;
     const v = await editForm.validateFields().catch(() => null);
     if (v === null) return;
-    const body: { email?: string; password?: string } = {};
+    const body: { email?: string; password?: string; role?: UserRole } = {};
     if (v.email !== editing.email) body.email = v.email;
     if (v.password !== undefined && v.password !== '') body.password = v.password;
+    // ⚠️ **不能改自己的角色** —— 后端也会拒（改了把自己降成 customer 就锁在门外了）
+    if (v.role !== undefined && v.role !== editing.role && editing.id !== currentAdminId()) {
+      body.role = v.role;
+    }
     if (Object.keys(body).length === 0) {
       message.info('没有改动');
       setEditing(null);
@@ -201,6 +213,24 @@ export function AdminUsersPage(): ReactElement {
           {r === 'admin' ? '后台管理员' : '前台用户'}
         </Tag>
       ),
+    },
+    {
+      title: '状态',
+      dataIndex: 'status',
+      key: 'status',
+      width: 90,
+      render: (s: UserRow['status'], row: UserRow) =>
+        s === 'locked' ? (
+          <Tooltip title={row.locked_until === null ? '' : `锁到 ${new Date(row.locked_until).toLocaleString()}`}>
+            <Tag color="warning" style={{ fontWeight: 500 }}>
+              已锁定
+            </Tag>
+          </Tooltip>
+        ) : (
+          <Tag color="success" style={{ fontWeight: 500 }}>
+            活跃
+          </Tag>
+        ),
     },
     {
       title: '最后登录',
@@ -299,6 +329,16 @@ export function AdminUsersPage(): ReactElement {
               { value: 'all', label: '全部角色' },
               { value: 'admin', label: '后台管理员' },
               { value: 'customer', label: '前台用户' },
+            ]}
+          />
+          <Select
+            value={statusFilter}
+            onChange={(v) => setStatusFilter(v)}
+            style={{ width: 140 }}
+            options={[
+              { value: 'all', label: '全部状态' },
+              { value: 'active', label: '活跃' },
+              { value: 'locked', label: '已锁定' },
             ]}
           />
         </Space>
@@ -404,6 +444,18 @@ export function AdminUsersPage(): ReactElement {
             <Input autoComplete="off" />
           </Form.Item>
           <Form.Item
+            name="role"
+            label="角色"
+            extra="admin 走 /admin 入口；customer 走 /customer 入口。改完这个用户要重新登录才生效。"
+          >
+            <Select
+              options={[
+                { value: 'admin', label: '后台管理员' },
+                { value: 'customer', label: '前台用户' },
+              ]}
+            />
+          </Form.Item>
+          <Form.Item
             name="password"
             label="重置密码（不填则不改）"
             rules={[{ min: 8, message: '至少 8 字符' }]}
@@ -411,11 +463,6 @@ export function AdminUsersPage(): ReactElement {
           >
             <Input.Password placeholder="留空表示不动" autoComplete="new-password" />
           </Form.Item>
-          {editing !== null && (
-            <Paragraph type="secondary" style={{ marginTop: -8 }}>
-              角色「{editing.role === 'admin' ? '后台管理员' : '前台用户'}」由创建决定，不可在编辑时变更。
-            </Paragraph>
-          )}
         </Form>
       </Drawer>
     </div>

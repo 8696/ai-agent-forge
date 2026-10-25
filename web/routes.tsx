@@ -7,6 +7,7 @@ import {
   SystemHomePage,
   SystemTenantsPage,
   SystemTenantDetailPage,
+  SystemChangePasswordPage,
 } from './pages/system';
 import {
   AdminLoginPage,
@@ -25,8 +26,15 @@ import {
   ObservabilityCostPage,
   EvaluationDatasetsPage,
   EvaluationRunsPage,
+  AdminChangePasswordPage,
 } from './pages/admin';
-import { CustomerLoginPage, ChatPage, CustomerMemoriesPage } from './pages/customer';
+import {
+  CustomerLoginPage,
+  HomePage,
+  ChatPage,
+  CustomerMemoriesPage,
+  CustomerChangePasswordPage,
+} from './pages/customer';
 import { WidgetPage } from './pages/widget';
 import { SystemLayout } from './layouts/system/SystemLayout';
 import { AdminLayout } from './layouts/admin/AdminLayout';
@@ -43,7 +51,7 @@ import { CustomerLayout } from './layouts/customer/CustomerLayout';
  *   /dev/probe       → 公开调试页（dev only）
  *   *                → NotFoundPage
  *
- * 未来按 docs/04-UI需求.md §3 增加：
+ * 未来按 docs/04-a-ui-总则布局与菜单.md §3 增加：
  *   /admin/*            11 个管理页面（Step 13 落）
  *   /customer/*         租户前台业务页
  */
@@ -57,6 +65,7 @@ const routes: RouteObject[] = [
     children: [
       { index: true, element: <SystemHomePage /> },
       { path: 'login', element: <SystemLoginPage /> },
+      { path: 'change-password', element: <SystemChangePasswordPage /> },
       { path: 'tenants', element: <SystemTenantsPage /> },
       { path: 'tenants/:id', element: <SystemTenantDetailPage /> },
     ],
@@ -69,6 +78,7 @@ const routes: RouteObject[] = [
     children: [
       { index: true, element: <AdminHomePage /> },
       { path: 'login', element: <AdminLoginPage /> },
+      { path: 'change-password', element: <AdminChangePasswordPage /> },
       { path: 'users', element: <AdminUsersPage /> },
       { path: 'memories', element: <AdminMemoriesPage /> },
       { path: 'knowledge/documents', element: <KnowledgeDocumentsPage /> },
@@ -91,11 +101,12 @@ const routes: RouteObject[] = [
     path: '/customer',
     element: <CustomerLayout />,
     children: [
-      // 首页就是聊天页（docs/04-b §3.3「成功 → 跳 /customer/chat（或默认页）」）
-      { index: true, element: <ChatPage /> },
+      // 首页 = 用户中心工作台（B7）：欢迎语 / 推荐问题 / 最近会话 / 知识库 / 我的记忆
+      { index: true, element: <HomePage /> },
       { path: 'chat', element: <ChatPage /> },
       { path: 'memories', element: <CustomerMemoriesPage /> },
       { path: 'login', element: <CustomerLoginPage /> },
+      { path: 'change-password', element: <CustomerChangePasswordPage /> },
     ],
   },
 

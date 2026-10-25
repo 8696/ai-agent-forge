@@ -1,7 +1,7 @@
 /**
  * Gateway 层顶层 barrel —— 4 个独立子系统（按业务边界完全分桶）
  *
- * 详见 docs/03-技术栈与规范.md §B.5
+ * 详见 docs/03-b-技术栈-后端栈.md §B.5
  *
  * - system/   SaaS 平台方子系统（/api/v1/system/*，role=system）
  * - admin/     租户后台子系统（/api/v1/admin/*，role ∈ {admin, agent}）
@@ -39,6 +39,8 @@ export {
   customerAuthRouter,
   customerChatRouter,
   customerMemoryRouter,
+  customerProfileRouter,
+  customerKnowledgeRouter,
   requireCustomer,
 } from './customer';
 export {

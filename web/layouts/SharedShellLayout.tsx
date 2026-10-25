@@ -12,9 +12,10 @@ import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { getCurrentUser } from '../lib/auth';
 import { setToken } from '../lib/apiFactory';
 import { BrandMark } from '../components/shell/BrandMark';
+import { ActiveModelsFooter } from '../components/ActiveModelsFooter';
 import { ThemeToggle } from '../components/shell/ThemeToggle';
 
-const { Header, Sider, Content } = Layout;
+const { Header, Sider, Content, Footer } = Layout;
 const { Text } = Typography;
 
 export interface SidebarItem {
@@ -221,6 +222,16 @@ export function SharedShellLayout(props: SharedShellLayoutProps): ReactElement {
         >
           {props.children ?? <Outlet />}
         </Content>
+        {/* 页脚：当前生效的 LLM / Embedding 模型（docs/04-d §7.4）。
+            运营方在这就能确认 `LLM_PROVIDER` 切到对的地方了。 */}
+        <Footer
+          style={{
+            padding: '10px 20px',
+            textAlign: 'center',
+          }}
+        >
+          <ActiveModelsFooter />
+        </Footer>
       </Layout>
     </Layout>
   );

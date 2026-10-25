@@ -5,6 +5,7 @@ import {
   Button,
   Card,
   Col,
+  Descriptions,
   Empty,
   Flex,
   Form,
@@ -46,6 +47,8 @@ const { Text, Paragraph } = Typography;
 export function SettingsPage(): ReactElement {
   const [settings, setSettings] = useState<SettingItem[]>([]);
   const [notes, setNotes] = useState<string[]>([]);
+  // 本租户的基本信息（只读，docs/04-c §5.9.1）
+  const [tenantInfo, setTenantInfo] = useState<{ code: string; name: string; plan: string } | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [form] = Form.useForm();
@@ -55,6 +58,7 @@ export function SettingsPage(): ReactElement {
       const data = await fetchSettings();
       setSettings(data.settings);
       setNotes(data.notes);
+      setTenantInfo(data.tenant);
       const initial: Record<string, unknown> = {};
       for (const s of data.settings) {
         initial[s.key] = s.value;
@@ -152,6 +156,28 @@ export function SettingsPage(): ReactElement {
         />
       )}
 
+      {/* 基础配置（docs/04-c §5.9.1）—— 只读。
+          租户名 / 租户号不在 KV 里：改它们要走平台方那边（/system/tenants），
+          所以这里只展示，提示去哪改。 */}
+      {tenantInfo !== null && (
+        <Card size="small" title="基础配置" style={{ marginBottom: 16 }}>
+          <Descriptions column={3} size="small">
+            <Descriptions.Item label="租户名">{tenantInfo.name}</Descriptions.Item>
+            <Descriptions.Item label="租户号">
+              <Text code>{tenantInfo.code}</Text>
+            </Descriptions.Item>
+            <Descriptions.Item label="套餐">
+              <Tag color={tenantInfo.plan === 'free' ? 'default' : 'blue'}>
+                {tenantInfo.plan}
+              </Tag>
+            </Descriptions.Item>
+          </Descriptions>
+          <Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0, fontSize: 12 }}>
+            租户名和租户号由 SaaS 平台方维护（平台后台 → 租户管理里改），这里只读。
+          </Paragraph>
+        </Card>
+      )}
+
       <Form form={form} layout="vertical" disabled={loading}>
         {grouped.length === 0 && !loading ? (
           <Card size="small">
@@ -193,8 +219,20 @@ export function SettingsPage(): ReactElement {
                           style={{ width: '100%' }}
                           placeholder={`平台默认 ${String(s.fallback)}`}
                         />
+                      ) : s.multiline === true ? (
+                        // 「一行一条」的列表（首页推荐问题）—— 渲染成多行输入框
+                        <Input.TextArea
+                          allowClear
+                          autoSize={{ minRows: 3, maxRows: 10 }}
+                          {...(s.maxLength === undefined ? {} : { maxLength: s.maxLength })}
+                          placeholder={s.fallback === '' ? '留空则不显示这一项' : String(s.fallback)}
+                        />
                       ) : (
-                        <Input allowClear placeholder={`平台默认 ${String(s.fallback)}`} />
+                        <Input
+                          allowClear
+                          {...(s.maxLength === undefined ? {} : { maxLength: s.maxLength })}
+                          placeholder={`平台默认 ${String(s.fallback)}`}
+                        />
                       )}
                     </Form.Item>
                   </Col>

@@ -4,6 +4,7 @@ import { Session } from '../models';
 import type { Message } from '../models/Message';
 import type { SessionMetadata } from '../models/Session';
 import { logger } from '../logger';
+import { withRetry } from '../lib/retry';
 import { config } from '../config';
 import { estimateTokens } from '../lib/token-estimate';
 import { maskPiiText, scanInjectionRules } from '../lib/security';
@@ -514,22 +515,36 @@ async function runSummaryUpdate(params: SummaryUpdateParams): Promise<SummaryUpd
       turns: chunk.length,
     });
 
-    const result = await generateText({
-      model: anthropic(summaryLlm.model),
-      system: SUMMARY_SYSTEM_PROMPT,
-      messages: [
-        {
-          role: 'user',
-          content: renderSummaryInput({
-            existingSummary: state.summary,
-            turns: rowsToSummaryTurns(chunk),
-          }),
+    // ⚠️ maxRetries: 0 —— 重试策略统一由 withRetry 负责（它带抖动，
+    //    SDK 自带的那层没有抖动，上游挂时会惊群，见 src/lib/retry.ts）
+    const result = await withRetry(
+      () =>
+        generateText({
+          model: anthropic(summaryLlm.model),
+          system: SUMMARY_SYSTEM_PROMPT,
+          messages: [
+            {
+              role: 'user',
+              content: renderSummaryInput({
+                existingSummary: state.summary,
+                turns: rowsToSummaryTurns(chunk),
+              }),
+            },
+          ],
+          temperature: 0,
+          maxOutputTokens: Math.max(MIN_SUMMARY_OUTPUT_TOKENS, params.fallbackLlm.maxOutputTokens ?? 0),
+          abortSignal: AbortSignal.timeout(config.CHAT.SUMMARY_TIMEOUT_MS),
+          maxRetries: 0,
+        }),
+      {
+        onRetry: (attempt: number, delayMs: number, err: unknown) => {
+          logger.warn(
+            { attempt, delayMs, err: err instanceof Error ? err.message : String(err) },
+            'LLM 调用失败，准备重试',
+          );
         },
-      ],
-      temperature: 0,
-      maxOutputTokens: Math.max(MIN_SUMMARY_OUTPUT_TOKENS, params.fallbackLlm.maxOutputTokens ?? 0),
-      abortSignal: AbortSignal.timeout(config.CHAT.SUMMARY_TIMEOUT_MS),
-    });
+      },
+    );
     llmSpan.end({
       input_tokens: result.usage.inputTokens ?? 0,
       output_tokens: result.usage.outputTokens ?? 0,

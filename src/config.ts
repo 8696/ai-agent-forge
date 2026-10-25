@@ -32,7 +32,7 @@ const toBool = (value: unknown): unknown => {
 
 /**
  * 环境变量校验，启动时缺必填项直接挂，避免带着错误配置继续服务。
- * 详见 docs/03-技术栈与规范.md §A.12 + docs/07-大模型与Embedding.md §7.1
+ * 详见 docs/03-a-技术栈-工程化规范.md §A.12 + docs/06-大模型与Embedding.md §7.1
  *
  * 设计要点：
  *  - LLM_PROVIDER 一键切换：选哪家，所有 LLM / Embedding 走那家
@@ -190,6 +190,16 @@ const envSchema = z.object({
   // 单用户窗口内最大请求数（0 = 不限）；租户可在「租户设置」里覆盖
   RATE_LIMIT_MAX_REQUESTS_PER_USER: z.coerce.number().int().nonnegative().default(30),
 
+  // === 熔断（D5 · docs/12-d-需求-运维稳定.md §D5）===
+  //
+  // 限流挡「刷太快」，熔断挡「上游已经挂了，还在往里冲」。
+  // 连续失败到阈值就断开一段时间，期间直接快速失败，不再打上游。
+  CIRCUIT_BREAKER_ENABLED: z.preprocess(toBool, z.boolean().default(true)),
+  // 连续失败多少次就断开
+  CIRCUIT_BREAKER_FAILURE_THRESHOLD: z.coerce.number().int().positive().default(5),
+  // 断开后多久放一个请求过去探活（毫秒）
+  CIRCUIT_BREAKER_COOLDOWN_MS: z.coerce.number().int().positive().default(30000),
+
   // === 成本控制（D3 · docs/12-d-需求-运维稳定.md §D3）===
   COST_TRACKING_ENABLED: z.preprocess(toBool, z.boolean().default(true)),
   // 超过租户月度 token 阈值时是否**直接拒绝**新请求。
@@ -210,6 +220,22 @@ const envSchema = z.object({
   // 单个评测集最多多少条题。一条题 = 2 次 LLM 调用（生成 + 裁判），
   // 上限是成本闸门：防止一次误传 5000 条把额度烧光
   EVALUATION_MAX_ITEMS: z.coerce.number().int().positive().default(50),
+
+  // === 重排序（B2 · docs/07-c 模块 09）===
+  // 平台总开关。关掉 = 全平台走纯 RRF 排序（租户开关也跟着无效，平台级是硬边界）
+  RERANK_ENABLED: z.preprocess(toBool, z.boolean().default(true)),
+  // 重排服务地址（Cohere 兼容端点的完整 URL，POST {地址}）。
+  // 留空 = 不做重排（哪怕 RERANK_ENABLED=true 也跳过）—— 配好地址即生效
+  RERANK_API_URL: optionalStr,
+  // 重排服务的 API key。自建服务一般留空；第三方按各家文档填
+  RERANK_API_KEY: z.string().default(''),
+  // 重排模型 id。自建 bge-reranker-v2-m3 一般就填 bge-reranker-v2-m3，
+  // 第三方按各家文档填（如硅基流动是 BAAI/bge-reranker-v2-m3）
+  RERANK_MODEL: z.string().default('bge-reranker-v2-m3'),
+  // 单次重排调用的超时（毫秒）—— 超了就降级回纯 RRF，不拖住用户请求
+  RERANK_TIMEOUT_MS: z.coerce.number().int().positive().default(8000),
+  // 送多少个候选去重排（RRF 融合之后、截断 topK 之前）
+  RERANK_CANDIDATES: z.coerce.number().int().min(1).max(100).default(20),
 
   // === 用户长期记忆（B4 · docs/12-b-需求-ai对话能力.md §B4）===
   // 平台级总开关。关掉 = 不抽取也不注入（租户级和用户级的开关另算）
@@ -514,6 +540,13 @@ export const config = Object.freeze({
     MAX_REQUESTS_PER_USER: env.RATE_LIMIT_MAX_REQUESTS_PER_USER,
   }),
 
+  // 熔断（D5）
+  CIRCUIT_BREAKER: Object.freeze({
+    ENABLED: env.CIRCUIT_BREAKER_ENABLED,
+    FAILURE_THRESHOLD: env.CIRCUIT_BREAKER_FAILURE_THRESHOLD,
+    COOLDOWN_MS: env.CIRCUIT_BREAKER_COOLDOWN_MS,
+  }),
+
   // 成本控制（D3）
   COST: Object.freeze({
     TRACKING_ENABLED: env.COST_TRACKING_ENABLED,
@@ -539,6 +572,19 @@ export const config = Object.freeze({
     MAX_ACTIVE_PER_USER: env.MEMORY_MAX_ACTIVE_PER_USER,
     MIN_CONFIDENCE: env.MEMORY_MIN_CONFIDENCE,
     EXTRACT_TIMEOUT_MS: env.MEMORY_EXTRACT_TIMEOUT_MS,
+  }),
+
+  // 重排序（B2 · docs/07-c 模块 09）
+  RERANK: Object.freeze({
+    /** 平台总开关（硬边界：关掉时租户配的「开」也无效） */
+    ENABLED: env.RERANK_ENABLED,
+    /** Cohere 兼容端点的完整 URL；留空 = 不做重排 */
+    API_URL: env.RERANK_API_URL ?? '',
+    API_KEY: env.RERANK_API_KEY,
+    MODEL: env.RERANK_MODEL,
+    TIMEOUT_MS: env.RERANK_TIMEOUT_MS,
+    /** 送多少个候选去重排 */
+    CANDIDATES: env.RERANK_CANDIDATES,
   }),
 
   LOG_LEVEL: env.LOG_LEVEL,

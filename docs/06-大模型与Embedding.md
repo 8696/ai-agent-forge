@@ -13,7 +13,7 @@
 |------|------|------|------|
 | 主对话 / 推理 | `LLM_PROVIDER=minimax` 走 MiniMax-M3 | zhipu / deepseek / qwen / custom | 一个 SDK 全搞定；切换供应商只改 `LLM_PROVIDER` |
 | Embedding | `LLM_PROVIDER=zhipu` 走 embedding-3 | minimax (embo-01) / qwen (text-embedding-v3) / custom | dev 偏好用智谱；切 LLM provider 时 Embedding 跟随 |
-| 重排序 | bge-reranker-v2-m3 | Cohere Rerank | 中文效果好（⏳ 未实现，见 `07-c` 模块 09） |
+| 重排序 | bge-reranker-v2-m3（Cohere 兼容端点） | Cohere Rerank / Jina / 硅基流动 | 中文效果好；✅ 已实现（2026-10-25），`.env` 的 `RERANK_API_URL` 配好即生效，见 `07-c` 模块 09 |
 | 评测（裁判） | 跟主用 provider（`LLM_PROVIDER`） | — | 裁判要稳；用 `generateObject` + Zod schema 自动评分（Step 10 落） |
 | 记忆抽取 | 跟主用 provider（**可租户级单独配**） | 便宜的小模型 | 抽取是独立的一次 LLM 调用（推理模型的思考 token 全额算输出 token，一次实测 2000+）；租户在 `/admin/models` 配一条 `usage_scope='memory'` 的条目就能把它切便宜，见 [12-c](./12-c-需求-管理员可配置.md) §C4 |
 | 内容审核 | 自建规则 + LLM（兜底） | — | 敏感审核要可控（Step 12 落） |

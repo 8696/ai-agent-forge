@@ -27,9 +27,15 @@ export function CustomerLoginPage(): ReactElement {
     try {
       const res = await customerApi.post<{
         token: string;
-        user: { role: string; must_change_password: boolean };
+        // ⚠️ 后端从 2026-10-25 起才真的返回这个字段 —— 之前前端在等、后端没给
+        user?: { role: string; must_change_password?: boolean };
       }>('/login', values);
       setToken(res.data.token);
+      // 被平台方重置过密码 → 先去改密（服务端也会拦其它接口）
+      if (res.data.user?.must_change_password === true) {
+        navigate('/customer/change-password', { replace: true });
+        return;
+      }
       navigate('/');
     } catch (e: unknown) {
       const status = (e as { response?: { status?: number } }).response?.status;

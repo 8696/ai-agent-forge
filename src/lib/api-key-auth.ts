@@ -2,8 +2,8 @@ import { Op } from 'sequelize';
 import { createHash } from 'node:crypto';
 import { nanoid } from 'nanoid';
 import type { Context, Next } from 'koa';
-import { ApiKey } from '../models';
-import { AuthError } from './errors';
+import { ApiKey, type ApiKeyScope } from '../models';
+import { AuthError, ForbiddenError } from './errors';
 import { hashPassword, verifyPassword } from './password';
 import { logger } from '../logger';
 
@@ -64,6 +64,12 @@ export interface ApiKeyPrincipal {
   tenantId: string;
   /** 租户给这把钥匙起的名字（"生产环境" / "测试环境"），日志里用 */
   name: string;
+  /**
+   * 权限分级（docs/10-安全方案.md §10）——
+   * 对外的 key 是**发到客户系统里**的，泄露一次就是「整租户的问答能力 + token 花费」全敞。
+   * read 的 key 只能调只读端点，发起对话会被挡。
+   */
+  scope: ApiKeyScope;
 }
 
 interface CacheEntry {
@@ -220,6 +226,7 @@ export async function verifyApiKey(raw: string): Promise<ApiKeyPrincipal | null>
       keyId: row.id,
       tenantId: row.tenant_id,
       name: row.name,
+      scope: row.scope,
     };
     if (cache.size >= CACHE_MAX) {
       sweepCache(now);
@@ -312,4 +319,48 @@ export async function apiKeyAuth(ctx: Context, next: Next): Promise<void> {
   }
   ctx.state.apiKey = principal;
   await next();
+}
+
+// ============================================================
+// 权限分级（docs/10-安全方案.md §10）
+// ============================================================
+
+/**
+ * scope 的包含关系：**write ⊇ read，admin ⊇ write**。
+ *
+ * 「这把 key 的权限够不够要 read」就是一次大小比较。
+ */
+function scopeRank(scope: ApiKeyScope): number {
+  if (scope === 'admin') return 3;
+  if (scope === 'write') return 2;
+  return 1;
+}
+
+/**
+ * 要求这把 key 至少有某个权限。
+ *
+ * 用法：
+ *   只读端点 → `requireApiScope('read')`
+ *   发起对话 → `requireApiScope('write')`（会花钱、会留会话记录）
+ *
+ * ⚠️ **权限不足返 403 不是 401**：key 本身是有效的，只是权限不够。
+ * 返 401 会让调用方以为「key 失效了」从而反复换 key 重试。
+ */
+export function requireApiScope(
+  required: ApiKeyScope,
+): (ctx: Context, next: Next) => Promise<void> {
+  return (ctx: Context, next: Next): Promise<void> => {
+    const principal = ctx.state.apiKey as ApiKeyPrincipal | undefined;
+    if (principal === undefined) {
+      throw new AuthError('缺少 API Key');
+    }
+    if (scopeRank(principal.scope) < scopeRank(required)) {
+      logger.warn(
+        { apiKeyId: principal.keyId, tenantId: principal.tenantId, scope: principal.scope, required },
+        'API Key 权限不足，拒绝',
+      );
+      throw new ForbiddenError(`API Key 权限不足（需要 ${required} 权限）`);
+    }
+    return next();
+  };
 }

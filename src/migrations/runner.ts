@@ -21,9 +21,10 @@ import * as m016 from './016-create-evaluation';
 import * as m017 from './017-create-user-memories';
 import * as m018 from './018-add-tenant-model-usage-scope';
 import * as m019 from './019-add-tenant-model-summary-scope';
+import * as m020 from './020-add-api-key-scope';
 
 /**
- * umzug 迁移 runner（详见 docs/03-技术栈与规范.md §B.2）
+ * umzug 迁移 runner（详见 docs/03-b-技术栈-后端栈.md §B.2）
  * - 显式列出迁移文件（静态 import 保证 tsx 能正确解析 .ts）
  * - 已执行的迁移写 `sequelize_meta` 表
  *
@@ -135,6 +136,11 @@ export function buildMigrator(): Umzug<QueryInterface> {
         name: '019-add-tenant-model-summary-scope',
         up: (params) => m019.up(params),
         down: (params) => m019.down(params),
+      },
+      {
+        name: '020-add-api-key-scope',
+        up: (params) => m020.up(params),
+        down: (params) => m020.down(params),
       },
     ],
   });

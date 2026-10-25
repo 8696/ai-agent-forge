@@ -1,6 +1,7 @@
 import type { Context, Next } from 'koa';
 import type { JwtPayload, TenantUserJwtPayload } from '../../lib/jwt';
 import { AuthError } from '../../lib/errors';
+import { assertPasswordChanged } from '../password-change-gate';
 
 /**
  * customer 子系统：要求 token 是租户前台用户（role=customer）
@@ -22,5 +23,7 @@ export function requireCustomer(ctx: Context, next: Next): Promise<void> {
     throw new AuthError('需要 customer 角色');
   }
   ctx.state.customerUser = u as TenantUserJwtPayload;
+  // 被要求先改密码的账号，除了 /me 和 /change-password 之外一律挡住
+  assertPasswordChanged(ctx);
   return next();
 }

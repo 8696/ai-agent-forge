@@ -1,4 +1,4 @@
-import { Op } from 'sequelize';
+import { Op, type Transaction } from 'sequelize';
 import { getSequelize } from '../db';
 import { PromptVersion, type PromptVersionStatus } from '../models';
 import { NotFoundError, ValidationError } from '../lib/errors';
@@ -184,9 +184,17 @@ export async function publishPromptVersion(params: {
   tenantId: string;
   version: string;
   userId: string;
+  /**
+   * 外部事务（可选）。
+   *
+   * **必须跟「写 tenant_settings.prompt_version」共用同一个事务** ——
+   * 否则会出现「版本已置 production、但生效指针没写」的半成功：
+   * 对话还在用旧提示词，前端却显示发布失败。
+   */
+  transaction?: Transaction;
 }): Promise<PromptVersion> {
   const sequelize = getSequelize();
-  return sequelize.transaction(async (t) => {
+  const run = async (t: Transaction): Promise<PromptVersion> => {
     const row = await PromptVersion.findOne({
       where: { tenant_id: params.tenantId, version: params.version },
       transaction: t,
@@ -207,7 +215,11 @@ export async function publishPromptVersion(params: {
     row.deployed_by = params.userId;
     await row.save({ transaction: t });
     return row;
-  });
+  };
+  if (params.transaction) {
+    return run(params.transaction);
+  }
+  return sequelize.transaction(run);
 }
 
 export async function deletePromptVersion(tenantId: string, version: string): Promise<void> {

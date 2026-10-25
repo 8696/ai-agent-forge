@@ -50,6 +50,8 @@ const FALLBACK_LLM: ResolvedLlmSettings = {
   maxInputChars: 4000,
   thinkingBudgetTokens: 0,
   promptCacheEnabled: true,
+  rerankEnabled: true,
+  queryRewriteEnabled: false,
   promptVersion: null,
   modelEntryId: null,
   source: 'process-default',

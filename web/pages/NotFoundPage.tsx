@@ -2,11 +2,16 @@ import type { ReactElement } from 'react';
 import { Link } from 'react-router-dom';
 import { Button, Result } from 'antd';
 import { ArrowLeftOutlined } from '@ant-design/icons';
+import { useThemeMode } from '../lib/themeMode';
+import { pageGradient } from '../theme';
 
 /**
  * 404 —— 全屏 Result + 回首页按钮
  */
 export function NotFoundPage(): ReactElement {
+  // 整页渐变跟深色模式走（写死浅色的话，暗色下 404 页是一片白）
+  const mode = useThemeMode();
+
   return (
     <div
       style={{
@@ -14,8 +19,7 @@ export function NotFoundPage(): ReactElement {
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        background:
-          'radial-gradient(ellipse at top, #e8efff 0%, #f5f7fa 50%, #f0f2f5 100%)',
+        background: pageGradient(mode === 'dark'),
         padding: 24,
       }}
     >

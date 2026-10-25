@@ -10,6 +10,7 @@ import {
   type UserMemoryStatus,
 } from '../models';
 import { logger } from '../logger';
+import { withRetry } from '../lib/retry';
 import { config } from '../config';
 import { estimateTokens } from '../lib/token-estimate';
 import { NotFoundError, ValidationError } from '../lib/errors';
@@ -382,7 +383,35 @@ export async function listUserMemories(
   tenantId: string,
   userId: string,
   filter: Omit<MemoryListFilter, 'userId'> = {},
+  limit?: number,
 ): Promise<MemoryView[]> {
+  const where = buildMemoryWhere(tenantId, userId, filter);
+
+  const rows = await UserMemory.findAll({
+    where,
+    order: [['updated_at', 'DESC']],
+    // 上限 200 是兜底；limit 传了就取更小的那个
+    limit: limit === undefined ? 200 : Math.min(limit, 200),
+  });
+  return rows.map(toView);
+}
+
+/** 数一数某用户有多少条记忆（跟 listUserMemories 用同一套筛选条件） */
+export async function countUserMemories(
+  tenantId: string,
+  userId: string,
+  filter: Omit<MemoryListFilter, 'userId'> = {},
+): Promise<number> {
+  const where = buildMemoryWhere(tenantId, userId, filter);
+  return UserMemory.count({ where });
+}
+
+/** 记忆列表的 where 条件（列表和计数共用，免得两处筛出不同的集合） */
+function buildMemoryWhere(
+  tenantId: string,
+  userId: string,
+  filter: Omit<MemoryListFilter, 'userId'>,
+): Record<string, unknown> {
   const where: Record<string, unknown> = {
     tenant_id: tenantId,
     user_id: userId,
@@ -397,13 +426,7 @@ export async function listUserMemories(
   if (filter.keyword !== undefined && filter.keyword.trim() !== '') {
     where['content'] = { [Op.like]: `%${escapeLike(filter.keyword.trim())}%` };
   }
-
-  const rows = await UserMemory.findAll({
-    where,
-    order: [['updated_at', 'DESC']],
-    limit: 200,
-  });
-  return rows.map(toView);
+  return where;
 }
 
 /** 租户后台的列表项：比 MemoryView 多一个用户邮箱（后台要能一眼看出这条记忆是谁的） */
@@ -1158,32 +1181,45 @@ async function runExtraction(params: {
   });
   let result: Awaited<ReturnType<typeof generateText>>;
   try {
-    result = await generateText({
-      model: anthropic(extractionLlm.model),
-      system: MEMORY_EXTRACT_SYSTEM_PROMPT,
-      messages: [
-        {
-          role: 'user',
-          content: renderMemoryExtractInput({
-            userText: params.userText,
-            assistantText: params.assistantText,
-            existing: existing.map((m) => ({
-              id: m.id,
-              category: m.category,
-              content: m.content,
-              source: m.source,
-            })),
-          }),
+    // ⚠️ maxRetries: 0 —— 重试统一由 withRetry 负责（带抖动，见 src/lib/retry.ts）
+    result = await withRetry(
+      () =>
+        generateText({
+          model: anthropic(extractionLlm.model),
+          system: MEMORY_EXTRACT_SYSTEM_PROMPT,
+          messages: [
+            {
+              role: 'user',
+              content: renderMemoryExtractInput({
+                userText: params.userText,
+                assistantText: params.assistantText,
+                existing: existing.map((m) => ({
+                  id: m.id,
+                  category: m.category,
+                  content: m.content,
+                  source: m.source,
+                })),
+              }),
+            },
+          ],
+          temperature: 0,
+          // ⚠️ 上限要给够：推理型模型（glm-5.3 等）的思考 token 也算输出 token，
+          //    给 800 的话它刚想完就快到顶了，JSON 会被截断 → 解析出来是空。
+          //    条目里配的 max_output_tokens 可能偏小，这里取「至少 2000」——
+          //    租户可以调大，但调小到会截断 JSON 的程度没有意义。
+          maxOutputTokens: Math.max(MIN_EXTRACT_OUTPUT_TOKENS, extractionLlm.maxOutputTokens ?? 0),
+          abortSignal: AbortSignal.timeout(config.MEMORY.EXTRACT_TIMEOUT_MS),
+          maxRetries: 0,
+        }),
+      {
+        onRetry: (attempt: number, delayMs: number, err: unknown) => {
+          logger.warn(
+            { attempt, delayMs, err: err instanceof Error ? err.message : String(err) },
+            'LLM 调用失败，准备重试',
+          );
         },
-      ],
-      temperature: 0,
-      // ⚠️ 上限要给够：推理型模型（glm-5.3 等）的思考 token 也算输出 token，
-      //    给 800 的话它刚想完就快到顶了，JSON 会被截断 → 解析出来是空。
-      //    条目里配的 max_output_tokens 可能偏小，这里取「至少 2000」——
-      //    租户可以调大，但调小到会截断 JSON 的程度没有意义。
-      maxOutputTokens: Math.max(MIN_EXTRACT_OUTPUT_TOKENS, extractionLlm.maxOutputTokens ?? 0),
-      abortSignal: AbortSignal.timeout(config.MEMORY.EXTRACT_TIMEOUT_MS),
-    });
+      },
+    );
     llmSpan.end({
       input_tokens: result.usage.inputTokens ?? 0,
       output_tokens: result.usage.outputTokens ?? 0,

@@ -39,6 +39,16 @@
 - 启停之间：所有 audit_logs 留痕（`/system/audit` 也能查）
 - 列表加载：默认按 `created_at DESC`，状态筛选支持单独显示 `disabled` 列表（无活跃租户运营只看历史）
 
+> ✅ **2026-10-25 落地**（这一节以前只有 UI 草图，代码里没有）：
+> - **搜索框 / 套餐筛选 / 状态筛选** —— 筛选在**服务端**做
+>   （`GET /tenants?keyword=&plan=&status=`，租户多了以后前端筛不动）
+> - **用户数列** —— 后端返回 `user_count`
+> - **状态筛选多一个「已到期」** —— 到期是**算出来的**（`expires_at <= now`），
+>   跟 `status='disabled'` 是两回事；不分开就查不出「哪些租户快到期 / 已到期」
+> - **创建租户表单**加了套餐 + 到期时间（以前只能建完再去详情页改）
+> - **租户详情的统计块**（用户数 / 会话数 / 文档数 / 累计花费）—— 全部按 tenant_id 过滤
+> - 集成测试 `tests/integration/system-tenant-filters.test.ts`（9 个用例）
+
 ### 6.2 总览 `/system/dashboard` ✅ 已落地 2026-10-24
 
 > 实际路由是 `/system`（首页就是总览），不是 `/system/dashboard`。
@@ -69,6 +79,21 @@
 | `<ErrorBoundary>`       | 错误兜底，白屏防护                 | `web/components/ErrorBoundary.tsx` |
 | `<ChatMessage>`         | 单条消息气泡（用户 / AI / 工具）   | `web/components/ChatMessage.tsx`   |
 | `<Markdown>`            | Markdown 渲染（带代码高亮 + 复制） | `web/components/Markdown.tsx`      |
+
+> ✅ **2026-10-25 补了 3 个**（之前 `RequireAuth` / `ErrorBoundary` / `Markdown`
+> 只在文档里写着，代码里没有）：
+> - `<ErrorBoundary>` —— 挂在 `web/main.tsx` 的最外层（React 渲染时抛的异常
+>   try/catch 接不住，没有它就是整页白屏）
+> - `<RequireAuth>` —— 把三套 Layout 里各抄一遍的守卫逻辑收成一个组件
+>   （没登录跳本子系统登录页 / 角色不对回 `/` / 被要求改密跳改密页）
+> - `<Markdown>` —— 代码块 highlight.js 高亮 + 复制按钮、引用块蓝色边 + 浅灰底、
+>   链接新窗口打开（04-b §4.9）。**highlight.js 的配色跟着深色模式切**
+>   （用 Vite 的 `?inline` 拿 CSS 文本，按模式注入一份）。
+>   单测 `tests/unit/markdown-component.test.tsx`（8 个用例）
+>
+> ⚠️ `<ChatMessage>` 仍然**没有单独抽出来** —— 两个聊天页（customer / widget）的
+> AI 气泡差异不小（customer 有 👍👎 反馈、widget 是匿名没有反馈），
+> 强行合并的风险比收益大。两边的**用户气泡**已经统一了（时间戳 + 品牌色 token）。
 | `<Chart>`               | ECharts 照本封装                   | `web/components/Chart.tsx`         |
 | `<TraceTimeline>`       | Trace 时间线                       | `web/components/TraceTimeline.tsx` |
 | `<ActiveModelsFooter>`  | 页脚展示当前激活 LLM / Embedding   | `web/components/ActiveModelsFooter.tsx` |
@@ -241,9 +266,9 @@
 
 - [ ] 首屏 < 2 秒
 - [ ] 路由切换 < 500ms
-- [ ] 错误边界兜底（白屏防护）
+- [x] 错误边界兜底（白屏防护）—— ✅ 2026-10-25（`<ErrorBoundary>`）
 - [ ] SSE 断流重连
-- [ ] JWT 过期自动跳登录
+- [x] JWT 过期自动跳登录 —— ✅ 2026-10-25（401 拦截器跳本子系统的登录页）
 
 ### 11.4 国际化 / 扩展
 

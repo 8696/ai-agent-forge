@@ -1,6 +1,7 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { App } from './App';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import 'antd/dist/reset.css';
 
 /**
@@ -23,8 +24,12 @@ baseStyle.textContent = `
     font-feature-settings: 'tnum' on, 'lnum' on;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
-    background: #f5f7fa;
   }
+  /* body 背景跟着深色模式走 —— 挂在 <html data-theme> 上，
+     App.tsx 切模式时改这个属性。
+     写死一个浅色的话，暗色模式下页面边缘（比容器更矮的部分）会漏出白底。 */
+  html[data-theme='light'] body { background: #f5f7fa; }
+  html[data-theme='dark'] body { background: #141414; }
   /* 让 AntD 的滚动条更克制 */
   *::-webkit-scrollbar { width: 8px; height: 8px; }
   *::-webkit-scrollbar-thumb {
@@ -43,6 +48,10 @@ if (rootEl === null) {
 
 createRoot(rootEl).render(
   <StrictMode>
-    <App />
+    {/* ⚠️ 错误边界必须在最外层 —— 组件渲染时抛出的异常 try/catch 接不住，
+        没有它就是整页白屏（docs/04-d §11.3「错误边界兜底（白屏防护）」） */}
+    <ErrorBoundary>
+      <App />
+    </ErrorBoundary>
   </StrictMode>,
 );

@@ -1,6 +1,8 @@
 import Router from '@koa/router';
+import { z } from 'zod';
+import { Op, type WhereOptions } from 'sequelize';
 import { getSequelize } from '../../db';
-import { Tenant, User } from '../../models';
+import { Tenant, User, Session, Document, CostLog } from '../../models';
 import { hashPassword } from '../../lib/password';
 import {
   createTenantSchema,
@@ -46,7 +48,18 @@ systemTenantRouter.post('/tenants', jwtAuth, requireSystemUser, async (ctx) => {
     if (existing !== null) {
       throw new ValidationError('租户号已被使用');
     }
-    const tenant = await Tenant.create({ code: input.code, name: input.name }, { transaction: tx });
+    const tenant = await Tenant.create(
+      {
+        code: input.code,
+        name: input.name,
+        ...(input.plan !== undefined ? { plan: input.plan } : {}),
+        expires_at:
+          input.expires_at === undefined || input.expires_at === null
+            ? null
+            : new Date(input.expires_at),
+      },
+      { transaction: tx },
+    );
     const admin = await User.create(
       {
         tenant_id: tenant.id,
@@ -80,10 +93,49 @@ systemTenantRouter.post('/tenants', jwtAuth, requireSystemUser, async (ctx) => {
 });
 
 // ----- F1：列所有租户（F2：补 status / expires_at）-----
+/** 转义 LIKE 通配符，否则搜 "100%" 会变成通配查询 */
+function escapeLike(input: string): string {
+  return input.replace(/[\\%_]/g, (c) => `\\${c}`);
+}
+
+/**
+ * 列表的筛选条件 —— 04-d §6.1「租户列表」要求有搜索框 / 套餐筛选 / 状态筛选。
+ *
+ * ⚠️ **状态筛选是按「能不能用」算的**，不是只看 `tenants.status`：
+ *    已到期（expires_at <= 现在）的租户在页面上要能筛出来单独看，
+ *    否则「哪些租户快到期了 / 已经到期了」根本查不出来。
+ */
+const tenantListQuerySchema = z.object({
+  /** 搜索：租户号或名称 */
+  keyword: z.string().trim().max(100).optional(),
+  /** 套餐筛选 */
+  plan: z.enum(['free', 'pro', 'enterprise']).optional(),
+  /** 状态筛选：active=正常 / disabled=已禁用 / expired=已到期 */
+  status: z.enum(['active', 'disabled', 'expired']).optional(),
+});
+
 systemTenantRouter.get('/tenants', jwtAuth, requireSystemUser, async (ctx) => {
+  const input = tenantListQuerySchema.parse(ctx.request.query ?? {});
+  const now = Date.now();
+
+  // ⚠️ where 要**合成一个** —— 分两次 spread 会后者覆盖前者（筛选就只剩套餐了）
+  const where: WhereOptions<Tenant> = {
+    ...(input.keyword !== undefined && input.keyword !== ''
+      ? {
+          [Op.or]: [
+            { code: { [Op.like]: `%${escapeLike(input.keyword)}%` } },
+            { name: { [Op.like]: `%${escapeLike(input.keyword)}%` } },
+          ],
+        }
+      : {}),
+    ...(input.plan !== undefined ? { plan: input.plan } : {}),
+  };
+
   const tenants = await Tenant.findAll({
+    where,
     order: [['created_at', 'DESC']],
   });
+
   const data = await Promise.all(
     tenants.map(async (t) => {
       const admin = await User.findOne({
@@ -91,6 +143,10 @@ systemTenantRouter.get('/tenants', jwtAuth, requireSystemUser, async (ctx) => {
         order: [['created_at', 'ASC']],
         attributes: ['id', 'email', 'must_change_password'],
       });
+      // 用户数（04-d §6.1 列表里有一列「用户数」）
+      const userCount = await User.count({ where: { tenant_id: t.id } });
+      const expired =
+        t.expires_at !== null && t.expires_at.getTime() <= now;
       return {
         id: t.id,
         code: t.code,
@@ -98,6 +154,10 @@ systemTenantRouter.get('/tenants', jwtAuth, requireSystemUser, async (ctx) => {
         plan: t.plan,
         status: t.status, // F2
         expires_at: t.expires_at, // F2
+        /** 已到期（时间过了）—— 跟 status='disabled' 是两回事 */
+        expired,
+        /** 该租户的用户总数 */
+        user_count: userCount,
         created_at: t.created_at,
         admin:
           admin !== null
@@ -106,7 +166,16 @@ systemTenantRouter.get('/tenants', jwtAuth, requireSystemUser, async (ctx) => {
       };
     }),
   );
-  ctx.body = { tenants: data };
+
+  // 状态筛选在 JS 层做 —— 「已到期」是算出来的，不是列上的枚举值
+  const filtered =
+    input.status === undefined
+      ? data
+      : data.filter((t) =>
+          input.status === 'expired' ? t.expired : t.status === input.status && !t.expired,
+        );
+
+  ctx.body = { tenants: filtered };
 });
 
 // ----- F1：单租户详情（F2：补 status / expires_at）-----
@@ -120,6 +189,16 @@ systemTenantRouter.get('/tenants/:id', jwtAuth, requireSystemUser, async (ctx) =
     order: [['created_at', 'ASC']],
     attributes: ['id', 'email', 'role', 'must_change_password', 'last_login_at'],
   });
+  // 该租户的统计（04-d §6.1「租户详情页有这一块」）：
+  // 用户数 / 会话数 / 文档数 / 累计花费。
+  // ⚠️ 全部按 tenant_id 过滤 —— 平台方看的是**单个租户**的数，不是全平台的。
+  const [userCount, sessionCount, documentCount, totalCost] = await Promise.all([
+    User.count({ where: { tenant_id: tenant.id } }),
+    Session.count({ where: { tenant_id: tenant.id } }),
+    Document.count({ where: { tenant_id: tenant.id } }),
+    CostLog.sum('cost', { where: { tenant_id: tenant.id } }),
+  ]);
+
   ctx.body = {
     id: tenant.id,
     code: tenant.code,
@@ -130,6 +209,14 @@ systemTenantRouter.get('/tenants/:id', jwtAuth, requireSystemUser, async (ctx) =
     expires_at: tenant.expires_at, // F2
     created_at: tenant.created_at,
     updated_at: tenant.updated_at,
+    /** 该租户的规模统计 */
+    stats: {
+      user_count: userCount,
+      session_count: sessionCount,
+      document_count: documentCount,
+      /** 累计花费（美元，估算值） */
+      total_cost_usd: Number((totalCost ?? 0).toFixed(6)),
+    },
     admin:
       admin !== null
         ? {

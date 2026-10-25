@@ -32,7 +32,8 @@ const { Text, Paragraph } = Typography;
  * 这一页的价值就是看清「哪些块被召回了、为什么」，加了 LLM 反而掩盖了检索层的问题。
  *
  * **score 怎么读**（后端 src/rag/hybrid-search.ts 有完整推导）：
- *  - `score` 是归一化到 [0,1] 的 RRF 分：1.0 = 向量和关键词两路都排第一
+ *  - 重排生效时 `score` 是重排分（模型给的原始分，落在 [0,1]）
+ *  - 没重排时 `score` 是归一化到 [0,1] 的 RRF 分：1.0 = 向量和关键词两路都排第一
  *  - 一路命中排第一只能到 0.5 —— 这是设计如此，不是 bug
  *  - `sources` 标签告诉你是哪几路召回的，这比分数本身更能解释「为什么命中」
  *
@@ -104,7 +105,8 @@ export function KnowledgeSearchPage(): ReactElement {
             />
           </Space>
           <Text type="secondary" style={{ fontSize: 13 }}>
-            两路召回：向量（语义相近）+ 关键词（专有名词 / 编号精确匹配），结果用 RRF 融合排序。
+            两路召回：向量（语义相近）+ 关键词（专有名词 / 编号精确匹配），结果用 RRF 融合排序，
+            平台配了重排服务的话还会再排一遍（重排分见每条的「重排」标签）。
           </Text>
         </Space>
       </Card>
@@ -122,7 +124,23 @@ export function KnowledgeSearchPage(): ReactElement {
       {result !== null && (
         <Card
           title={`命中 ${result.hits.length} 条`}
-          extra={<Text type="secondary">耗时 {result.took_ms} ms</Text>}
+          extra={
+            <Space size={8}>
+              <Tooltip
+                title={
+                  result.rerank_applied
+                    ? '这次排序是重排模型给的（RRF 融合之后又排了一遍）'
+                    : '这次没有重排：要么平台没配重排服务，要么本租户在「租户设置 → 知识库」里关掉了，' +
+                      '要么调用失败已自动降级为 RRF 排序'
+                }
+              >
+                <Tag color={result.rerank_applied ? 'purple' : 'default'}>
+                  {result.rerank_applied ? '已重排' : '未重排'}
+                </Tag>
+              </Tooltip>
+              <Text type="secondary">耗时 {result.took_ms} ms</Text>
+            </Space>
+          }
         >
           {result.hits.length === 0 ? (
             <Empty description="没有命中任何块。检查知识库是否有已就绪的文档，或换个说法再试" />
@@ -157,7 +175,9 @@ function HitCard({ rank, hit }: { rank: number; hit: SearchHit }): ReactElement 
           <Tooltip
             title={
               <span style={{ fontSize: 12 }}>
-                归一化 RRF 分。1.0 = 向量和关键词都排第一；只有一路排第一时最高 0.5。
+                {hit.rerank_score !== null
+                  ? '重排模型给的相关度分（0~1，越大越相关）。这次的顺序就是按它排的'
+                  : '归一化 RRF 分。1.0 = 向量和关键词都排第一；只有一路排第一时最高 0.5。'}
                 <br />
                 原始 RRF 分 {hit.rrf_score}
               </span>
@@ -165,6 +185,11 @@ function HitCard({ rank, hit }: { rank: number; hit: SearchHit }): ReactElement 
           >
             <Tag color={isDual ? 'green' : 'default'}>相关度 {hit.score.toFixed(2)}</Tag>
           </Tooltip>
+          {hit.rerank_score !== null && (
+            <Tooltip title="重排模型给的原始分">
+              <Tag color="purple">重排 {hit.rerank_score.toFixed(3)}</Tag>
+            </Tooltip>
+          )}
           {hit.vector_rank !== null && (
             <Tooltip title="向量（语义）召回排名">
               <Tag icon={<ThunderboltOutlined />} color="blue">

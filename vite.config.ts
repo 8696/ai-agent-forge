@@ -17,7 +17,9 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/api': {
-        target: 'http://localhost:3000',
+        // 代理目标可以用 VITE_API_TARGET 覆盖 ——
+        // 跑在别的端口的后端（比如测试实例 3099 / 3100）时不用改代码
+        target: process.env.VITE_API_TARGET ?? 'http://localhost:3000',
         changeOrigin: true,
       },
       // SSE（流式聊天）直接走 /api/chat/stream，不需要单独代理

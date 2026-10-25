@@ -1,7 +1,7 @@
 /**
  * tests/unit/audit-log.test.ts
  * 对应 src/lib/audit-log.ts
- * 详见 docs/18-测试流程规范.md §18.3.3
+ * 详见 docs/12-d-需求-运维稳定.md §D6
  *
  * 注：AuditLog.create 失败时 writeAuditLog 不抛（静默降级）。
  */

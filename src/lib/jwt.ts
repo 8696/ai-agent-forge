@@ -19,6 +19,14 @@ export interface TenantUserJwtPayload {
   sub: string; // user id
   tenant_id: string;
   role: 'admin' | 'customer';
+  /**
+   * **true = 这个账号必须先改密码**（平台方重置过密码 / 初始密码）。
+   *
+   * 放在 token 里（而不是每次查库）的原因：闸门要拦**每一个**请求，
+   * 挂在 payload 上就不用为「查一下这个标志」给每个请求加一次 DB 往返。
+   * 改完密码后端会签发一枚**新的** token（标志清掉），前端替换即可。
+   */
+  must_change_password?: boolean;
 }
 
 export type JwtPayload = SystemJwtPayload | TenantUserJwtPayload;

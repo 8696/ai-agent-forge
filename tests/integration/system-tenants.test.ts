@@ -1,7 +1,7 @@
 /**
  * tests/integration/system-tenants.test.ts
  * 对应 src/gateway/system/tenant-routes.ts（7 个端点）
- * 详见 docs/18-测试流程规范.md §18.3
+ * 详见 docs/12-d-需求-运维稳定.md §D6
  */
 import { describe, it, expect, beforeAll } from 'vitest';
 import axios from 'axios';

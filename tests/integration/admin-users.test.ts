@@ -1,7 +1,7 @@
 /**
  * tests/integration/admin-users.test.ts
  * 对应 src/gateway/admin/user-routes.ts（4 个端点）
- * 详见 docs/18-测试流程规范.md §18.3
+ * 详见 docs/12-d-需求-运维稳定.md §D6
  */
 import { describe, it, expect, beforeAll } from 'vitest';
 import axios from 'axios';

@@ -143,6 +143,7 @@ describe('mergeSettings · 三层配置合并', () => {
     maxInputChars: 2000,
     thinkingBudgetTokens: 0,
     promptCacheEnabled: true,
+    rerankEnabled: true,
   };
 
   const model = (over: Partial<Parameters<typeof mergeSettings>[0]> = {}) => ({
@@ -292,5 +293,91 @@ describe('SETTINGS_REGISTRY · 注册表', () => {
     expect(keys).not.toContain('keepalive_ms');
     expect(keys).not.toContain('budget_safety_ratio');
     expect(keys).not.toContain('system_token_budget');
+  });
+});
+
+/**
+ * 回归：`prompt_version` 必须留在 SETTINGS_REGISTRY 里
+ *
+ * ⚠️ **这条曾经坏过，而且坏得很安静**：
+ * `prompt_version` 一度只出现在「读」的一侧（llm-settings 读它、
+ * config-routes 写它），却**没注册进 SETTINGS_REGISTRY**。后果是：
+ *   - 写：`saveSettings` 抛 ValidationError → 发布 / 回滚接口返 400
+ *   - 读：`getSettingValue` 直接 return null → 对话永远用内置默认提示词
+ * 而后台页面上「发布」按钮点了报错，看起来像偶发失败，不像功能整体没通。
+ *
+ * 这里锁死四件事，任一被改坏都会红：
+ *   1. 它在 registry 里（读侧不再被静默过滤）
+ *   2. 它是 hidden 的（通用配置页不给自由输入框）
+ *   3. 按 string 类型做值校验
+ *   4. mergeSettings 能把它透传成 promptVersion
+ */
+describe('prompt_version · 提示词生效指针（C3）', () => {
+  it('在 registry 里（否则读写两端都拿不到它）', () => {
+    const spec = SETTINGS_REGISTRY.find((s) => s.key === 'prompt_version');
+    expect(spec).toBeDefined();
+    expect(spec?.type).toBe('string');
+  });
+
+  it('是 hidden 的 —— 由「提示词配置」页管理，不在通用配置页露出', () => {
+    const spec = SETTINGS_REGISTRY.find((s) => s.key === 'prompt_version');
+    expect(spec?.hidden).toBe(true);
+  });
+
+  it('按 string 做值校验（超长报错）', () => {
+    const spec = SETTINGS_REGISTRY.find((s) => s.key === 'prompt_version');
+    expect(spec).toBeDefined();
+    expect(coerceSettingValue(spec!, 'chat-v2')).toBe('chat-v2');
+    expect(() => coerceSettingValue(spec!, 'x'.repeat(200))).toThrow();
+  });
+
+  it('mergeSettings 把它透传成 promptVersion（读侧端到端）', () => {
+    const PROCESS = {
+      llm: {
+        llmApiKey: 'process-key',
+        llmBaseUrl: 'https://process.example.com/anthropic/v1',
+        llmModel: 'process-model',
+        provider: 'zhipu' as const,
+      },
+      temperature: 0.2,
+      maxOutputTokens: 2048,
+      retrievalTopK: 5,
+      maxHistoryTurns: 10,
+      retrievalTokenBudget: 2500,
+      contextTokenBudget: 8000,
+      summaryTokenBudget: 2000,
+      summaryEnabled: true,
+      maxInputChars: 4000,
+      thinkingBudgetTokens: 2048,
+      rerankEnabled: true,
+      promptCacheEnabled: true,
+    };
+    const merged = mergeSettings(null, { prompt_version: 'chat-v9' }, PROCESS);
+    expect(merged.promptVersion).toBe('chat-v9');
+  });
+
+  it('没配时是 null（回落内置默认提示词，不报错）', () => {
+    const PROCESS = {
+      llm: {
+        llmApiKey: 'process-key',
+        llmBaseUrl: 'https://process.example.com/anthropic/v1',
+        llmModel: 'process-model',
+        provider: 'zhipu' as const,
+      },
+      temperature: 0.2,
+      maxOutputTokens: 2048,
+      retrievalTopK: 5,
+      maxHistoryTurns: 10,
+      retrievalTokenBudget: 2500,
+      contextTokenBudget: 8000,
+      summaryTokenBudget: 2000,
+      summaryEnabled: true,
+      maxInputChars: 4000,
+      thinkingBudgetTokens: 2048,
+      rerankEnabled: true,
+      promptCacheEnabled: true,
+    };
+    const merged = mergeSettings(null, {}, PROCESS);
+    expect(merged.promptVersion).toBeNull();
   });
 });

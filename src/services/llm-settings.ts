@@ -40,6 +40,10 @@ export interface ResolvedLlmSettings {
   maxInputChars: number;
   /** 思考模式推理预算；0 = 关 */
   thinkingBudgetTokens: number;
+  /** 本租户要不要开重排序（B2 · docs/12-c §C4 的 rerank_enabled） */
+  rerankEnabled: boolean;
+  /** 本租户要不要开查询改写（B2 · 可选功能，每轮多一次模型调用） */
+  queryRewriteEnabled: boolean;
   /** 是否给系统提示词打 cacheControl */
   promptCacheEnabled: boolean;
   /** 生效的提示词版本号（null = 内置默认） */
@@ -81,6 +85,7 @@ export interface ProcessDefaults {
   maxInputChars: number;
   thinkingBudgetTokens: number;
   promptCacheEnabled: boolean;
+  rerankEnabled: boolean;
 }
 
 /**
@@ -119,6 +124,10 @@ export function mergeSettings(
     summaryEnabled: defaults.summaryEnabled && bool('summary_enabled', true),
     maxInputChars: num('max_input_chars', defaults.maxInputChars),
     thinkingBudgetTokens: num('thinking_budget_tokens', defaults.thinkingBudgetTokens),
+    // 平台总开关关掉时，租户配的「开」也无效 —— 平台级是硬边界
+    rerankEnabled: defaults.rerankEnabled && bool('rerank_enabled', true),
+    // 查询改写：纯租户级开关（平台没有总开关）
+    queryRewriteEnabled: bool('query_rewrite_enabled', false),
   };
 
   if (model === null) {
@@ -175,6 +184,8 @@ export async function resolveLlmSettings(tenantId: string): Promise<ResolvedLlmS
     thinkingBudgetTokens: config.CHAT.THINKING_BUDGET_TOKENS,
     // 提示词缓存默认开（docs/04-c §5.4.1）
     promptCacheEnabled: true,
+    // 重排默认开（平台级）；平台没配重排服务时下游会自动跳过
+    rerankEnabled: config.RERANK.ENABLED,
   };
 
   let active: Awaited<ReturnType<typeof resolveActiveModel>> = null;
@@ -191,6 +202,8 @@ export async function resolveLlmSettings(tenantId: string): Promise<ResolvedLlmS
         'summary_enabled',
         'max_input_chars',
         'thinking_budget_tokens',
+        'rerank_enabled',
+        'query_rewrite_enabled',
         'prompt_version',
       ]),
     ]);

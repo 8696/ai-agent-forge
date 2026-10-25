@@ -13,20 +13,25 @@
 
 ### 0.1 技术选型
 
-| 项       | 选型                                              |
-| -------- | ------------------------------------------------- |
-| 组件库   | **Ant Design 5**                                  |
-| 样式     | AntD ConfigProvider + token 定制（不引 Tailwind） |
-| 路由     | React Router DOM 6                                |
-| 状态管理 | Zustand（按业务拆 store）                         |
-| HTTP     | Axios + 拦截器                                    |
-| 图表     | ECharts（`echarts-for-react`）                    |
-| Markdown | react-markdown + remark-gfm + highlight.js        |
-| 实时通信 | SSE（`fetch` + ReadableStream）                   |
-| 时间     | Day.js（AntD 配套）                               |
-| 图标     | `@ant-design/icons`                               |
-| 表单     | AntD Form + Zod 校验                              |
-| 错误兜底 | react-error-boundary                              |
+| 项       | 选型                                              | 落地情况                    |
+| -------- | ------------------------------------------------- | --------------------------- |
+| 组件库   | **Ant Design 6**                                  | ✅ 已用（注意 v6 的废弃 API） |
+| 样式     | AntD ConfigProvider + token 定制（不引 Tailwind） | ✅                          |
+| 路由     | React Router DOM 7                                | ✅                          |
+| 状态管理 | Zustand（按业务拆 store）                         | ⚠️ 装了没（用模块级变量 + useState） |
+| HTTP     | Axios + 拦截器                                    | ✅                          |
+| 图表     | ECharts（`echarts-for-react`）                    | ✅                          |
+| Markdown | react-markdown + remark-gfm + highlight.js        | ✅ 2026-10-25 全接上（`web/components/Markdown.tsx`）|
+| 实时通信 | SSE（`fetch` + ReadableStream）                   | ✅（走 AI SDK 的 `useChat`）  |
+| 时间     | Day.js（AntD 配套）                               | ✅                          |
+| 图标     | `@ant-design/icons`                               | ✅                          |
+| 表单     | AntD Form + Zod 校验                              | ⚠️ AntD Form ✅，Zod 装了没在前端用 |
+| 错误兜底 | react-error-boundary                              | ✅ 2026-10-25 接上（`web/components/ErrorBoundary.tsx`）|
+
+> ⚠️ **版本号以前写的是 AntD 5 / React Router 6** —— 实际已经是 AntD 6 / RR 7 / React 19。
+> 「⚠️ 装了没用」的那几行不是笔误，是**选型表里写了但代码里没落地**的
+> （`zustand` / `zod` / `highlight.js` / `react-error-boundary` 都在 `package.json` 里，
+> 但全库搜不到 import）。
 
 ### 0.2 主题与色彩
 
@@ -154,9 +159,9 @@
   ├─ 模型选择（C4 · 当前供应商 + 备选）
   └─ 提示词配置（C3 · 文件编辑器 + 版本切换）
 
-🛠 工具
-  ├─ 工具列表（C2 / Phase 2）
-  └─ 工具调用日志（Phase 2）
+🛠 工具（C2 · ⏳ 暂不做 · 等外部系统接入需求）
+  ├─ 工具列表（⏳ 暂不做）
+  └─ 工具调用日志（⏳ 暂不做）
 
 📈 评测
   ├─ 评测集（P6 · 上传 + 列表）
@@ -193,10 +198,13 @@
 > 不是公开挂件。侧栏三项：
 
 ```
-🏠 首页（= 聊天页）
-💬 智能问答
+🏠 首页（B7 · 用户中心工作台：欢迎语 / 推荐问题 / 最近会话 / 知识库 / 我的记忆）✅
+💬 智能问答（B1 · 对话本体）
 📖 我的记忆（B4 · 看 / 改 / 关掉自动记忆）✅
 ```
+
+> ⚠️ **首页和智能问答是两个页面**（2026-10-24 之前是两个 URL 指向同一个组件）。
+> 首页是概览 + 入口，聊天页是纯对话 —— 详见 [04-b](./04-b-UI-登录与聊天挂件.md) §4.12。
 
 ### 2.4 AntD Menu 配置示例
 

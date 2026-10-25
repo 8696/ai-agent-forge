@@ -45,16 +45,32 @@ async function upsertUser(
   password: string,
   role: 'admin' | 'customer',
 ): Promise<User> {
-  const [u] = await User.findOrCreate({
+  const passwordHash = await hashPassword(password);
+  const [u, created] = await User.findOrCreate({
     where: { tenant_id: tenantId, email, role },
     defaults: {
       tenant_id: tenantId,
       email,
-      password_hash: await hashPassword(password),
+      password_hash: passwordHash,
       role,
       must_change_password: false,
     },
   });
+  if (!created) {
+    // ⚠️ **findOrCreate 的 defaults 只在新建时生效** —— 存量用户不会被刷新。
+    //    不刷会有两个后果：
+    //    1. 改了 fixtures.json 里的密码后，seed 不生效（登录用的还是旧密码）——
+    //       「幂等落 DB」这条承诺就破了
+    //    2. 被平台方重置过密码的账号（must_change_password=true）**永远**被
+    //       A4 的强制改密闸门挡着（src/gateway/password-change-gate.ts），
+    //       后面所有用 admin token 的集成测试全挂
+    //
+    //    seed 建立的应该是「稳定态」fixture —— 「首次登录强制改密」那条流程
+    //    由专门的测试自己造账号来覆盖（tests/integration/auth-me-change-password.test.ts）。
+    u.password_hash = passwordHash;
+    u.must_change_password = false;
+    await u.save();
+  }
   return u;
 }
 

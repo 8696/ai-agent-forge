@@ -11,6 +11,8 @@ import type { MemoryCategory, MemoryStatus, UserMemoryItem } from '@shared/types
 export async function fetchMyMemories(params: {
   status?: MemoryStatus | 'all';
   category?: MemoryCategory;
+  /** 只取最近 N 条（首页概览卡用；不传 = 全给） */
+  limit?: number;
 }): Promise<{ memories: UserMemoryItem[]; total: number; memory_enabled: boolean }> {
   const { data } = await customerApi.get<{
     memories: UserMemoryItem[];

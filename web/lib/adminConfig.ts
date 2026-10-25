@@ -153,6 +153,10 @@ export interface SettingItem {
   type: SettingType;
   min?: number;
   max?: number;
+  /** 类型 string 时的字数上限 */
+  maxLength?: number;
+  /** 类型 string 时是否渲染成多行输入框（一行一条的列表） */
+  multiline?: boolean;
   /** 生效中的值（租户覆盖 or 平台默认） */
   value: number | boolean | string;
   /** 平台默认值 */
@@ -164,11 +168,14 @@ export interface SettingItem {
 
 export async function fetchSettings(): Promise<{
   settings: SettingItem[];
+  /** 本租户的基本信息（只读展示，见 docs/04-c §5.9.1） */
+  tenant: { id: string; code: string; name: string; plan: string };
   groups: string[];
   notes: string[];
 }> {
   const { data } = await adminApi.get<{
     settings: SettingItem[];
+    tenant: { id: string; code: string; name: string; plan: string };
     groups: string[];
     notes: string[];
   }>('/config/settings');

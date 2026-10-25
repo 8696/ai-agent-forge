@@ -4,7 +4,7 @@ import { AppError } from '@/lib/errors';
 import { logger } from '../logger';
 
 /**
- * Koa 统一错误处理中间件 —— 详见 docs/03-技术栈与规范.md §A.13
+ * Koa 统一错误处理中间件 —— 详见 docs/03-a-技术栈-工程化规范.md §A.13
  * - 业务错误（AppError 子类）走对应状态码
  * - ZodError → 400 + 校验失败详情
  * - 未知错误走 500 + 控制台日志，**绝不** 把内部消息直接抛给客户端

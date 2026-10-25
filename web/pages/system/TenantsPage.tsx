@@ -31,9 +31,34 @@ interface TenantRow {
   plan: 'free' | 'pro' | 'enterprise';
   status: 'active' | 'disabled';
   expires_at: string | null;
+  /** 已到期（时间过了）—— 跟 status='disabled' 是两回事 */
+  expired: boolean;
+  /** 该租户的用户总数 */
+  user_count: number;
   created_at: string;
   admin: { id: string; email: string; must_change_password: boolean } | null;
 }
+
+/** 列表的筛选条件（04-d §6.1：搜索框 / 套餐筛选 / 状态筛选） */
+interface TenantFilters {
+  // ⚠️ 显式带 `| undefined` —— 清除筛选时会把字段设成 undefined
+  //    （exactOptionalPropertyTypes 开着，不加这个编译不过）
+  keyword?: string | undefined;
+  plan?: TenantRow['plan'] | undefined;
+  status?: 'active' | 'disabled' | 'expired' | undefined;
+}
+
+const STATUS_OPTIONS: Array<{ value: TenantFilters['status']; label: string }> = [
+  { value: 'active', label: '启用中' },
+  { value: 'disabled', label: '已禁用' },
+  { value: 'expired', label: '已到期' },
+];
+
+const PLAN_OPTIONS: Array<{ value: TenantRow['plan']; label: string }> = [
+  { value: 'free', label: 'Free' },
+  { value: 'pro', label: 'Pro' },
+  { value: 'enterprise', label: 'Enterprise' },
+];
 
 const PLAN_COLOR: Record<string, string> = {
   free: 'default',
@@ -67,6 +92,8 @@ export function SystemTenantsPage(): ReactElement {
   const navigate = useNavigate();
   const [rows, setRows] = useState<TenantRow[] | null>(null);
   const [errMsg, setErrMsg] = useState<string | null>(null);
+  /** 筛选条件 —— 搜索框 / 套餐 / 状态（04-d §6.1） */
+  const [filters, setFilters] = useState<TenantFilters>({});
 
   // F2
   const [editingRow, setEditingRow] = useState<TenantRow | null>(null);
@@ -79,13 +106,24 @@ export function SystemTenantsPage(): ReactElement {
     name: string;
     admin_email: string;
     admin_password: string;
+    plan: TenantRow['plan'];
+    expires_at: Dayjs | null;
   }
   const [createForm] = Form.useForm<CreateTenantForm>();
 
   const load = async (): Promise<void> => {
     setErrMsg(null);
     try {
-      const res = await systemApi.get<{ tenants: TenantRow[] }>('/tenants');
+      const res = await systemApi.get<{ tenants: TenantRow[] }>('/tenants', {
+        // 空值不传 —— 后端按「没传 = 不筛」处理
+        params: {
+          ...(filters.keyword !== undefined && filters.keyword !== ''
+            ? { keyword: filters.keyword }
+            : {}),
+          ...(filters.plan !== undefined ? { plan: filters.plan } : {}),
+          ...(filters.status !== undefined ? { status: filters.status } : {}),
+        },
+      });
       setRows(res.data.tenants);
     } catch (e: unknown) {
       const status = (e as { response?: { status?: number } }).response?.status;
@@ -93,9 +131,10 @@ export function SystemTenantsPage(): ReactElement {
     }
   };
 
+  // 筛选条件变了就重新拉 —— 筛选在**服务端**做（租户多了以后前端筛不动）
   useEffect(() => {
     void load();
-  }, []);
+  }, [filters]);
 
   const toIsoOrNull = (v: Dayjs | null | undefined): string | null =>
     v === undefined || v === null ? null : v.toDate().toISOString();
@@ -136,7 +175,15 @@ export function SystemTenantsPage(): ReactElement {
     try {
       const res = await systemApi.post<{ tenant: { code: string }; admin: { email: string } }>(
         '/tenants',
-        v,
+        {
+          code: v.code,
+          name: v.name,
+          admin_email: v.admin_email,
+          admin_password: v.admin_password,
+          plan: v.plan,
+          // ⚠️ DatePicker 给的是 Dayjs 对象，要转成 ISO 字符串再发
+          expires_at: toIsoOrNull(v.expires_at),
+        },
       );
       message.success(
         `租户 ${res.data.tenant.code} 已创建，初始 admin：${res.data.admin.email}（首次登录会强制改密）`,
@@ -190,18 +237,29 @@ export function SystemTenantsPage(): ReactElement {
       ),
     },
     {
+      title: '用户数',
+      dataIndex: 'user_count',
+      key: 'user_count',
+      width: 80,
+      render: (n: number) => <span>{n}</span>,
+    },
+    {
       title: '状态',
       dataIndex: 'status',
       key: 'status',
-      width: 80,
-      render: (s: TenantRow['status']) =>
-        s === 'active' ? (
-          <Tag color="success" style={{ fontWeight: 500 }}>
-            启用
-          </Tag>
-        ) : (
+      width: 96,
+      render: (s: TenantRow['status'], row: TenantRow) =>
+        s === 'disabled' ? (
           <Tag color="error" style={{ fontWeight: 500 }}>
             已禁用
+          </Tag>
+        ) : row.expired ? (
+          <Tag color="warning" style={{ fontWeight: 500 }}>
+            已到期
+          </Tag>
+        ) : (
+          <Tag color="success" style={{ fontWeight: 500 }}>
+            启用
           </Tag>
         ),
     },
@@ -313,6 +371,33 @@ export function SystemTenantsPage(): ReactElement {
         />
       )}
 
+      {/* 筛选（04-d §6.1）：搜索框 / 套餐 / 状态 */}
+      <Space style={{ marginBottom: 12 }} wrap>
+        <Input.Search
+          placeholder="搜索租户号 / 名称"
+          allowClear
+          style={{ width: 240 }}
+          defaultValue={filters.keyword ?? ''}
+          onSearch={(v: string) => setFilters((f) => ({ ...f, keyword: v }))}
+        />
+        <Select
+          placeholder="套餐"
+          allowClear
+          style={{ width: 140 }}
+          options={PLAN_OPTIONS}
+          value={filters.plan}
+          onChange={(v: TenantRow['plan'] | undefined) => setFilters((f) => ({ ...f, plan: v }))}
+        />
+        <Select
+          placeholder="状态"
+          allowClear
+          style={{ width: 140 }}
+          options={STATUS_OPTIONS}
+          value={filters.status}
+          onChange={(v: TenantFilters['status'] | undefined) => setFilters((f) => ({ ...f, status: v }))}
+        />
+      </Space>
+
       <Card styles={{ body: { padding: 16, overflow: 'hidden' } }}>
         <Table
           rowKey="id"
@@ -379,7 +464,14 @@ export function SystemTenantsPage(): ReactElement {
           form={createForm}
           layout="vertical"
           preserve={false}
-          initialValues={{ code: '', name: '', admin_email: '', admin_password: '' }}
+          initialValues={{
+            code: '',
+            name: '',
+            admin_email: '',
+            admin_password: '',
+            plan: 'free',
+            expires_at: null,
+          }}
         >
           <Form.Item
             name="code"
@@ -422,6 +514,16 @@ export function SystemTenantsPage(): ReactElement {
             extra="服务端会 bcrypt 哈希入库；明文不落地。"
           >
             <Input.Password placeholder="至少 8 字符" autoComplete="new-password" />
+          </Form.Item>
+          <Form.Item name="plan" label="套餐" initialValue="free" extra="默认 Free">
+            <Select options={PLAN_OPTIONS} />
+          </Form.Item>
+          <Form.Item
+            name="expires_at"
+            label="到期时间"
+            extra="不填 = 永不过期。过期后该租户的所有账号都登不进去。"
+          >
+            <DatePicker showTime style={{ width: '100%' }} placeholder="留空表示永不过期" />
           </Form.Item>
         </Form>
       </Modal>

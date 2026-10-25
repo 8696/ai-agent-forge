@@ -1,7 +1,8 @@
 import type { ReactElement, ReactNode } from 'react';
 import { Card, Space, Typography } from 'antd';
 import { BrandMark } from './BrandMark';
-import { ActiveModelsFooter } from '../ActiveModelsFooter';
+import { useThemeMode } from '../../lib/themeMode';
+import { pageGradient } from '../../theme';
 
 const { Title, Text } = Typography;
 
@@ -27,6 +28,9 @@ interface AuthShellProps {
  *  - 底部 footer（active models + role label）
  */
 export function AuthShell(props: AuthShellProps): ReactElement {
+  // 整页渐变要跟深色模式走 —— 写死浅色渐变的话，暗色下登录页是一片白
+  const mode = useThemeMode();
+
   return (
     <div
       style={{
@@ -36,14 +40,13 @@ export function AuthShell(props: AuthShellProps): ReactElement {
         alignItems: 'center',
         justifyContent: 'center',
         padding: '40px 16px',
-        background:
-          'radial-gradient(ellipse at top, #e8efff 0%, #f5f7fa 50%, #f0f2f5 100%)',
+        background: pageGradient(mode === 'dark'),
       }}
     >
       {/* 顶部品牌 */}
       <div style={{ marginBottom: 28, textAlign: 'center' }}>
         <Space direction="vertical" size={10} align="center">
-          <BrandMark size="lg" variant="light" />
+          <BrandMark size="lg" variant={mode === 'dark' ? 'dark' : 'light'} />
           {props.badge !== undefined && props.badge}
         </Space>
       </div>
@@ -89,7 +92,8 @@ export function AuthShell(props: AuthShellProps): ReactElement {
         <Text type="secondary" style={{ fontSize: 12 }}>
           {props.roleLabel}
         </Text>
-        <ActiveModelsFooter />
+        {/* ⚠️ 这里**不**挂 ActiveModelsFooter —— 按 docs/04-d §7.4，
+            激活模型展示放在三套 Layout 的页脚，登录页不展示 */}
       </div>
     </div>
   );

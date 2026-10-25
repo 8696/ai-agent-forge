@@ -37,13 +37,38 @@ export interface AdminAlert {
 const RATE_LIMIT_WINDOW_MS = 60 * 60 * 1000;
 const SECURITY_WINDOW_MS = 24 * 60 * 60 * 1000;
 
-/** §9.4 的三个阈值 */
+/**
+ * §9.4 的三个阈值 —— **平台默认**。
+ *
+ * 租户可以在「租户设置 → 成本」里覆盖（`alert_p95_latency_ms` /
+ * `alert_error_rate` / `alert_single_cost_usd`）。
+ * 覆盖值 = 0 表示「不看这一项」。
+ */
 const P95_LATENCY_ALERT_MS = 5000;
 const ERROR_RATE_ALERT = 0.05;
 const SINGLE_COST_ALERT_USD = 0.5;
 
+/** 读租户的告警阈值（没配就用平台默认） */
+async function alertThresholds(tenantId: string): Promise<{
+  p95LatencyMs: number;
+  errorRate: number;
+  singleCostUsd: number;
+}> {
+  const [p95, errRate, cost] = await Promise.all([
+    getSettingValue(tenantId, 'alert_p95_latency_ms'),
+    getSettingValue(tenantId, 'alert_error_rate'),
+    getSettingValue(tenantId, 'alert_single_cost_usd'),
+  ]);
+  return {
+    p95LatencyMs: typeof p95 === 'number' && p95 > 0 ? p95 : P95_LATENCY_ALERT_MS,
+    errorRate: typeof errRate === 'number' && errRate > 0 ? errRate : ERROR_RATE_ALERT,
+    singleCostUsd: typeof cost === 'number' && cost > 0 ? cost : SINGLE_COST_ALERT_USD,
+  };
+}
+
 export async function listAdminAlerts(tenantId: string): Promise<AdminAlert[]> {
   const alerts: AdminAlert[] = [];
+  const thresholds = await alertThresholds(tenantId);
 
   // ---- 1. 成本预算（实时状态）----
   const limitRaw = await getSettingValue(tenantId, 'monthly_token_budget');
@@ -165,39 +190,39 @@ export async function listAdminAlerts(tenantId: string): Promise<AdminAlert[]> {
     const summary = await getObservabilitySummary(tenantId);
     const today = summary.today;
 
-    if (today.conversations > 0 && today.p95_latency_ms > P95_LATENCY_ALERT_MS) {
+    if (today.conversations > 0 && today.p95_latency_ms > thresholds.p95LatencyMs) {
       alerts.push({
         id: 'p95_latency_high',
         level: 'warning',
         title: 'p95 响应延迟超过阈值',
         detail:
-          `今天 p95 延迟 ${today.p95_latency_ms} ms（阈值 ${P95_LATENCY_ALERT_MS} ms）。` +
+          `今天 p95 延迟 ${today.p95_latency_ms} ms（阈值 ${thresholds.p95LatencyMs} ms）。` +
           '去「观测 → Trace 列表」看是哪一步慢。',
         created_at: null,
       });
     }
 
-    if (today.conversations > 0 && today.error_rate > ERROR_RATE_ALERT) {
+    if (today.conversations > 0 && today.error_rate > thresholds.errorRate) {
       alerts.push({
         id: 'error_rate_high',
         level: 'error',
         title: '错误率超过阈值',
         detail:
           `今天 ${today.conversations} 次对话里有 ${today.errors} 次失败` +
-          `（错误率 ${(today.error_rate * 100).toFixed(1)}%，阈值 ${(ERROR_RATE_ALERT * 100).toFixed(0)}%）。` +
+          `（错误率 ${(today.error_rate * 100).toFixed(1)}%，阈值 ${(thresholds.errorRate * 100).toFixed(0)}%）。` +
           '去「观测 → Trace 列表」按「失败」筛选看原因。',
         created_at: null,
       });
     }
 
-    if (today.max_conversation_cost > SINGLE_COST_ALERT_USD) {
+    if (today.max_conversation_cost > thresholds.singleCostUsd) {
       alerts.push({
         id: 'single_conversation_cost_high',
         level: 'warning',
         title: '单条对话成本超过阈值',
         detail:
           `今天最贵的一次对话花了 $${today.max_conversation_cost.toFixed(4)}` +
-          `（阈值 $${SINGLE_COST_ALERT_USD}）。通常是检索命中太多或提示词太长。`,
+          `（阈值 $${thresholds.singleCostUsd}）。通常是检索命中太多或提示词太长。`,
         created_at: null,
       });
     }

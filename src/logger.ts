@@ -3,7 +3,7 @@ import { config } from './config';
 
 /**
  * 结构化日志（Pino），JSON 格式方便后面 grep / 上报。
- * 详见 docs/10-观测方案.md
+ * 详见 docs/09-观测方案.md
  */
 const loggerOptions: LoggerOptions = {
   level: config.LOG_LEVEL,

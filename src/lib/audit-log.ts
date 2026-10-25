@@ -4,7 +4,7 @@ import { logger } from '../logger';
 
 /**
  * AuditLog 写入封装 —— F2 + Step 12 共用
- * 详见 docs/16-e-需求-业务接入与平台运营.md F2 / docs/16-d-需求-运维稳定.md D5
+ * 详见 docs/12-e-需求-业务接入与平台运营.md F2 / docs/12-d-需求-运维稳定.md D5
  *
  * 设计要点：
  *  - 不抛错：如果表不存在（早期 Step 12 还没跑 006 迁移）或写失败，warn 一行就返回。

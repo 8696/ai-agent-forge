@@ -3,7 +3,7 @@ import { AuthError } from './errors';
 
 /**
  * F2 · 租户启停 / 到期闸门
- * 详见 docs/16-e-需求-业务接入与平台运营.md F2 + docs/06-API接口.md §6.1.4
+ * 详见 docs/12-e-需求-业务接入与平台运营.md F2 + docs/03-b-技术栈-后端栈.md §6.1.4
  *
  * 校验规则：
  *  - status === 'active'              （F2：disabled 的租户禁止登录）

@@ -17,6 +17,7 @@ import { Session, Message } from '../models';
 import type { MessageStatus, MessageToolResults, MessageUsage } from '../models';
 import type { DataPartShape } from '../models/Message';
 import { NotFoundError, ValidationError } from '../lib/errors';
+import { getBreaker, CircuitOpenError } from '../lib/circuit-breaker';
 import { logger } from '../logger';
 import { config, getLlm } from '../config';
 import {
@@ -27,7 +28,6 @@ import {
 } from '../lib/token-estimate';
 import { buildPrompt, NO_HITS_NOTICE } from '../prompts';
 import { resolveLlmSettings, type ResolvedLlmSettings } from './llm-settings';
-import { resolveTenantPrompt } from './prompt-registry';
 import {
   buildSummaryBlockText,
   splitHistoryByBoundary,
@@ -35,6 +35,10 @@ import {
   type SessionSummaryState,
 } from './session-summary';
 import { hybridSearch, type HybridHit, type RecallSource } from '../rag/hybrid-search';
+import { rewriteQuery } from '../rag/query-rewrite';
+
+/** 查询改写的超时（毫秒）—— 改写不能拖住用户请求 */
+const QUERY_REWRITE_TIMEOUT_MS = 3000;
 import type { TenantUserJwtPayload } from '../lib/jwt';
 import { withTimeout } from '../lib/async';
 import {
@@ -371,7 +375,13 @@ export function rowToUiMessage(row: Message): ChatUIMessage {
   if (row.content !== null && row.content !== '') {
     parts.push({ type: 'text', text: row.content, state: 'done' });
   }
-  return { id: row.id, role: row.role === 'assistant' ? 'assistant' : 'user', parts };
+  return {
+    id: row.id,
+    role: row.role === 'assistant' ? 'assistant' : 'user',
+    parts,
+    // 消息创建时间 —— 前端在气泡右上角显示小时间戳（docs/04-b §4.2）
+    metadata: { created_at: row.created_at.toISOString() },
+  };
 }
 
 export async function loadSessionUiMessages(
@@ -698,6 +708,17 @@ export function createChatStream(ctxData: StreamContext) {
     reason: null,
   };
 
+  // ---- 熔断（D5）----
+  //
+  // 按端点分桶：某个租户自己的 LLM 端点挂了只断它自己，平台默认端点挂了
+  // 所有用它的租户一起断（上游确实是同一个）。
+  const breaker = config.CIRCUIT_BREAKER.ENABLED
+    ? getBreaker(`${llm.provider}|${llm.baseUrl}`)
+    : null;
+  // 短路标记：熔断期间我们**没有真的打上游**，不能记成一次失败 ——
+  // 否则每被短路一次就刷新一次冷却期，熔断永远恢复不了。
+  const breakerState: { shortCircuited: boolean } = { shortCircuited: false };
+
   // LLM 调用的 span（D2）：execute 里开、onEnd 里关。
   // 生成是流式的，execute 返回时模型可能还在吐字 —— 真正的耗时要等到
   // usage promise resolve，所以不能在 execute 里就 end。
@@ -714,6 +735,12 @@ export function createChatStream(ctxData: StreamContext) {
     // 客户端看到的 message.id === messages 表主键（重新生成时也是同一条）
     generateId: () => assistantRowId,
     onError: (err: unknown) => {
+      // 熔断是「上游在恢复中」，跟「这轮生成失败了」不是一回事 ——
+      // 给用户一句能照着做的提示（稍后重试），别让他以为是自己的问题
+      if (err instanceof CircuitOpenError) {
+        logger.warn({ sessionId: session.id }, 'LLM 端点熔断中，本次请求快速失败');
+        return '服务暂时不可用，正在恢复中，请稍后再试。';
+      }
       logger.error(
         { err: err instanceof Error ? err.message : String(err), sessionId: session.id },
         '对话流内错误',
@@ -735,14 +762,39 @@ export function createChatStream(ctxData: StreamContext) {
       let recallError: unknown = null;
       const startedAt = Date.now();
       let rawHits: HybridHit[] = [];
+
+      // ---- 查询改写（B2 · 可选）----
+      //
+      // 「我入职三个月能休几天年假」→「年假 天数 入职时长 满1年不满10年」
+      // 改写失败一律回落原查询（不让它拖住检索）。
+      let searchQuery = userText;
+      let rewritten: string | null = null;
+      if (llm.queryRewriteEnabled) {
+        const r = await rewriteQuery({
+          query: userText,
+          apiKey: llm.apiKey,
+          baseUrl: llm.baseUrl,
+          model: llm.model,
+          timeoutMs: QUERY_REWRITE_TIMEOUT_MS,
+        });
+        searchQuery = r.effectiveQuery;
+        rewritten = r.rewritten;
+      }
+
       const retrievalSpan = ctxData.trace?.span('retrieval.search', 'retrieval', {
         query_chars: userText.length,
+        // 改写后的查询字数 + 改写是否成功 —— 排查「为什么没召回到」时要看这个
+        ...(rewritten !== null
+          ? { rewritten_query_chars: searchQuery.length, query_rewritten: true }
+          : { query_rewritten: false }),
       });
       try {
         rawHits = await hybridSearch({
-          query: userText,
+          query: searchQuery,
           tenantId: session.tenant_id,
           topK: llm.retrievalTopK,
+          // 租户可以在后台关掉自己的重排（docs/12-c §C4）
+          rerankEnabled: llm.rerankEnabled,
           onRecallFailure: (source, err) => {
             failedSources.add(source);
             recallError ??= err;
@@ -753,13 +805,21 @@ export function createChatStream(ctxData: StreamContext) {
         recallError = err;
       }
       const tookMs = Date.now() - startedAt;
+      // 重排有没有真的生效（降级时是 false）：管理员在观测里一眼能看出
+      // 「这次排序是重排给的」还是「重排挂了退回了 RRF」
+      const rerankApplied = rawHits.some((h) => h.rerank_score !== null);
       if (recallError !== null) {
-        retrievalSpan?.fail(recallError, { hit_count: rawHits.length, took_ms: tookMs });
+        retrievalSpan?.fail(recallError, {
+          hit_count: rawHits.length,
+          took_ms: tookMs,
+          rerank_applied: rerankApplied,
+        });
       } else {
         retrievalSpan?.end({
           hit_count: rawHits.length,
           took_ms: tookMs,
           failed_sources: [...failedSources],
+          rerank_applied: rerankApplied,
         });
       }
 
@@ -887,6 +947,17 @@ export function createChatStream(ctxData: StreamContext) {
           }
         : { role: 'system', content: window.systemText };
 
+      // ---- 熔断（D5）----
+      //
+      // 上游连着挂的时候别再往里冲：直接快速失败，用户立刻拿到提示，
+      // 而不是干等一次超时（默认 30 秒起步）。
+      // 半开状态下只放一个探活请求过去，其余照样快速失败 ——
+      // 冷却期一过就放行一批的话，等于又来一次洪峰。
+      if (breaker !== null && !breaker.allowRequest()) {
+        breakerState.shortCircuited = true;
+        throw new CircuitOpenError(`${llm.provider}|${llm.baseUrl}`);
+      }
+
       const result = streamText({
         model: anthropic(llm.model),
         system: systemMessage,
@@ -976,6 +1047,25 @@ export function createChatStream(ctxData: StreamContext) {
         status = 'failed';
       } else {
         status = 'complete';
+      }
+
+      // ---- 熔断记账（D5）----
+      //
+      // 只记「真的打了上游」的请求：
+      //  - 被短路的那次没发出去，记失败会无限刷新冷却期
+      //  - 用户自己断开（cancelled）不算上游故障
+      if (breaker !== null && !breakerState.shortCircuited) {
+        if (status === 'failed') {
+          breaker.recordFailure();
+          if (breaker.state === 'open') {
+            logger.warn(
+              { provider: llm.provider, baseUrl: llm.baseUrl, sessionId: session.id },
+              'LLM 端点连续失败，熔断已打开',
+            );
+          }
+        } else if (status === 'complete') {
+          breaker.recordSuccess();
+        }
       }
 
       // 输出审核拦下时：**原文不落库**，只留一句拦截文案。

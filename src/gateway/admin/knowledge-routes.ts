@@ -18,6 +18,7 @@ import {
 import { extractText } from '../../services/document-parse';
 import { ingestDocument } from '../../rag/ingest';
 import { hybridSearch } from '../../rag/hybrid-search';
+import { getSettingValue } from '../../services/tenant-settings';
 import { bm25RemoveDoc, bm25ChunkCount } from '../../rag/bm25';
 import { deleteDocumentPoints, countPoints } from '../../rag/qdrant';
 import { writeAuditLog } from '../../lib/audit-log';
@@ -279,25 +280,33 @@ adminKnowledgeRouter.post('/knowledge/search', async (ctx) => {
   const u = ctx.state.adminUser as TenantUserJwtPayload;
   const input = searchBodySchema.parse(ctx.request.body);
 
+  // 租户可以在后台关掉自己的重排（docs/12-c §C4）
+  const rerankEnabled = await getSettingValue(u.tenant_id, 'rerank_enabled');
+
   const startedAt = Date.now();
   const hits = await hybridSearch({
     query: input.query,
     tenantId: u.tenant_id,
     topK: input.top_k,
+    rerankEnabled: rerankEnabled === null ? undefined : rerankEnabled === true,
   });
 
   ctx.body = {
     query: input.query,
     took_ms: Date.now() - startedAt,
+    /** 这一次的排序是不是重排模型给的（false = 没配服务 / 租户关了 / 调用失败降级） */
+    rerank_applied: hits.some((h) => h.rerank_score !== null),
     hits: hits.map((h) => ({
       doc_id: h.doc_id,
       chunk_index: h.chunk_index,
       source: h.source,
       text: h.text,
-      /** 归一化相关度 [0,1]，1.0 = 向量 + 关键词都排第一 */
+      /** 相关度 [0,1]，1.0 = 最相关（重排生效时是重排分，否则是归一化 RRF 分） */
       score: Number(h.score.toFixed(4)),
       /** 原始 RRF 分（量级 0.016~0.033） */
       rrf_score: Number(h.rrf_score.toFixed(6)),
+      /** 重排原始分；null = 这一条没经过重排 */
+      rerank_score: h.rerank_score === null ? null : Number(h.rerank_score.toFixed(6)),
       sources: h.sources,
       vector_rank: h.vector_rank,
       bm25_rank: h.bm25_rank,

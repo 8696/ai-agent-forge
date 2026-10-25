@@ -3,7 +3,7 @@ import { getSequelize } from '../db';
 
 /**
  * GET /api/health —— liveness probe，仅判断进程存活
- * 详见 docs/15-开发进度计划.md Step 1
+ * 详见 docs/13-扩展指南.md Step 1
  * 前缀 /api 跟 docs/06 业务接口规范一致
  */
 export const healthRouter = new Router({ prefix: '/api' });

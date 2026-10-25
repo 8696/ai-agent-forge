@@ -1,6 +1,8 @@
 import Router from '@koa/router';
 import { z } from 'zod';
+import type { Transaction } from 'sequelize';
 import { Tenant, PromptVersion, MODEL_USAGE_SCOPES } from '../../models';
+import { getSequelize } from '../../db';
 import { jwtAuth } from '../jwt-base';
 import { requireAdmin } from './middleware';
 import { ValidationError, NotFoundError } from '../../lib/errors';
@@ -246,9 +248,22 @@ adminConfigRouter.post('/config/models/check-endpoint', async (ctx) => {
 
 adminConfigRouter.get('/config/settings', async (ctx) => {
   const u = currentUser(ctx);
+  // 租户的基本信息 —— 「基础配置」那块只读展示用（04-c §5.9.1）
+  const tenant = await Tenant.findByPk(u.tenant_id);
   ctx.body = {
     settings: await listSettings(u.tenant_id),
-    groups: [...new Set(SETTINGS_REGISTRY.map((s) => s.category))],
+    /** 本租户的基本信息（只读，不在 KV 里 —— 改租户名要走平台方那边） */
+    tenant: {
+      id: u.tenant_id,
+      code: tenant?.code ?? '',
+      name: tenant?.name ?? '',
+      plan: tenant?.plan ?? 'free',
+    },
+    groups: [
+      ...new Set(
+        SETTINGS_REGISTRY.filter((s) => s.hidden !== true).map((s) => s.category),
+      ),
+    ],
     notes: [
       '每一项都是「平台默认 + 租户可覆盖」，清空即回落平台默认。',
       '安全与成本相关的参数（加密密钥、SSRF 开关、上下文总预算）留在服务端 .env，不在这里暴露。',
@@ -288,13 +303,19 @@ async function activePromptVersion(tenantId: string): Promise<string | null> {
   return typeof v === 'string' ? v : null;
 }
 
-/** 发布 / 回滚后把租户的「当前生效版本」指过去（写 tenant_settings 的 KV） */
+/**
+ * 发布 / 回滚后把租户的「当前生效版本」指过去（写 tenant_settings 的 KV）。
+ *
+ * `prompt_version` 在 registry 里是 hidden 项 —— 通用配置页不提供输入框，
+ * 只有这里（发布 / 回滚）能写。所以必须显式 allowHidden。
+ */
 async function setActivePromptVersion(
   tenantId: string,
   userId: string,
   version: string,
+  transaction?: Transaction,
 ): Promise<void> {
-  await saveSettings(tenantId, userId, { prompt_version: version });
+  await saveSettings(tenantId, userId, { prompt_version: version }, { transaction, allowHidden: true });
 }
 
 adminConfigRouter.get('/config/prompts', async (ctx) => {
@@ -382,10 +403,19 @@ adminConfigRouter.post('/config/prompts/:version/publish', async (ctx) => {
   const u = currentUser(ctx);
   const version = ctx.params.version ?? '';
   const previous = await activePromptVersion(u.tenant_id);
-  const row = await publishPromptVersion({ tenantId: u.tenant_id, version, userId: u.sub });
 
-  // 发布要顺带把租户的「当前生效版本」指过去，否则光改 status 对话不会变
-  await setActivePromptVersion(u.tenant_id, u.sub, row.version);
+  // 「版本置 production」和「生效指针指过去」必须在一个事务里 ——
+  // 分成两步会出现半成功：版本已发布但指针没写，对话还在用旧提示词。
+  const row = await getSequelize().transaction(async (t) => {
+    const published = await publishPromptVersion({
+      tenantId: u.tenant_id,
+      version,
+      userId: u.sub,
+      transaction: t,
+    });
+    await setActivePromptVersion(u.tenant_id, u.sub, published.version, t);
+    return published;
+  });
 
   await writeAuditLog({
     tenant_id: u.tenant_id,
@@ -428,8 +458,16 @@ adminConfigRouter.post('/config/prompts/:version/rollback', async (ctx) => {
     throw new NotFoundError('提示词版本');
   }
   const previous = await activePromptVersion(u.tenant_id);
-  const row = await publishPromptVersion({ tenantId: u.tenant_id, version, userId: u.sub });
-  await setActivePromptVersion(u.tenant_id, u.sub, row.version);
+  const row = await getSequelize().transaction(async (t) => {
+    const published = await publishPromptVersion({
+      tenantId: u.tenant_id,
+      version,
+      userId: u.sub,
+      transaction: t,
+    });
+    await setActivePromptVersion(u.tenant_id, u.sub, published.version, t);
+    return published;
+  });
 
   await writeAuditLog({
     tenant_id: u.tenant_id,

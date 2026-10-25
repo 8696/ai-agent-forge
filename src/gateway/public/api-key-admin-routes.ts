@@ -1,8 +1,8 @@
 import Router from '@koa/router';
 import type { Context } from 'koa';
 import { z } from 'zod';
-import { ApiKey } from '../../models';
-import { NotFoundError } from '../../lib/errors';
+import { ApiKey, type ApiKeyScope } from '../../models';
+import { NotFoundError, ValidationError } from '../../lib/errors';
 import { writeAuditLog } from '../../lib/audit-log';
 import {
   generateApiKey,
@@ -22,6 +22,7 @@ import { requireAdmin } from '../admin';
  * 端点：
  *   GET    /        列出本租户的钥匙（**永远不返回 hash / 完整 key**）
  *   POST   /        新建一把钥匙 → 完整 key **只在这一次的响应里出现**
+ *   PATCH  /:id     改权限分级（scope）
  *   DELETE /:id     撤销（软删除：置 revoked_at；行还在，历史可查）
  *
  * ⚠️ 为什么这个文件物理上放在 src/gateway/public/ 下：
@@ -30,8 +31,7 @@ import { requireAdmin } from '../admin';
  *    所以：文件放在 public/ 桶里，**URL 前缀和鉴权仍然属于 admin**，
  *    不跟 public 的 API Key 鉴权有任何交叉。
  *
- * 后台的「API 密钥」管理页面（AntD 表格 + 复制按钮）本期没做 ——
- * 端点先落地，页面等后台那一轮补。
+ * 后台的「API 密钥」管理页面已经落地（`/admin/api-keys`，AntD 表格 + 复制按钮）。
  */
 
 export const publicApiKeyAdminRouter = new Router({ prefix: '/api/v1/admin/api-keys' });
@@ -43,6 +43,19 @@ const createBodySchema = z.object({
   name: z.string().trim().min(1, '名称不能为空').max(100),
   /** 到期时间（ISO8601）；不传 = 永不过期 */
   expires_at: z.string().datetime({ offset: true }).optional(),
+  /**
+   * 权限分级（docs/10-安全方案.md §10）：
+   *  - read  = 只读：只能调 GET /search，**不能发起对话**
+   *  - write = 可发起对话（默认）
+   *  - admin = 预留
+   * 不传 = write（跟加 scope 列之前的行为一致）。
+   */
+  scope: z.enum(['read', 'write', 'admin']).optional(),
+});
+
+/** 改权限分级 */
+const patchBodySchema = z.object({
+  scope: z.enum(['read', 'write', 'admin']),
 });
 
 /** 取当前 admin（中间件已保证是 admin 角色） */
@@ -64,6 +77,8 @@ publicApiKeyAdminRouter.get('/', async (ctx) => {
       id: row.id,
       name: row.name,
       key_prefix: row.key_prefix,
+      /** 权限分级：read=只读 / write=可发起对话 / admin=预留 */
+      scope: row.scope,
       last_used_at: row.last_used_at?.toISOString() ?? null,
       expires_at: row.expires_at?.toISOString() ?? null,
       revoked_at: row.revoked_at?.toISOString() ?? null,
@@ -84,6 +99,7 @@ publicApiKeyAdminRouter.post('/', async (ctx) => {
     name: input.name,
     key_prefix: prefix,
     key_hash: await hashApiKey(raw),
+    scope: input.scope ?? 'write',
     expires_at: input.expires_at === undefined ? null : new Date(input.expires_at),
     revoked_at: null,
     created_by: admin.id,
@@ -95,7 +111,7 @@ publicApiKeyAdminRouter.post('/', async (ctx) => {
     action: 'API_KEY_CREATED',
     resource_type: 'api_key',
     resource_id: row.id,
-    details: { name: row.name, key_prefix: row.key_prefix },
+    details: { name: row.name, key_prefix: row.key_prefix, scope: row.scope },
     ip: ctx.ip,
   });
 
@@ -104,6 +120,7 @@ publicApiKeyAdminRouter.post('/', async (ctx) => {
     id: row.id,
     name: row.name,
     key_prefix: row.key_prefix,
+    scope: row.scope,
     /**
      * 完整 key —— **只在这里出现一次**，服务端只留 bcrypt hash，之后谁也拿不回去。
      * 丢了就撤销重建一把。
@@ -112,6 +129,47 @@ publicApiKeyAdminRouter.post('/', async (ctx) => {
     expires_at: row.expires_at?.toISOString() ?? null,
     created_at: row.created_at.toISOString(),
   };
+});
+
+// ===== 改权限分级 =====
+
+/**
+ * 改这把 key 的权限分级。
+ *
+ * ⚠️ **改完必须清鉴权缓存** —— principal 是连同 scope 一起缓存在进程内的
+ * （60 秒 TTL），不清的话最多还有 60 秒的窗口期内旧权限仍然生效。
+ */
+publicApiKeyAdminRouter.patch('/:id', async (ctx) => {
+  const admin = currentAdmin(ctx);
+  const id = ctx.params.id ?? '';
+  const input = patchBodySchema.parse(ctx.request.body ?? {});
+
+  const row = await ApiKey.findOne({ where: { id, tenant_id: admin.tenant_id } });
+  if (row === null) {
+    throw new NotFoundError('API Key');
+  }
+  if (row.revoked_at !== null) {
+    throw new ValidationError('这把钥匙已经撤销了，改权限没有意义');
+  }
+
+  const before = row.scope;
+  row.scope = input.scope;
+  await row.save();
+
+  // 让鉴权缓存立刻失效 —— scope 变了，旧缓存里还带着老权限
+  invalidateApiKeyById(row.id);
+
+  await writeAuditLog({
+    tenant_id: admin.tenant_id,
+    user_id: admin.id,
+    action: 'API_KEY_SCOPE_CHANGED',
+    resource_type: 'api_key',
+    resource_id: row.id,
+    details: { name: row.name, key_prefix: row.key_prefix, from: before, to: row.scope },
+    ip: ctx.ip,
+  });
+
+  ctx.body = { id: row.id, scope: row.scope };
 });
 
 // ===== 撤销 =====

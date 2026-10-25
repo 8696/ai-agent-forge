@@ -88,9 +88,22 @@ export type ChatDataTypes = {
  * 本项目的 UI message 类型。后端 createUIMessageStream<ChatUIMessage>、
  * 前端 useChat<ChatUIMessage> 都用它，两边类型天然对齐。
  *
- * metadata 用 never：本期没有 message 级元数据，用 never 比 unknown 更能暴露误用。
+ * metadata 是消息级元数据（见 ChatMessageMetadata）——
+ * 用具体类型比 unknown 更能暴露误用。
  */
-export type ChatUIMessage = UIMessage<never, ChatDataTypes>;
+/**
+ * 消息级元数据。
+ *
+ * 目前只有一条：**消息创建时间** —— 前端在用户气泡右上角显示一个小时间戳
+ * （docs/04-b §4.2）。实时流式的新消息没有这个字段（前端用本地时间兜底），
+ * 历史消息由后端从 `messages.created_at` 带出来。
+ */
+export interface ChatMessageMetadata {
+  /** 消息创建时间（ISO8601） */
+  created_at?: string;
+}
+
+export type ChatUIMessage = UIMessage<ChatMessageMetadata, ChatDataTypes>;
 
 /** 会话列表项（GET /api/v1/customer/sessions） */
 export interface SessionListItem {

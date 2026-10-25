@@ -30,12 +30,30 @@ adminUserRouter.use(jwtAuth, requireAdmin);
 // 列当前租户用户
 adminUserRouter.get('/users', async (ctx) => {
   const u = ctx.state.adminUser as TenantUserJwtPayload;
+  const now = Date.now();
   const users = await User.findAll({
     where: { tenant_id: u.tenant_id },
-    attributes: ['id', 'email', 'role', 'must_change_password', 'last_login_at', 'created_at'],
+    attributes: [
+      'id',
+      'email',
+      'role',
+      'must_change_password',
+      'last_login_at',
+      'created_at',
+      // 状态（04-c §5.8 列表有一列「状态」）是**算出来的**：
+      // 登录失败 5 次会锁 15 分钟（src/lib/login-lock.ts），锁还没到 = 已锁定
+      'locked_until',
+    ],
     order: [['created_at', 'DESC']],
   });
-  ctx.body = { users: users.map((x) => x.toJSON()) };
+  ctx.body = {
+    users: users.map((x) => ({
+      ...x.toJSON(),
+      locked_until: x.locked_until?.toISOString() ?? null,
+      /** active=正常 / locked=锁定中（登录失败太多被锁的） */
+      status: x.locked_until !== null && x.locked_until.getTime() > now ? 'locked' : 'active',
+    })),
+  };
 });
 
 // 创建后台 / 前台用户
@@ -86,8 +104,9 @@ adminUserRouter.patch('/users/:id', async (ctx) => {
     throw new NotFoundError('用户');
   }
 
-  // 改之前的邮箱 —— 审计要记「从哪个改成哪个」
+  // 改之前的邮箱 / 角色 —— 审计要记「从哪个改成哪个」
   const prevEmail = target.email;
+  const prevRole = target.role;
 
   if (input.email !== undefined && input.email !== target.email) {
     const dup = await User.findOne({ where: { email: input.email, tenant_id: u.tenant_id } });
@@ -99,6 +118,16 @@ adminUserRouter.patch('/users/:id', async (ctx) => {
   if (input.password !== undefined) {
     target.password_hash = await hashPassword(input.password);
     target.must_change_password = false;
+  }
+  // 改角色（04-c §5.8「[编辑用户] 抽屉：邮箱 / 角色 / 重置密码」）
+  //
+  // ⚠️ **不能改自己的角色** —— 把自己从 admin 降成 customer 就把自己锁在门外了
+  //    （跟「不能删自己」一个道理）。
+  if (input.role !== undefined && input.role !== target.role) {
+    if (target.id === u.sub) {
+      throw new ValidationError('不能修改自己的角色');
+    }
+    target.role = input.role;
   }
   await target.save();
 
@@ -114,6 +143,7 @@ adminUserRouter.patch('/users/:id', async (ctx) => {
       email: target.email,
       email_changed: target.email !== prevEmail,
       password_reset: input.password !== undefined,
+      role_changed: input.role !== undefined && input.role !== prevRole,
     },
     ip: ctx.ip,
   });

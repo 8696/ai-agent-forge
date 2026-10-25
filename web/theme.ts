@@ -249,6 +249,21 @@ const darkComponents: ThemeConfig['components'] = {
   },
 };
 
+/**
+ * 整页渐变背景（登录页 / 404 页 / 挂件底板）。
+ *
+ * ⚠️ **不能写死一套颜色**：写死的浅色渐变在深色模式下会让整页变成白底 ——
+ * 这是 docs/04-d §9.3 明确禁止的（「凡是写死浅色的地方一律换成 token」）。
+ *
+ * 深色版不是简单反色：浅色版是「蓝调渐变」（顶部 #e8efff 往下褪到中性灰），
+ * 深色版对应做成「深蓝 → 近黑」，保持同样的层次感。
+ */
+export function pageGradient(dark: boolean): string {
+  return dark
+    ? 'radial-gradient(ellipse at top, #1b2340 0%, #141414 50%, #0d0d0d 100%)'
+    : 'radial-gradient(ellipse at top, #e8efff 0%, #f5f7fa 50%, #f0f2f5 100%)';
+}
+
 export const lightTheme: ThemeConfig = {
   algorithm: antdTheme.defaultAlgorithm,
   token: lightToken,

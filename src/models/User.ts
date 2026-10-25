@@ -15,7 +15,7 @@ import { nanoid } from 'nanoid';
 import { Tenant } from './Tenant';
 
 /**
- * 用户角色：与 docs/05-数据模型.md §5.1 一致
+ * 用户角色：与 docs/05-a-数据模型-mysql.md §5.1 一致
  * - admin 后台管理员
  * - agent 后台客服坐席
  * - customer 前台用户
@@ -39,7 +39,7 @@ export interface UserPreferences {
 }
 
 /**
- * 用户表，含后台 + 前台（DDL 见 docs/05-数据模型.md §5.1）
+ * 用户表，含后台 + 前台（DDL 见 docs/05-a-数据模型-mysql.md §5.1）
  * - `(email, tenant_id)` 唯一：同租户内邮箱不重复
  * - 跨租户可能同邮箱，靠 `tenant_id` 区分
  */

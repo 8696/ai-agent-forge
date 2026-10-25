@@ -5,6 +5,7 @@
  * 入口：web/routes.tsx 里把这些 page 组件挂到对应 path
  */
 export { AdminLoginPage } from './AdminLoginPage';
+export { AdminChangePasswordPage } from './AdminChangePasswordPage';
 export { AdminHomePage } from './AdminHomePage';
 export { AdminUsersPage } from './UsersPage';
 export { AdminAuditLogsPage } from './AuditLogsPage';

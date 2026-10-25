@@ -23,6 +23,8 @@ import {
   customerAuthRouter,
   customerChatRouter,
   customerMemoryRouter,
+  customerProfileRouter,
+  customerKnowledgeRouter,
   publicWidgetRouter,
   publicApiRouter,
   publicApiKeyAdminRouter,
@@ -30,7 +32,7 @@ import {
 import { rebuildFromQdrant } from './rag/bm25';
 
 /**
- * 后端入口 —— 详见 docs/15-开发进度计划.md Step 1 + 02-系统架构与目录.md §2.1
+ * 后端入口 —— 详见 docs/13-扩展指南.md Step 1 + 02-系统架构与目录.md §2.1
  */
 async function bootstrap(): Promise<void> {
   const app = new Koa();
@@ -84,6 +86,12 @@ async function bootstrap(): Promise<void> {
   app.use(
     customerMemoryRouter.routes(),
   ).use(customerMemoryRouter.allowedMethods()); // customer 我的记忆（B4）
+  app.use(
+    customerProfileRouter.routes(),
+  ).use(customerProfileRouter.allowedMethods()); // customer 租户信息 + 首页配置（B7）
+  app.use(
+    customerKnowledgeRouter.routes(),
+  ).use(customerKnowledgeRouter.allowedMethods()); // customer 知识库文档概览（B7）
 
   // ===== 对外接入（E1）=====
   // 公开挂件（免登录，匿名会话 token）+ 对外 REST API（API Key 鉴权）

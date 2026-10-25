@@ -15,6 +15,7 @@ import {
   Row,
   Select,
   Space,
+  Statistic,
   Tag,
   Typography,
   message,
@@ -49,6 +50,13 @@ interface TenantDetail {
     must_change_password: boolean;
     last_login_at: string | null;
   } | null;
+  /** 该租户的规模统计（04-d §6.1「租户详情页有这一块」） */
+  stats: {
+    user_count: number;
+    session_count: number;
+    document_count: number;
+    total_cost_usd: number;
+  };
 }
 
 const PLAN_COLOR: Record<string, string> = {
@@ -240,6 +248,29 @@ export function SystemTenantDetailPage(): ReactElement {
                 {new Date(data.updated_at).toLocaleString()}
               </Descriptions.Item>
             </Descriptions>
+          </Card>
+
+          {/* 该租户的规模统计（04-d §6.1）—— 全部按 tenant_id 过滤，是这个租户的数 */}
+          <Card title="规模统计" style={{ borderRadius: 12, marginTop: 16 }}>
+            <Row gutter={[16, 16]}>
+              <Col xs={12} sm={6}>
+                <Statistic title="用户数" value={data.stats.user_count} />
+              </Col>
+              <Col xs={12} sm={6}>
+                <Statistic title="会话数" value={data.stats.session_count} />
+              </Col>
+              <Col xs={12} sm={6}>
+                <Statistic title="文档数" value={data.stats.document_count} />
+              </Col>
+              <Col xs={12} sm={6}>
+                <Statistic
+                  title="累计花费"
+                  value={data.stats.total_cost_usd}
+                  precision={4}
+                  prefix="$"
+                />
+              </Col>
+            </Row>
           </Card>
         </Col>
 

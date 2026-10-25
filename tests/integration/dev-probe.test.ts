@@ -1,7 +1,7 @@
 /**
  * tests/integration/dev-probe.test.ts
  * 对应 src/gateway/dev-probe-routes.ts（1 个端点：GET /api/_dev/jwt-info）
- * 详见 docs/18-测试流程规范.md §18.3
+ * 详见 docs/12-d-需求-运维稳定.md §D6
  *
  * （/probe/llm 端点已删除 —— LLM 不再被后端使用）
  */

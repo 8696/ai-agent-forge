@@ -2,7 +2,7 @@ import { DataTypes, type QueryInterface } from 'sequelize';
 import type { MigrationFn } from 'umzug';
 
 /**
- * 创建 users 表 —— 对应 docs/05-数据模型.md §5.1 的 DDL
+ * 创建 users 表 —— 对应 docs/05-a-数据模型-mysql.md §5.1 的 DDL
  */
 export const up: MigrationFn<QueryInterface> = async ({ context: queryInterface }) => {
   await queryInterface.createTable('users', {

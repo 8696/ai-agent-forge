@@ -2,7 +2,7 @@ import { DataTypes, type QueryInterface } from 'sequelize';
 import type { MigrationFn } from 'umzug';
 
 /**
- * 创建 system_users 表 —— 对应 docs/05-数据模型.md §5.1
+ * 创建 system_users 表 —— 对应 docs/05-a-数据模型-mysql.md §5.1
  * SaaS 平台方自己的账号，**跨租户**用，不带 tenant_id
  *
  * 注意：第一个 system_users 用 SQL 手工建（docs/05 §5.1 末尾备注），

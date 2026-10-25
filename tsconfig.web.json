@@ -10,5 +10,5 @@
       "@shared/*": ["./shared/*"]
     }
   },
-  "include": ["web/**/*", "shared/**/*"]
+  "include": ["web/**/*", "shared/**/*", "tests/**/*.test.tsx"]
 }

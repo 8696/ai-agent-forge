@@ -26,5 +26,10 @@
       "@shared/*": ["./shared/*"]
     }
   },
-  "include": ["src/**/*", "scripts/**/*", "shared/**/*", "tests/**/*"]
+  "include": ["src/**/*", "scripts/**/*", "shared/**/*", "tests/**/*"],
+  "exclude": [
+    "node_modules/**",
+    "dist/**",
+    "tests/**/*.test.tsx"
+  ]
 }

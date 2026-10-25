@@ -1,7 +1,7 @@
 /**
  * tests/unit/jwt.test.ts
  * 对应 src/lib/jwt.ts
- * 详见 docs/18-测试流程规范.md §18.3.3
+ * 详见 docs/12-d-需求-运维稳定.md §D6
  */
 import { describe, it, expect } from 'vitest';
 import { signToken, verifyToken } from '../../src/lib/jwt';
