@@ -82,6 +82,44 @@ export async function sendFeedback(
 }
 
 /**
+ * 确认一次敏感工具调用（B3 HITL）。
+ *
+ * 用户在工具调用卡片上点「确认执行」时调它。
+ * 确认绑定到「工具名 + 那次调用的入参」—— 入参变了要重新确认。
+ */
+export async function approveToolCall(
+  sessionId: string,
+  toolName: string,
+  args: unknown,
+): Promise<{ ok: boolean; tool_name: string; approval_key: string }> {
+  const { data } = await customerApi.post<{
+    ok: boolean;
+    tool_name: string;
+    approval_key: string;
+  }>(`/sessions/${sessionId}/tool-approvals`, { tool_name: toolName, args });
+  return data;
+}
+
+/**
+ * 取消一次敏感工具调用（B3 HITL）。
+ *
+ * 用户点了「确认执行」还能反悔 —— 取消之后闸门会回「用户拒绝执行这个操作」，
+ * 模型如实告诉用户，不会再问第三次。
+ */
+export async function rejectToolCall(
+  sessionId: string,
+  toolName: string,
+  args: unknown,
+): Promise<{ ok: boolean; tool_name: string; approval_key: string }> {
+  const { data } = await customerApi.post<{
+    ok: boolean;
+    tool_name: string;
+    approval_key: string;
+  }>(`/sessions/${sessionId}/tool-approvals/reject`, { tool_name: toolName, args });
+  return data;
+}
+
+/**
  * 流式对话端点的 transport 配置。
  *
  * ⚠️ **token 必须在这里手动带上**：useChat 内部用 fetch 发请求，
@@ -90,9 +128,19 @@ export async function sendFeedback(
  * headers 传函数而不是字符串：每次发请求时再读一次 localStorage，
  * 避免 token 刷新后还在用旧值。
  */
-export function chatTransportOptions(sessionId: string): {
+export function chatTransportOptions(
+  sessionId: string,
+  /**
+   * 额外的请求体字段（docs/04-b §4.4 的「思考模式」开关就靠它传）。
+   *
+   * ⚠️ 必须是**函数** —— transport 只在 sessionId 变化时重建，
+   *    传固定值的话勾选状态会被冻在创建那一刻。
+   */
+  body?: () => Record<string, unknown>,
+): {
   api: string;
   headers: () => Record<string, string>;
+  body?: () => Record<string, unknown>;
 } {
   return {
     api: `/api/v1/customer/sessions/${sessionId}/messages`,
@@ -100,6 +148,7 @@ export function chatTransportOptions(sessionId: string): {
       const token = getToken();
       return token === null ? {} : { authorization: `Bearer ${token}` };
     },
+    ...(body !== undefined ? { body } : {}),
   };
 }
 

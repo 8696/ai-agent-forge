@@ -23,6 +23,7 @@ import dayjs, { type Dayjs } from 'dayjs';
 import { systemApi } from '../../lib/systemApi';
 import { PageHeader } from '../../components/shell/PageHeader';
 import { EmptyState } from '../../components/shell/EmptyState';
+import { TENANT_CODE_PATTERN, TENANT_CODE_HINT } from '@shared/validation/tenant-code';
 
 interface TenantRow {
   id: string;
@@ -280,7 +281,7 @@ export function SystemTenantsPage(): ReactElement {
         admin === null ? (
           <Tag color="red">无</Tag>
         ) : (
-          <Space direction="vertical" size={0}>
+          <Space orientation="vertical" size={0}>
             <span style={{ fontWeight: 500 }}>{admin.email}</span>
             {admin.must_change_password && (
               <Tag color="orange" style={{ marginInlineEnd: 0 }}>
@@ -366,7 +367,7 @@ export function SystemTenantsPage(): ReactElement {
         <Alert
           type="error"
           showIcon
-          message={errMsg}
+          title={errMsg}
           style={{ marginBottom: 16 }}
         />
       )}
@@ -422,7 +423,7 @@ export function SystemTenantsPage(): ReactElement {
         cancelText="取消"
         onOk={onSubmitExpires}
         onCancel={() => setEditingRow(null)}
-        destroyOnClose
+        destroyOnHidden
       >
         <Form form={expiresForm} layout="vertical" preserve={false}>
           <Form.Item
@@ -458,7 +459,7 @@ export function SystemTenantsPage(): ReactElement {
           setCreatingOpen(false);
           createForm.resetFields();
         }}
-        destroyOnClose
+        destroyOnHidden
       >
         <Form
           form={createForm}
@@ -478,7 +479,7 @@ export function SystemTenantsPage(): ReactElement {
             label="租户号"
             rules={[
               { required: true, message: '请输入租户号' },
-              { pattern: /^[a-z0-9-]+$/, message: '只能包含小写字母 / 数字 / 连字符' },
+              { pattern: TENANT_CODE_PATTERN, message: TENANT_CODE_HINT },
               { min: 3, max: 32, message: '长度 3-32 字符' },
             ]}
             extra="登录、挂件 URL 都用这个号（如 acme-corp）。一旦创建不能改。"

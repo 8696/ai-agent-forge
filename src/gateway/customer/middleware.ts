@@ -2,6 +2,7 @@ import type { Context, Next } from 'koa';
 import type { JwtPayload, TenantUserJwtPayload } from '../../lib/jwt';
 import { AuthError } from '../../lib/errors';
 import { assertPasswordChanged } from '../password-change-gate';
+import { runWithTenant } from '../../lib/tenant-context';
 
 /**
  * customer 子系统：要求 token 是租户前台用户（role=customer）
@@ -25,5 +26,6 @@ export function requireCustomer(ctx: Context, next: Next): Promise<void> {
   ctx.state.customerUser = u as TenantUserJwtPayload;
   // 被要求先改密码的账号，除了 /me 和 /change-password 之外一律挡住
   assertPasswordChanged(ctx);
-  return next();
+  // 本租户上下文 —— 租户作用域钩子靠它自动补 tenant_id 过滤（A1）
+  return runWithTenant(u.tenant_id, next);
 }

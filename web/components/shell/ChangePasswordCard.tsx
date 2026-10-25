@@ -1,7 +1,7 @@
 import type { ReactElement } from 'react';
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Alert, Button, Form, Input } from 'antd';
+import { Alert, Button, Form, Input, theme } from 'antd';
 import { LockOutlined } from '@ant-design/icons';
 import type { AxiosInstance } from 'axios';
 import { setToken } from '../../lib/apiFactory';
@@ -45,6 +45,8 @@ export function ChangePasswordCard(props: ChangePasswordCardProps): ReactElement
   const navigate = useNavigate();
   const [loading, setLoading] = useState(false);
   const [errMsg, setErrMsg] = useState<string | null>(null);
+  // 颜色走 antd token —— 写死浅色的话，深色模式下几乎看不见
+  const { token } = theme.useToken();
 
   const onFinish = async (values: FormValues): Promise<void> => {
     setLoading(true);
@@ -79,13 +81,13 @@ export function ChangePasswordCard(props: ChangePasswordCardProps): ReactElement
         <Alert
           type="warning"
           showIcon
-          message="请先设置新密码"
+          title="请先设置新密码"
           description="你的初始密码由平台方重置过。改完之前只能用改密码这一个操作。"
           style={{ marginBottom: 18 }}
         />
       )}
       {errMsg !== null && (
-        <Alert type="error" showIcon message={errMsg} style={{ marginBottom: 18 }} />
+        <Alert type="error" showIcon title={errMsg} style={{ marginBottom: 18 }} />
       )}
 
       <Form<FormValues>
@@ -101,7 +103,7 @@ export function ChangePasswordCard(props: ChangePasswordCardProps): ReactElement
           rules={[{ required: true, message: '请输入当前密码' }]}
         >
           <Input.Password
-            prefix={<LockOutlined style={{ color: 'rgba(0,0,0,0.45)' }} />}
+            prefix={<LockOutlined style={{ color: token.colorTextTertiary }} />}
             placeholder="当前密码"
             autoComplete="current-password"
           />
@@ -116,7 +118,7 @@ export function ChangePasswordCard(props: ChangePasswordCardProps): ReactElement
           ]}
         >
           <Input.Password
-            prefix={<LockOutlined style={{ color: 'rgba(0,0,0,0.45)' }} />}
+            prefix={<LockOutlined style={{ color: token.colorTextTertiary }} />}
             placeholder="至少 8 位"
             autoComplete="new-password"
           />
@@ -139,7 +141,7 @@ export function ChangePasswordCard(props: ChangePasswordCardProps): ReactElement
           ]}
         >
           <Input.Password
-            prefix={<LockOutlined style={{ color: 'rgba(0,0,0,0.45)' }} />}
+            prefix={<LockOutlined style={{ color: token.colorTextTertiary }} />}
             placeholder="再输入一次"
             autoComplete="new-password"
           />

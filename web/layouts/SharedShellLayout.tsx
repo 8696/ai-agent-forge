@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Layout, Menu, Dropdown, Avatar, Space, Typography } from 'antd';
 import type { MenuProps } from 'antd';
 import {
+  KeyOutlined,
   LogoutOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
@@ -27,6 +28,13 @@ export interface SidebarItem {
   disabled?: boolean;
   /** tooltip 提示；disabled 时显示 */
   tooltip?: string;
+  /**
+   * 子项 —— 有子项的渲染成**分组**（可折叠的二级菜单）。
+   *
+   * ⚠️ 2026-10-25 补：以前侧栏是 16 个平铺条目（04-a §2.2 规格里是 7 个分组），
+   *    菜单一长就不好找。现在支持分组了。
+   */
+  children?: SidebarItem[];
 }
 
 interface SharedShellLayoutProps {
@@ -58,6 +66,26 @@ export function SharedShellLayout(props: SharedShellLayoutProps): ReactElement {
     if (typeof window === 'undefined') return false;
     return window.localStorage.getItem(storageKey) === '1';
   });
+  // 窄屏（< 992px）自动折叠侧栏（docs/04-d §9.2 响应式断点）。
+  //
+  // ⚠️ **单独一个状态，不去改 `collapsed`** —— 那会把用户手动折叠的偏好也冲掉
+  //    （切回宽屏时侧栏还缩着，用户得再点一次）。这里只做「窄屏时强制折叠」。
+  const [isNarrow, setIsNarrow] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    return window.matchMedia('(max-width: 992px)').matches;
+  });
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return;
+    const mq = window.matchMedia('(max-width: 992px)');
+    const onChange = (e: MediaQueryListEvent): void => setIsNarrow(e.matches);
+    setIsNarrow(mq.matches);
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
+  }, []);
+
+  /** 实际折叠状态 = 用户手动折叠 OR 窄屏强制折叠 */
+  const effectiveCollapsed = collapsed || isNarrow;
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -67,7 +95,11 @@ export function SharedShellLayout(props: SharedShellLayoutProps): ReactElement {
 
   const selectedKeys = useMemo<string[]>(() => {
     const path = location.pathname;
-    const match = props.sidebarItems
+    // 分组里的子项也要参与匹配（用户可能在子页面里）
+    const flat = props.sidebarItems.flatMap((it) =>
+      it.children !== undefined && it.children.length > 0 ? it.children : [it],
+    );
+    const match = flat
       .filter((it) => it.to !== undefined && path.startsWith(it.to))
       .sort((a, b) => (b.to?.length ?? 0) - (a.to?.length ?? 0));
     return match.length > 0 && match[0] !== undefined ? [match[0].key] : [];
@@ -93,6 +125,14 @@ export function SharedShellLayout(props: SharedShellLayoutProps): ReactElement {
     },
     { type: 'divider' },
     {
+      // ⚠️ 2026-10-25 补：以前**没有任何入口**能进改密页 ——
+      //    路由存在、RequireAuth 也会跳过去，但用户找不到地方点。
+      key: 'change-password',
+      icon: <KeyOutlined />,
+      label: '修改密码',
+      onClick: () => navigate(`/${props.role}/change-password`),
+    },
+    {
       key: 'logout',
       icon: <LogoutOutlined />,
       label: '登出',
@@ -100,7 +140,7 @@ export function SharedShellLayout(props: SharedShellLayoutProps): ReactElement {
     },
   ];
 
-  const menuItems: MenuProps['items'] = props.sidebarItems.map((it) => {
+  const leafItem = (it: SidebarItem): NonNullable<MenuProps['items']>[number] => {
     const item: NonNullable<MenuProps['items']>[number] = {
       key: it.key,
       icon: it.icon,
@@ -111,9 +151,22 @@ export function SharedShellLayout(props: SharedShellLayoutProps): ReactElement {
       item.title = it.tooltip;
     }
     return item;
+  };
+
+  const menuItems: MenuProps['items'] = props.sidebarItems.map((it) => {
+    if (it.children !== undefined && it.children.length > 0) {
+      // 分组：antd 的二级菜单。折叠状态下只显示图标（点开是浮层）
+      return {
+        key: it.key,
+        icon: it.icon,
+        label: it.label,
+        children: it.children.map(leafItem),
+      };
+    }
+    return leafItem(it);
   });
 
-  const logoBlock = collapsed ? (
+  const logoBlock = effectiveCollapsed ? (
     <div
       style={{
         height: 56,
@@ -149,7 +202,7 @@ export function SharedShellLayout(props: SharedShellLayoutProps): ReactElement {
       <Sider
         theme="dark"
         collapsible
-        collapsed={collapsed}
+        collapsed={effectiveCollapsed}
         trigger={null}
         width={240}
         collapsedWidth={64}
@@ -182,10 +235,10 @@ export function SharedShellLayout(props: SharedShellLayoutProps): ReactElement {
             <button
               type="button"
               onClick={() => setCollapsed((v) => !v)}
-              aria-label={collapsed ? '展开侧栏' : '折叠侧栏'}
+              aria-label={effectiveCollapsed ? '展开侧栏' : '折叠侧栏'}
               style={iconBtnStyle}
             >
-              {collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
+              {effectiveCollapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
             </button>
             <Text style={{ color: 'rgba(255,255,255,0.65)', fontSize: 13 }}>
               {props.roleHint}

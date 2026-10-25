@@ -2,6 +2,7 @@ import { Op, QueryTypes } from 'sequelize';
 import { sequelize } from '../db';
 import { CostLog, Session, Span, Trace, User } from '../models';
 import { logger } from '../logger';
+import { utcWallClock } from '../lib/sql-datetime';
 
 /**
  * 观测查询 —— D2（docs/12-d-需求-运维稳定.md §D2）
@@ -319,7 +320,7 @@ export async function getCostAnalysis(
         WHERE tenant_id = ? AND created_at >= ? AND created_at < ?
      GROUP BY DATE(created_at)
      ORDER BY bucket ASC`,
-      { replacements: [tenantId, from, to], type: QueryTypes.SELECT },
+      { replacements: [tenantId, utcWallClock(from), utcWallClock(to)], type: QueryTypes.SELECT },
     ),
     sequelize.query<CostAggRow>(
       `SELECT ${groupColumn(params.groupBy)} AS bucket,
@@ -332,7 +333,7 @@ export async function getCostAnalysis(
         WHERE tenant_id = ? AND created_at >= ? AND created_at < ?
      GROUP BY bucket
      ORDER BY cost DESC`,
-      { replacements: [tenantId, from, to], type: QueryTypes.SELECT },
+      { replacements: [tenantId, utcWallClock(from), utcWallClock(to)], type: QueryTypes.SELECT },
     ),
   ]);
 
@@ -472,13 +473,13 @@ export async function getObservabilitySummary(
               AVG(duration_ms) AS avg_duration
          FROM traces
         WHERE tenant_id = ? AND started_at >= ? AND started_at < ?`,
-      { replacements: [tenantId, dayStart, dayEnd], type: QueryTypes.SELECT },
+      { replacements: [tenantId, utcWallClock(dayStart), utcWallClock(dayEnd)], type: QueryTypes.SELECT },
     ),
     sequelize.query<{ cost: string | number; total_tokens: string | number }>(
       `SELECT COALESCE(SUM(cost), 0) AS cost, COALESCE(SUM(total_tokens), 0) AS total_tokens
          FROM cost_logs
         WHERE tenant_id = ? AND created_at >= ? AND created_at < ?`,
-      { replacements: [tenantId, dayStart, dayEnd], type: QueryTypes.SELECT },
+      { replacements: [tenantId, utcWallClock(dayStart), utcWallClock(dayEnd)], type: QueryTypes.SELECT },
     ),
     sequelize.query<{ duration_ms: string | number | null }>(
       `SELECT duration_ms FROM (
@@ -490,7 +491,7 @@ export async function getObservabilitySummary(
        ) t
        WHERE rn = GREATEST(1, CEIL(cnt * 0.95))
        LIMIT 1`,
-      { replacements: [tenantId, dayStart, dayEnd], type: QueryTypes.SELECT },
+      { replacements: [tenantId, utcWallClock(dayStart), utcWallClock(dayEnd)], type: QueryTypes.SELECT },
     ),
     sequelize.query<{
       bucket: string;
@@ -522,9 +523,9 @@ export async function getObservabilitySummary(
      ORDER BY d.bucket ASC`,
       {
         replacements: [
-          tenantId, weekStart, dayEnd,
-          tenantId, weekStart, dayEnd,
-          tenantId, weekStart, dayEnd,
+          tenantId, utcWallClock(weekStart), utcWallClock(dayEnd),
+          tenantId, utcWallClock(weekStart), utcWallClock(dayEnd),
+          tenantId, utcWallClock(weekStart), utcWallClock(dayEnd),
         ],
         type: QueryTypes.SELECT,
       },
@@ -532,7 +533,7 @@ export async function getObservabilitySummary(
     sequelize.query<{ max_cost: string | number | null }>(
       `SELECT MAX(cost) AS max_cost FROM traces
         WHERE tenant_id = ? AND started_at >= ? AND started_at < ?`,
-      { replacements: [tenantId, dayStart, dayEnd], type: QueryTypes.SELECT },
+      { replacements: [tenantId, utcWallClock(dayStart), utcWallClock(dayEnd)], type: QueryTypes.SELECT },
     ),
   ]);
 

@@ -14,8 +14,9 @@ export function DevProbePage(): ReactElement {
     <div style={{ maxWidth: 720 }}>
       <Title level={3}>调试工具</Title>
       <Paragraph type="secondary">
-        仅 dev 环境用。生产环境（NODE_ENV=production）后端的 <code>/api/_dev/probe/llm</code> 会回
-        404。
+        仅 dev 环境用 —— 这个路由<strong>只在 Vite dev 模式下注册</strong>
+        （生产构建里根本不存在，会落到 404 页）。后端的 <code>/api/_dev/*</code> 同样
+        只在 <code>NODE_ENV ≠ production</code> 时才挂载。
       </Paragraph>
 
       <Card title="后端健康检查" size="small" style={{ marginBottom: 16 }}>

@@ -23,13 +23,14 @@ export { ApiKey, type ApiKeyScope } from './ApiKey';
 export { Document } from './Document';
 export type { DocumentStatus, DocumentFileType, DocumentMetadata } from './Document';
 export { Session } from './Session';
-export type { SessionChannel, SessionStatus, SessionMetadata } from './Session';
+export type { SessionChannel, SessionStatus, SessionMetadata, SessionToolApproval } from './Session';
 export { Message } from './Message';
 export type {
   MessageRole,
   MessageStatus,
   MessageUsage,
   MessageToolResults,
+  MessageParts,
   DataPartShape,
 } from './Message';
 export { AuditLog } from './AuditLog';
@@ -46,3 +47,7 @@ export { PromptVersion } from './PromptVersion';
 export type { PromptVersionStatus } from './PromptVersion';
 export { TenantModel, MODEL_USAGE_SCOPES, type ModelUsageScope } from './TenantModel';
 export { TenantSetting } from './TenantSetting';
+export { Tool, TOOL_TYPES, EXECUTABLE_TOOL_TYPES } from './Tool';
+export type { ToolType, ToolConfig } from './Tool';
+export { ToolCallLog } from './ToolCallLog';
+export type { ToolCallStatus } from './ToolCallLog';

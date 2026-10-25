@@ -649,7 +649,6 @@ async function executeRun(runId: string, tenantId: string, datasetId: string): P
         const generated = await generateAnswer({
           tenantId,
           tenantName,
-          tenantSettings: tenant?.settings ?? null,
           llm,
           promptContent: resolvedPrompt.origin === 'tenant' ? resolvedPrompt.text : null,
           question: item.question,
@@ -766,7 +765,6 @@ interface GeneratedAnswer {
 async function generateAnswer(input: {
   tenantId: string;
   tenantName: string;
-  tenantSettings: Record<string, unknown> | null;
   llm: Awaited<ReturnType<typeof resolveLlmSettings>>;
   promptContent: string | null;
   question: string;
@@ -791,7 +789,6 @@ async function generateAnswer(input: {
 
   const window = buildContextWindow({
     tenantName: input.tenantName,
-    tenantSettings: input.tenantSettings,
     promptContent: input.promptContent,
     retrievalTopK: llm.retrievalTopK,
     maxHistoryTurns: llm.maxHistoryTurns,

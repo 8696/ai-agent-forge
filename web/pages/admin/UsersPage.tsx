@@ -16,6 +16,7 @@ import {
   Tooltip,
   Typography,
   message,
+  theme,
 } from 'antd';
 import type { TableColumnsType } from 'antd';
 import { PlusOutlined, ReloadOutlined, UserAddOutlined } from '@ant-design/icons';
@@ -67,6 +68,8 @@ function currentAdminId(): string | null {
  * UI 详见 docs/04-c-ui-后台管理页面.md §5.8
  */
 export function AdminUsersPage(): ReactElement {
+  // 颜色走 antd token —— 写死浅色的话，深色模式下几乎看不见
+  const { token } = theme.useToken();
   const [rows, setRows] = useState<UserRow[] | null>(null);
   const [errMsg, setErrMsg] = useState<string | null>(null);
 
@@ -238,7 +241,7 @@ export function AdminUsersPage(): ReactElement {
       key: 'last_login_at',
       width: 180,
       render: (t: string | null) =>
-        t === null ? <span style={{ color: 'rgba(0,0,0,0.45)' }}>—</span> : new Date(t).toLocaleString(),
+        t === null ? <span style={{ color: token.colorTextTertiary }}>—</span> : new Date(t).toLocaleString(),
     },
     {
       title: '创建时间',
@@ -305,7 +308,7 @@ export function AdminUsersPage(): ReactElement {
         <Alert
           type="error"
           showIcon
-          message={errMsg}
+          title={errMsg}
           style={{ marginBottom: 16 }}
         />
       )}
@@ -372,7 +375,7 @@ export function AdminUsersPage(): ReactElement {
           setCreatingOpen(false);
           createForm.resetFields();
         }}
-        destroyOnClose
+        destroyOnHidden
       >
         <Form form={createForm} layout="vertical" preserve={false}>
           <Form.Item
@@ -417,12 +420,12 @@ export function AdminUsersPage(): ReactElement {
       <Drawer
         open={editing !== null}
         title={editing === null ? '' : `编辑用户 · ${editing.email}`}
-        width={420}
+        size={420}
         onClose={() => {
           setEditing(null);
           editForm.resetFields();
         }}
-        destroyOnClose
+        destroyOnHidden
         extra={
           <Space>
             <Button onClick={() => setEditing(null)}>取消</Button>

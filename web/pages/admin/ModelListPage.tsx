@@ -87,9 +87,11 @@ export function ModelListPage(): ReactElement {
       setDefaults(data.process_defaults);
       setNotes(data.notes);
       setCanStoreKey(data.secret_encryption_enabled);
-      setActiveChat(data.active_chat);
-      setActiveMemory(data.active_memory);
-      setActiveSummary(data.active_summary);
+      // `?? null`：老后端不返回这几个键时拿到的是 undefined，
+      // 下面只判 `=== null`，undefined 漏过去会炸 `.name`
+      setActiveChat(data.active_chat ?? null);
+      setActiveMemory(data.active_memory ?? null);
+      setActiveSummary(data.active_summary ?? null);
     } catch (err: unknown) {
       message.error(configErrorMessage(err, '加载模型列表失败'));
     } finally {
@@ -241,7 +243,7 @@ export function ModelListPage(): ReactElement {
           type="warning"
           showIcon
           style={{ marginBottom: 16 }}
-          message="服务端未配置加密密钥，不能保存 API Key"
+          title="服务端未配置加密密钥，不能保存 API Key"
           description="出于安全考虑，CONFIG_ENCRYPTION_KEY 没配时禁止把密钥写进数据库。请联系平台管理员在 .env 里配置后再用。"
         />
       )}
@@ -250,7 +252,7 @@ export function ModelListPage(): ReactElement {
         type="info"
         showIcon
         style={{ marginBottom: 16 }}
-        message={
+        title={
           activeChat === null
             ? `当前对话走平台默认（${defaults?.provider ?? '未配置'} · ${defaults?.llmModel ?? '未配置'}）`
             : `当前对话使用「${activeChat.name}」（${activeChat.model_id}）`
@@ -280,7 +282,7 @@ export function ModelListPage(): ReactElement {
           type={testResult.ok ? 'success' : 'error'}
           showIcon
           icon={testResult.ok ? <CheckCircleOutlined /> : undefined}
-          message={
+          title={
             testResult.ok
               ? `连接正常 · ${testResult.provider} · ${testResult.model} · ${testResult.took_ms} ms`
               : `连接失败：${testResult.error ?? '未知错误'}`
@@ -398,7 +400,7 @@ function ModelEditor({
     <Drawer
       open={target !== null}
       title={isNew ? '新建模型' : `编辑「${editing?.name ?? ''}」`}
-      width={480}
+      size={480}
       onClose={onClose}
       extra={
         <Space>

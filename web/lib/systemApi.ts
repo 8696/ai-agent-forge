@@ -43,3 +43,71 @@ export async function fetchSystemStats(): Promise<SystemStats> {
   const { data } = await systemApi.get<SystemStats>('/stats');
   return data;
 }
+
+// ============================================================
+// 审计日志（平台方视角 · 跨租户）
+// ============================================================
+
+/**
+ * 审计日志的一行 —— 对应 GET /api/v1/system/audit
+ *
+ * ⚠️ **跟租户后台的 AuditItem 有两处不同**：
+ *   1. `tenant_id` 可能是 **null** —— 系统级日志（平台方改租户启停 / 到期时间那类）
+ *      本来就没有租户归属
+ *   2. 列表是**跨租户**的（平台方特权视角）
+ */
+export interface SystemAuditItem {
+  id: string;
+  /** 所属租户；null = 系统级日志 */
+  tenant_id: string | null;
+  user_id: string | null;
+  user_email: string | null;
+  action: string;
+  resource_type: string | null;
+  resource_id: string | null;
+  details: unknown;
+  ip: string | null;
+  created_at: string;
+}
+
+export interface SystemAuditPagination {
+  page: number;
+  page_size: number;
+  total: number;
+  total_pages: number;
+}
+
+export interface SystemAuditListParams {
+  page?: number;
+  page_size?: number;
+  /** 按租户过滤（不传 = 全部租户 + 系统级） */
+  tenant_id?: string | undefined;
+  user_id?: string | undefined;
+  action?: string | undefined;
+  resource_type?: string | undefined;
+  from?: string | undefined;
+  to?: string | undefined;
+}
+
+/** 列全部审计日志（跨租户） */
+export async function fetchSystemAuditLogs(params: SystemAuditListParams): Promise<{
+  logs: SystemAuditItem[];
+  pagination: SystemAuditPagination;
+}> {
+  const { data } = await systemApi.get<{
+    logs: SystemAuditItem[];
+    pagination: SystemAuditPagination;
+  }>('/audit', { params });
+  return data;
+}
+
+/**
+ * 全部日志里出现过的操作类型 —— 给「操作类型」筛选下拉框用
+ *
+ * 用后端给的真实清单而不是前端硬编码：action 是自由字符串，
+ * 硬编码一份迟早漏掉新加的操作类型。
+ */
+export async function fetchSystemAuditActions(): Promise<string[]> {
+  const { data } = await systemApi.get<{ actions: string[] }>('/audit/actions');
+  return data.actions;
+}

@@ -85,25 +85,19 @@ describe('renderSystemPrompt · 占位符替换', () => {
   });
 });
 
-describe('resolvePrompt · 租户级版本选择', () => {
-  it('没配 prompt_version 用默认版本', () => {
-    const r = resolvePrompt('Acme', null);
+describe('resolvePrompt · 内置默认提示词', () => {
+  // ⚠️ 2026-10-25：resolvePrompt 不再读 tenants.settings（那个列没有写入路径，
+  //    迁移 013 已经把租户配置搬进 tenant_settings KV 表）。
+  //    「配置指向的版本号不存在 → 回落默认」这条现在由 prompt-registry 负责，
+  //    并在那里 warn（见 src/services/prompt-registry.ts）。
+  it('返回内置默认版本，并把 {{tenantName}} 换成租户名', () => {
+    const r = resolvePrompt('Acme');
     expect(r.version).toBe(DEFAULT_PROMPT_VERSION);
-    expect(r.fellBack).toBe(false);
     expect(r.text).toContain('Acme');
   });
 
-  it('配的正好是默认版本时正常命中', () => {
-    const r = resolvePrompt('Acme', { prompt_version: DEFAULT_PROMPT_VERSION });
-    expect(r.fellBack).toBe(false);
-    expect(r.version).toBe(DEFAULT_PROMPT_VERSION);
-  });
-
-  it('配了不存在的版本时静默回落默认，不抛错', () => {
-    const r = resolvePrompt('Acme', { prompt_version: 'chat-v999' });
-    expect(r.fellBack).toBe(true);
-    expect(r.version).toBe(DEFAULT_PROMPT_VERSION);
-    expect(r.text).toContain('Acme');
+  it('不接受租户级参数了（防止有人再把 tenants.settings 接回来）', () => {
+    expect(resolvePrompt.length).toBe(1);
   });
 });
 
@@ -111,7 +105,6 @@ describe('buildPrompt · 完整系统提示词', () => {
   it('基础提示词 + 资料段拼在一起', () => {
     const built = buildPrompt({
       tenantName: 'Acme',
-      settings: null,
       hits: [hit()],
       systemTokenBudget: 600,
     });
@@ -123,7 +116,6 @@ describe('buildPrompt · 完整系统提示词', () => {
   it('检索故障时用故障措辞，让模型明说「没有使用参考资料」', () => {
     const built = buildPrompt({
       tenantName: 'Acme',
-      settings: null,
       hits: [],
       emptyNotice: '知识库检索暂时不可用，本次回答没有使用参考资料。',
       systemTokenBudget: 600,
@@ -135,7 +127,6 @@ describe('buildPrompt · 完整系统提示词', () => {
   it('默认提示词不超默认的 SYSTEM_TOKEN_BUDGET（否则会被硬截断）', () => {
     const built = buildPrompt({
       tenantName: 'Acme',
-      settings: null,
       hits: [],
       systemTokenBudget: 600,
     });
@@ -146,7 +137,6 @@ describe('buildPrompt · 完整系统提示词', () => {
   it('预算给得极小时会硬截断并标记', () => {
     const built = buildPrompt({
       tenantName: 'Acme',
-      settings: null,
       hits: [],
       systemTokenBudget: 10,
     });

@@ -8,3 +8,4 @@ export { SystemChangePasswordPage } from './SystemChangePasswordPage';
 export { SystemHomePage } from './SystemHomePage';
 export { SystemTenantsPage } from './TenantsPage';
 export { SystemTenantDetailPage } from './TenantDetailPage';
+export { SystemAuditPage } from './SystemAuditPage';

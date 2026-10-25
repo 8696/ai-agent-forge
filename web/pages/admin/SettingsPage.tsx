@@ -58,7 +58,7 @@ export function SettingsPage(): ReactElement {
       const data = await fetchSettings();
       setSettings(data.settings);
       setNotes(data.notes);
-      setTenantInfo(data.tenant);
+      setTenantInfo(data.tenant ?? null);
       const initial: Record<string, unknown> = {};
       for (const s of data.settings) {
         initial[s.key] = s.value;
@@ -145,7 +145,7 @@ export function SettingsPage(): ReactElement {
           type="info"
           showIcon
           style={{ marginBottom: 16 }}
-          message="说明"
+          title="说明"
           description={
             <ul style={{ margin: 0, paddingLeft: 18 }}>
               {notes.map((n) => (
@@ -158,8 +158,10 @@ export function SettingsPage(): ReactElement {
 
       {/* 基础配置（docs/04-c §5.9.1）—— 只读。
           租户名 / 租户号不在 KV 里：改它们要走平台方那边（/system/tenants），
-          所以这里只展示，提示去哪改。 */}
-      {tenantInfo !== null && (
+          所以这里只展示，提示去哪改。
+          ⚠️ 用 `!= null` 而不是 `!== null`：老后端不返回 tenant 时拿到的是
+          undefined，只判 `!== null` 会漏过去，渲染时炸 `tenantInfo.name`。 */}
+      {tenantInfo != null && (
         <Card size="small" title="基础配置" style={{ marginBottom: 16 }}>
           <Descriptions column={3} size="small">
             <Descriptions.Item label="租户名">{tenantInfo.name}</Descriptions.Item>

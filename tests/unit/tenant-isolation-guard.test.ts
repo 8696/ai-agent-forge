@@ -5,19 +5,22 @@ import path from 'node:path';
 /**
  * 租户隔离的**架构约束测试** —— docs/12-a-需求-多租户与登录.md §A1
  *
- * ## 为什么是测试而不是 lint
+ * ## 三条防线（缺一不可）
+ *
+ *   1. **运行时强制**（`src/lib/tenant-scope.ts`）：请求级租户上下文 + Sequelize 全局钩子，
+ *      查询发出前自动补 `tenant_id` 过滤 —— 忘了加也不会跨租户。
+ *   2. **本测试**：静态扫描源码，拦下**运行时兜不住**的情况：
+ *      - 查询的 where 形状让钩子插不进去（数组 where / 顶层 `Op.or`）
+ *      - 查询写死了租户 id（`tenant_id: 'acme'`）
+ *      - 查询的 where 完全不带租户锚点（白名单要登记理由）
+ *   3. **代码评审**：判断「这条查询本来就不该带租户过滤」——登记到白名单并写清理由。
+ *
+ * ## 为什么不用 lint
  *
  * A1 的验收原文：「直接 `Document.findAll()`（不带 scope）应该有警告或被 lint 禁止」。
  * ⚠️ 本项目的 `yarn lint` 现在**跑不起来**（typescript-eslint 不支持 TypeScript 7，
- * 在加载配置阶段就退出）—— 所以「靠 lint 拦」这条路暂时是断的。
- * 既然如此，就用项目已有的另一条约定来兜：**D6 的测试基建契约**
- * —— 用一个会失败的测试来表达「这条规矩不许破」。
- *
- * ## 它拦什么
- *
- * 租户级模型（User / Session / Message / Document / …）的查询**必须带租户过滤**。
- * 忘了加 = 跨租户数据泄露，而且这种 bug 在功能测试里很难被发现
- * （每个测试都用自己的租户，串了也看不出来）。
+ * 在加载配置阶段就退出）—— 「靠 lint 拦」这条路是断的，
+ * 就用项目已有的另一条约定来兜：**D6 的测试基建契约**。
  *
  * ## 例外怎么写
  *
@@ -30,24 +33,26 @@ import path from 'node:path';
  */
 
 const SRC_DIR = path.resolve(__dirname, '../../src');
+const MODELS_DIR = path.resolve(SRC_DIR, 'models');
 
-/** 租户级模型 —— 它们的查询必须带租户过滤 */
-const TENANT_SCOPED_MODELS = [
-  'User',
-  'Session',
-  'Message',
-  'Document',
-  'TenantModel',
-  'UserMemory',
-  'CostLog',
-  'EvaluationDataset',
-  'EvaluationItem',
-  'EvaluationRun',
-  'EvaluationResult',
-  'Trace',
-  'Span',
-  'PromptVersion',
-  'ApiKey',
+/**
+ * 租户级模型的**查询方法**清单。
+ *
+ * ⚠️ 宁可多列也不要漏 —— 漏一个方法名 = 漏扫整类查询。
+ *   `findAndCountAll` / `bulkCreate` 都曾经漏过（2026-10-25 审计发现）。
+ */
+const QUERY_METHODS = [
+  'findAll',
+  'findOne',
+  'findByPk',
+  'findAndCountAll',
+  'findOrCreate',
+  'count',
+  'sum',
+  'aggregate',
+  'update',
+  'destroy',
+  'bulkCreate',
 ];
 
 /**
@@ -137,9 +142,31 @@ const ALLOWED_NO_TENANT_FILTER: Array<{
     snippet: 'UserMemory.count({ where })',
     reason: '同上（记忆计数跟列表共用同一个 where）',
   },
+  // ---- 平台方视角的跨租户查询（docs/04-d §6.1「/system/audit 也能查」）----
+  {
+    file: 'src/lib/audit-log.ts',
+    snippet: 'AuditLog.findAndCountAll({',
+    reason:
+      'listAllAuditLogs —— **平台方视角，故意跨租户**。它只在 system 命名空间被调用，' +
+      '那边**没有租户上下文**，所以租户作用域钩子不会补过滤。' +
+      '租户 admin 走的是 listAuditLogs（强制带 tenant_id），两条路完全分开。',
+  },
+  {
+    file: 'src/lib/audit-log.ts',
+    snippet: 'User.findAll({',
+    reason:
+      'resolveUserEmailsAcrossTenants —— 同上：平台方查审计日志时要解析**各个租户**的' +
+      '操作者邮箱，按 id 批量查（租户账号在 users 表，平台方账号在 system_users 表）。',
+  },
+  {
+    file: 'src/lib/audit-log.ts',
+    snippet: 'AuditLog.findAll({',
+    reason:
+      'listAllAuditActions —— 同上：平台方的「操作类型」筛选清单，跨租户统计 action。',
+  },
 ];
 
-/** 递归列出 src/ 下的 .ts 文件 */
+/** 递归列出目录下的 .ts 文件 */
 function listTsFiles(dir: string): string[] {
   const out: string[] = [];
   for (const entry of readdirSync(dir)) {
@@ -151,6 +178,83 @@ function listTsFiles(dir: string): string[] {
     }
   }
   return out;
+}
+
+/**
+ * 剥掉注释，只留代码。
+ *
+ * ⚠️ 为什么必须剥：这份测试扫的是**源码文本**，不是 AST。
+ *    文档注释里引用一句 `Document.findAll()` 就会被当成一次查询（2026-10-25 真踩过）。
+ *
+ * 剥的时候要认字符串字面量 —— 否则 `'https://x'` 里的 `//` 会被当成行注释，
+ * 把后面一整行代码吃掉（那才是真的制造假阴性）。
+ */
+function stripComments(src: string): string {
+  let out = '';
+  let i = 0;
+  const n = src.length;
+  while (i < n) {
+    const ch = src[i];
+    const next = src[i + 1];
+    if (ch === '/' && next === '/') {
+      while (i < n && src[i] !== '\n') i += 1;
+      continue;
+    }
+    if (ch === '/' && next === '*') {
+      const start = i;
+      i += 2;
+      while (i < n && !(src[i] === '*' && src[i + 1] === '/')) i += 1;
+      i += 2;
+      // 用等量的换行 + 空格替掉 —— 保持行号不变（报错信息里的行号才对得上）
+      const removed = src.slice(start, Math.min(i, n));
+      out += removed.replace(/[^\n]/g, ' ');
+      continue;
+    }
+    if (ch === "'" || ch === '"' || ch === '`') {
+      const quote = ch;
+      out += ch;
+      i += 1;
+      while (i < n) {
+        if (src[i] === '\\') {
+          out += src[i] + (src[i + 1] ?? '');
+          i += 2;
+          continue;
+        }
+        out += src[i];
+        if (src[i] === quote) {
+          i += 1;
+          break;
+        }
+        i += 1;
+      }
+      continue;
+    }
+    out += ch;
+    i += 1;
+  }
+  return out;
+}
+
+/**
+ * 租户级模型清单 —— **从模型源码自动推导**，不手写。
+ *
+ * ⚠️ 之前是手写 17 个模型，结果漏了 `TenantSetting`（它有 tenant_id 列），
+ *    那个模型的 4 处查询从来没被扫过（2026-10-25 审计发现）。
+ *    改成自动推导以后：新增模型只要有 tenant_id 列，就自动进清单 —— 漏登记不可能发生。
+ */
+function tenantScopedModels(): string[] {
+  const names: string[] = [];
+  for (const file of listTsFiles(MODELS_DIR)) {
+    const src = readFileSync(file, 'utf8');
+    if (!/declare\s+tenant_id\s*:/.test(src)) {
+      continue;
+    }
+    const m = /export class\s+([A-Za-z0-9_]+)\s+extends\s+Model/.exec(src);
+    if (m !== null && m[1] !== undefined) {
+      names.push(m[1]);
+    }
+  }
+  return names.sort();
 }
 
 /** 找到调用表达式结束的位置（括号配平） */
@@ -167,23 +271,92 @@ function matchCallEnd(src: string, openParenIndex: number): number {
   return src.length;
 }
 
+/** where 里有没有 tenant_id 这个**键**（而不是随便出现这个词） */
+function whereHasTenantKey(callText: string): boolean {
+  return /\btenant_id\s*:/.test(callText);
+}
+
+/** 找到配平的 `}`（从 openBraceIndex 开始） */
+function matchBrace(src: string, openBraceIndex: number): number {
+  let depth = 0;
+  for (let i = openBraceIndex; i < src.length; i += 1) {
+    const ch = src[i];
+    if (ch === '{') depth += 1;
+    else if (ch === '}') {
+      depth -= 1;
+      if (depth === 0) return i;
+    }
+  }
+  return src.length;
+}
+
+/**
+ * where 是不是一个变量（`{ where, ... }` 或 `{ where: someVar }`）——
+ * 是的话，回溯到它在本文件里的定义，看定义里有没有 tenant_id。
+ *
+ * ⚠️ 为什么要回溯：调用点写的是 `where`（一个变量名），
+ *    真正的过滤条件在几行之上的 `const where = { tenant_id: tenantId, ... }` 里。
+ *    找不到这个定义就当「没有租户过滤」—— 宁可误报（逼人登记白名单），不可漏报。
+ */
+function whereFromVariableHasTenantKey(
+  fileSrc: string,
+  callStart: number,
+  callText: string,
+): boolean {
+  // `where: someVar`（允许 `as` 类型断言：`where: where as WhereOptions<T>`）
+  const inline = /\bwhere\s*:\s*([A-Za-z_$][\w$]*)\b/.exec(callText);
+  // 简写 `{ where, ... }`
+  const shorthand = /[{,]\s*where\s*[,}]/.test(callText);
+  const varName = inline !== null ? inline[1] : shorthand ? 'where' : null;
+  if (varName === null) {
+    return false;
+  }
+  // 在调用点之前找该变量**最近一次**的声明
+  const before = fileSrc.slice(0, callStart);
+  const decl = new RegExp(`\\b(?:const|let|var)\\s+${varName}\\b[^=;]*=\\s*\\{`, 'g');
+  let match: RegExpExecArray | null;
+  let lastDecl = -1;
+  let lastBodyStart = -1;
+  while ((match = decl.exec(before)) !== null) {
+    lastDecl = match.index;
+    lastBodyStart = match.index + match[0].length - 1;
+  }
+  if (lastDecl < 0 || lastBodyStart < 0) {
+    return false;
+  }
+  // 只看这个对象字面量自己的内容（到配平的 } 为止），不看它后面的代码
+  const bodyEnd = matchBrace(before, lastBodyStart);
+  const bodyText = before.slice(lastBodyStart, bodyEnd + 1);
+  return /\btenant_id\s*:/.test(bodyText);
+}
+
 describe('租户隔离 · 架构约束（docs/12-a §A1）', () => {
   const files = listTsFiles(SRC_DIR);
+  const models = tenantScopedModels();
 
   it('扫得到源码（别让测试因为路径写错而空跑）', () => {
     expect(files.length).toBeGreaterThan(10);
   });
 
+  it('租户级模型清单推导得出来（自动扫描 src/models）', () => {
+    // 推导不出来 = 模型文件结构变了，测试会变成空跑
+    expect(models.length).toBeGreaterThanOrEqual(15);
+    // 之前手写清单漏过的那个
+    expect(models).toContain('TenantSetting');
+  });
+
   it('租户级模型的每个查询都带租户过滤（或已登记为例外）', () => {
     const modelPattern = new RegExp(
-      `\\b(?:${TENANT_SCOPED_MODELS.join('|')})\\.(?:findAll|findOne|findByPk|count|sum|aggregate|destroy|update)\\s*\\(`,
+      `\\b(?:${models.join('|')})\\.(?:${QUERY_METHODS.join('|')})\\s*\\(`,
       'g',
     );
     const violations: string[] = [];
 
     for (const abs of files) {
       const rel = path.relative(path.resolve(SRC_DIR, '..'), abs);
-      const src = readFileSync(abs, 'utf8');
+      const raw = readFileSync(abs, 'utf8');
+      // 剥掉注释再扫 —— 文档里引用一句 `Document.findAll()` 不算一次查询
+      const src = stripComments(raw);
       let m: RegExpExecArray | null;
       modelPattern.lastIndex = 0;
       while ((m = modelPattern.exec(src)) !== null) {
@@ -191,10 +364,24 @@ describe('租户隔离 · 架构约束（docs/12-a §A1）', () => {
         const openParen = src.indexOf('(', callStart);
         const callEnd = matchCallEnd(src, openParen);
         const callText = src.slice(callStart, callEnd + 1);
-        if (callText.includes('tenant_id')) {
+
+        if (whereHasTenantKey(callText)) {
+          // 写死了租户 id —— 这是跨租户查询的种子（'acme' 会被换成别的租户也照样跑）
+          const literal = /\btenant_id\s*:\s*['"`][^'"`]+['"`]/.exec(callText);
+          if (literal !== null) {
+            violations.push(
+              `${rel}:${src.slice(0, callStart).split('\n').length}  ${m[0]} —— ` +
+                `tenant_id 写死了字面量（${literal[0]}）。租户 id 必须来自上下文，不能写死。`,
+            );
+          }
+          continue;
+        }
+        if (whereFromVariableHasTenantKey(src, callStart, callText)) {
           continue;
         }
         // 登记过的例外
+        // ⚠️ 窗口要用**剥离后**的 src —— callStart 是剥离后源码里的下标，
+        //    拿它去切原文会错位（注释被剥掉后字符数变了）。
         const nearby = src.slice(Math.max(0, callStart - 40), callStart + 420);
         const allowed = ALLOWED_NO_TENANT_FILTER.some(
           (a) => rel.endsWith(a.file) && nearby.includes(a.snippet),

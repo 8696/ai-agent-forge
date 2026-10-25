@@ -1,4 +1,5 @@
 import { adminApi } from './adminApi';
+import { apiErrorMessage } from './apiError';
 
 /**
  * admin 评测 API 客户端 —— 对应 src/gateway/admin/evaluation-routes.ts
@@ -170,17 +171,5 @@ export async function startRun(datasetId: string): Promise<{
  * 从 axios 错误里取出后端返回的可读消息。
  */
 export function evaluationErrorMessage(err: unknown, fallback: string): string {
-  const e = err as {
-    response?: { status?: number; data?: { message?: string } };
-    message?: string;
-  };
-  const status = e.response?.status;
-  const serverMessage = e.response?.data?.message;
-  if (status !== undefined && serverMessage !== undefined) {
-    return serverMessage;
-  }
-  if (status !== undefined) {
-    return `${fallback}（HTTP ${status}）`;
-  }
-  return e.message ?? fallback;
+  return apiErrorMessage(err, fallback);
 }

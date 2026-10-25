@@ -5,6 +5,7 @@ import type { Context, Next } from 'koa';
 import { ApiKey, type ApiKeyScope } from '../models';
 import { AuthError, ForbiddenError } from './errors';
 import { hashPassword, verifyPassword } from './password';
+import { runWithTenant } from './tenant-context';
 import { logger } from '../logger';
 
 /**
@@ -318,7 +319,10 @@ export async function apiKeyAuth(ctx: Context, next: Next): Promise<void> {
     throw new AuthError('API Key 无效');
   }
   ctx.state.apiKey = principal;
-  await next();
+  // 本租户上下文 —— 租户作用域钩子靠它自动补 tenant_id 过滤（A1）。
+  // ⚠️ 必须在 verifyApiKey **之后**才设：那一步的 prefix 粗筛是故意跨租户的
+  //    （key_prefix 只有 8 位，捞候选再逐个 bcrypt 比对），那时还不知道租户是谁。
+  return runWithTenant(principal.tenantId, next);
 }
 
 // ============================================================

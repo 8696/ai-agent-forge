@@ -112,7 +112,7 @@ export function KnowledgeSearchPage(): ReactElement {
       </Card>
 
       {error !== null && (
-        <Alert type="error" showIcon message={error} style={{ marginBottom: 16 }} />
+        <Alert type="error" showIcon title={error} style={{ marginBottom: 16 }} />
       )}
 
       {result === null && error === null && (

@@ -21,6 +21,9 @@ import { EvaluationDataset } from './models/EvaluationDataset';
 import { EvaluationItem } from './models/EvaluationItem';
 import { EvaluationRun } from './models/EvaluationRun';
 import { EvaluationResult } from './models/EvaluationResult';
+import { Tool } from './models/Tool';
+import { ToolCallLog } from './models/ToolCallLog';
+import { installTenantScopeHooks } from './lib/tenant-scope';
 
 /**
  * Sequelize 实例（单例）。
@@ -72,7 +75,14 @@ function buildSequelize(): SequelizeType {
   EvaluationItem,
   EvaluationRun,
   EvaluationResult,
+  Tool,
+  ToolCallLog,
 ]);
+
+  // 租户作用域的运行时强制（A1）：给每个带 tenant_id 列的模型装上查询钩子，
+  // 请求上下文里有租户时自动补过滤 —— 见 src/lib/tenant-scope.ts
+  installTenantScopeHooks(instance);
+
   return instance;
 }
 

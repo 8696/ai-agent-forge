@@ -8,6 +8,7 @@ import {
   SystemTenantsPage,
   SystemTenantDetailPage,
   SystemChangePasswordPage,
+  SystemAuditPage,
 } from './pages/system';
 import {
   AdminLoginPage,
@@ -16,6 +17,8 @@ import {
   AdminAuditLogsPage,
   AdminApiKeysPage,
   AdminMemoriesPage,
+  ToolsPage,
+  ToolLogsPage,
   KnowledgeDocumentsPage,
   KnowledgeSearchPage,
   ModelListPage,
@@ -68,6 +71,8 @@ const routes: RouteObject[] = [
       { path: 'change-password', element: <SystemChangePasswordPage /> },
       { path: 'tenants', element: <SystemTenantsPage /> },
       { path: 'tenants/:id', element: <SystemTenantDetailPage /> },
+      // 平台方的审计日志（跨租户视角）—— docs/04-d §6.1
+      { path: 'audit', element: <SystemAuditPage /> },
     ],
   },
 
@@ -93,6 +98,8 @@ const routes: RouteObject[] = [
       { path: 'evaluation/runs', element: <EvaluationRunsPage /> },
       { path: 'audit', element: <AdminAuditLogsPage /> },
       { path: 'api-keys', element: <AdminApiKeysPage /> },
+      { path: 'tools', element: <ToolsPage /> },
+      { path: 'tool-logs', element: <ToolLogsPage /> },
     ],
   },
 
@@ -113,7 +120,9 @@ const routes: RouteObject[] = [
   // 公开
   // E1 公开聊天挂件：免登录，租户靠 URL 里的 tenantCode 定位
   { path: '/widget/:tenantCode', element: <WidgetPage /> },
-  { path: '/dev/probe', element: <DevProbePage /> },
+  // ⚠️ 调试页**只在 Vite dev 模式下注册** —— 生产构建里这个路由不存在（落到 404）。
+  //    以前它对所有人开放，而它挂的 LLM 探活会拿进程级凭据去调模型。
+  ...(import.meta.env.DEV ? [{ path: '/dev/probe', element: <DevProbePage /> }] : []),
   { path: '*', element: <NotFoundPage /> },
 ];
 

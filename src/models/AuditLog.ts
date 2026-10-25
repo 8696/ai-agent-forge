@@ -50,6 +50,12 @@ export type AuditAction =
   | 'API_KEY_CREATED'
   | 'API_KEY_REVOKED'
   | 'API_KEY_SCOPE_CHANGED'
+  // —— 租户后台：工具（C2 工具管理 / B3 工具调用）——
+  | 'TOOL_CREATED'
+  | 'TOOL_UPDATED'
+  | 'TOOL_ENABLED'
+  | 'TOOL_DISABLED'
+  | 'TOOL_DELETED'
   // —— 租户后台：评测 ——
   | 'EVALUATION_DATASET_CREATED'
   | 'EVALUATION_DATASET_DELETED'

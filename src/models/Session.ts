@@ -28,7 +28,35 @@ export type SessionStatus = 'active' | 'closed' | 'transferred';
 export interface SessionMetadata {
   /** 客户端信息（浏览器 / UA 摘要） */
   client?: string;
+  /**
+   * 用户已批准的敏感工具（B3 HITL）。
+   *
+   * ⚠️ **这是 B5 状态机的临时形态**：完整的任务状态机（missions 表）还没做，
+   *    批准记录先寄在会话的 metadata 里。下一轮做 B5 时迁进 missions。
+   *
+   * 一条 = 一次批准。键（`key`）的格式是 `工具名:入参指纹`
+   * （见 src/tools/execute.ts 的 approvalKey）。
+   */
+  approved_tool_calls?: SessionToolApproval[];
   [key: string]: unknown;
+}
+
+/** 一条敏感工具的批准记录 */
+export interface SessionToolApproval {
+  /** 批准键 = 工具名 + 入参指纹 */
+  key: string;
+  /** 工具名 */
+  tool_name: string;
+  /** 批准时的那份入参（模型下一轮要用同样的参数再调一次） */
+  args: unknown;
+  approved_at: string;
+  /**
+   * 状态机：
+   *  - `approved` —— 用户点了「确认执行」，等模型再调一次
+   *  - `executed` —— 闸门放行，工具真的跑了（不用再提醒模型）
+   *  - `rejected` —— 用户点了「取消」，模型不要再调这个
+   */
+  state: 'approved' | 'executed' | 'rejected';
 }
 
 /**

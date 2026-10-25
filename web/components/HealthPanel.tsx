@@ -21,7 +21,7 @@ export function HealthPanel(): ReactElement {
   }, []);
 
   if (error !== null) {
-    return <Alert type="error" message={`无法连接后端：${error}`} />;
+    return <Alert type="error" title={`无法连接后端：${error}`} />;
   }
   if (data === null) {
     return <Spin tip="检查中..." />;
@@ -30,7 +30,7 @@ export function HealthPanel(): ReactElement {
     <Alert
       type={data.ok ? 'success' : 'warning'}
       showIcon
-      message={`后端正常 · db=${data.db} · uptime=${data.uptime}s`}
+      title={`后端正常 · db=${data.db} · uptime=${data.uptime}s`}
     />
   );
 }

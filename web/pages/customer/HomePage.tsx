@@ -24,7 +24,7 @@ import { PageHeader } from '../../components/shell';
 
 /**
  * B7 · 租户前台首页 `/customer` —— 用户中心工作台
- * 详见 docs/12-b-需求-ai对话能力.md §B7 / docs/04-b-ui-登录与聊天挂件.md §4.12
+ * 详见 docs/12-b-需求-ai对话能力.md §B7 / docs/04-b-ui-登录与聊天挂件.md §4.10
  *
  * 之前 `/customer` 和 `/customer/chat` 指向同一个 ChatPage —— 首页这个位置
  * 是空着的，用户登录后只看到一列会话 + 右边一片空白。
@@ -157,7 +157,7 @@ export function HomePage(): ReactElement {
           type="warning"
           showIcon
           style={{ marginBottom: 16 }}
-          message="部分内容没能加载出来"
+          title="部分内容没能加载出来"
           description={
             <ul style={{ margin: 0, paddingLeft: 18 }}>
               {errors.map((e) => (
@@ -388,9 +388,9 @@ export function HomePage(): ReactElement {
   );
 }
 
-/** 去掉文件名后缀 —— 「员工手册.pdf」→「员工手册」 */
+/** 去掉文件名后缀 —— 「员工手册.pdf」→「员工手册」（Word 已从上传格式里去掉） */
 function stripExtension(title: string): string {
-  return title.replace(/\.(pdf|docx?|md|markdown|txt)$/i, '');
+  return title.replace(/\.(pdf|md|markdown|txt)$/i, '');
 }
 
 /** 相对时间：会话列表里用「3 分钟前」比「2026-10-24 20:50:11」好读 */

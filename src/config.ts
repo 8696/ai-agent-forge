@@ -164,8 +164,6 @@ const envSchema = z.object({
   JWT_EXPIRES_IN: z.string().default('7d'),
 
   // === 安全防护（D4 · docs/12-d-需求-运维稳定.md §D4）===
-  // 敏感数据脱敏（身份证 / 银行卡 / 手机号 → ***）：无条件开着，关掉就等于往历史里存明文
-  SECURITY_PII_MASK_ENABLED: z.preprocess(toBool, z.boolean().default(true)),
   // 敏感词库审核（暴力 / 色情 / 政治 / 歧视）
   SECURITY_SENSITIVE_WORDS_ENABLED: z.preprocess(toBool, z.boolean().default(true)),
   // 提示词注入检测（规则层）
@@ -180,6 +178,15 @@ const envSchema = z.object({
   SECURITY_OUTPUT_LLM_CHECK: z.preprocess(toBool, z.boolean().default(false)),
   // 审核类 LLM 调用的超时（毫秒）—— 超了就按「判不出来」处理，不拖住用户请求
   SECURITY_GUARD_TIMEOUT_MS: z.coerce.number().int().positive().default(8000),
+
+  // === 租户隔离（A1 · docs/12-a-需求-多租户与登录.md §A1）===
+  // 租户作用域的**运行时强制**：请求级上下文 + Sequelize 全局钩子，
+  // 查询发出前自动补上 tenant_id 过滤（忘了加也不会跨租户）。
+  //
+  // ⚠️ 这是**平台级硬边界**，不给租户开关。
+  //    万一上线后出问题，先把它关掉止血（会退回到「全靠人记得加过滤」的状态），
+  //    修好再打开。默认开着 —— 关着就等于没有这层保护。
+  TENANT_SCOPE_ENFORCE: z.preprocess(toBool, z.boolean().default(true)),
 
   // === 限流（D5 · docs/12-d-需求-运维稳定.md §D5）===
   RATE_LIMIT_ENABLED: z.preprocess(toBool, z.boolean().default(true)),
@@ -524,12 +531,16 @@ export const config = Object.freeze({
 
   // 安全防护（D4）
   SECURITY: Object.freeze({
-    PII_MASK_ENABLED: env.SECURITY_PII_MASK_ENABLED,
     SENSITIVE_WORDS_ENABLED: env.SECURITY_SENSITIVE_WORDS_ENABLED,
     INJECTION_ENABLED: env.SECURITY_INJECTION_ENABLED,
     INJECTION_LLM_MODE: env.SECURITY_INJECTION_LLM_MODE,
     OUTPUT_LLM_CHECK: env.SECURITY_OUTPUT_LLM_CHECK,
     GUARD_TIMEOUT_MS: env.SECURITY_GUARD_TIMEOUT_MS,
+  }),
+
+  // 租户隔离（A1）—— 运行时强制：查询自动补 tenant_id 过滤
+  TENANT_SCOPE: Object.freeze({
+    ENFORCE: env.TENANT_SCOPE_ENFORCE,
   }),
 
   // 限流（D5）

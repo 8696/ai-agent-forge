@@ -18,6 +18,7 @@ import {
   Typography,
   Upload,
   message,
+  theme,
 } from 'antd';
 import type { TableColumnsType } from 'antd';
 import {
@@ -78,6 +79,8 @@ const PAGE_SIZE = 20;
  * UI 详见 docs/04-c-ui-后台管理页面.md §5.2
  */
 export function KnowledgeDocumentsPage(): ReactElement {
+  // 颜色走 antd token —— 写死浅色的话，深色模式下几乎看不见
+  const { token } = theme.useToken();
   const [rows, setRows] = useState<KnowledgeDocument[]>([]);
   const [stats, setStats] = useState<KnowledgeStats | null>(null);
   const [loading, setLoading] = useState(false);
@@ -188,7 +191,7 @@ export function KnowledgeDocumentsPage(): ReactElement {
         ellipsis: true,
         render: (title: string, row) => (
           <Space>
-            <FileTextOutlined style={{ color: 'rgba(0,0,0,0.45)' }} />
+            <FileTextOutlined style={{ color: token.colorTextTertiary }} />
             <a onClick={() => setDetail(row)}>{title}</a>
           </Space>
         ),
@@ -263,7 +266,7 @@ export function KnowledgeDocumentsPage(): ReactElement {
         ),
       },
     ],
-    [busyDocId],
+    [busyDocId, token],
   );
 
   return (
@@ -283,7 +286,7 @@ export function KnowledgeDocumentsPage(): ReactElement {
         <Alert
           type="error"
           showIcon
-          message={loadError}
+          title={loadError}
           style={{ marginBottom: 16 }}
           action={
             <Button size="small" onClick={() => void load()}>
@@ -345,7 +348,7 @@ export function KnowledgeDocumentsPage(): ReactElement {
           <CloudUploadOutlined style={{ fontSize: 42, color: '#1677ff' }} />
         </p>
         <p style={{ margin: '8px 0 4px', fontSize: 16 }}>点击或拖拽文件到此处上传</p>
-        <p style={{ margin: 0, color: 'rgba(0,0,0,0.45)', fontSize: 13 }}>
+        <p style={{ margin: 0, color: token.colorTextTertiary, fontSize: 13 }}>
           支持 PDF / Markdown / TXT，单文件 ≤ 50 MB。上传后会同步完成拆块与向量化。
         </p>
         {uploading && (
@@ -457,7 +460,7 @@ export function KnowledgeDocumentsPage(): ReactElement {
                 type="error"
                 showIcon
                 style={{ marginTop: 16 }}
-                message="最近一次索引失败"
+                title="最近一次索引失败"
                 description={<Text style={{ fontSize: 12 }}>{detail.error_message}</Text>}
               />
             )}

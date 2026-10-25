@@ -1,6 +1,7 @@
 import { QueryTypes } from 'sequelize';
 import { sequelize } from '../db';
 import { logger } from '../logger';
+import { utcWallClock } from '../lib/sql-datetime';
 
 /**
  * 平台方跨租户统计 —— docs/04-d-ui-系统级与公共组件.md §6.2（/system/dashboard）
@@ -71,7 +72,7 @@ export async function getSystemStats(now: Date = new Date()): Promise<SystemStat
     ),
     sequelize.query<{ count: string | number }>(
       `SELECT COUNT(*) AS count FROM tenants WHERE expires_at IS NOT NULL AND expires_at < ?`,
-      { replacements: [now], type: QueryTypes.SELECT },
+      { replacements: [utcWallClock(now)], type: QueryTypes.SELECT },
     ),
     sequelize.query<{ count: string | number }>(
       `SELECT COUNT(*) AS count FROM users`,
@@ -123,13 +124,13 @@ export async function getSystemStats(now: Date = new Date()): Promise<SystemStat
                 SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END) AS errors
            FROM traces
           WHERE started_at >= ? AND started_at < ?`,
-        { replacements: [dayStart, dayEnd], type: QueryTypes.SELECT },
+        { replacements: [utcWallClock(dayStart), utcWallClock(dayEnd)], type: QueryTypes.SELECT },
       ),
       sequelize.query<{ cost: string | number; total_tokens: string | number }>(
         `SELECT COALESCE(SUM(cost), 0) AS cost, COALESCE(SUM(total_tokens), 0) AS total_tokens
            FROM cost_logs
           WHERE created_at >= ? AND created_at < ?`,
-        { replacements: [dayStart, dayEnd], type: QueryTypes.SELECT },
+        { replacements: [utcWallClock(dayStart), utcWallClock(dayEnd)], type: QueryTypes.SELECT },
       ),
       sequelize.query<{
         bucket: string;
@@ -161,12 +162,12 @@ export async function getSystemStats(now: Date = new Date()): Promise<SystemStat
           ORDER BY d.bucket ASC`,
         {
           replacements: [
-            weekStart,
-            dayEnd,
-            weekStart,
-            dayEnd,
-            weekStart,
-            dayEnd,
+            utcWallClock(weekStart),
+            utcWallClock(dayEnd),
+            utcWallClock(weekStart),
+            utcWallClock(dayEnd),
+            utcWallClock(weekStart),
+            utcWallClock(dayEnd),
           ],
           type: QueryTypes.SELECT,
         },
@@ -218,7 +219,7 @@ export async function getSystemStats(now: Date = new Date()): Promise<SystemStat
            FROM cost_logs
           WHERE created_at >= ?
           GROUP BY tenant_id`,
-        { replacements: [monthStart], type: QueryTypes.SELECT },
+        { replacements: [utcWallClock(monthStart)], type: QueryTypes.SELECT },
       ),
     ]);
 

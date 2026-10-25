@@ -16,6 +16,7 @@ import { DashboardOutlined, FileSearchOutlined, TeamOutlined, UploadOutlined, Sl
   BookOutlined,
   AuditOutlined,
   KeyOutlined,
+  ToolOutlined,
 } from '@ant-design/icons';
 
 /**
@@ -23,80 +24,147 @@ import { DashboardOutlined, FileSearchOutlined, TeamOutlined, UploadOutlined, Sl
  * - role=admin 才能进
  * - 只放已经落地的菜单；未实现的入口不占位
  */
+/**
+ * admin 侧栏菜单 —— 按 docs/04-a-ui-总则布局与菜单.md §2.2 的分组结构
+ *
+ * ⚠️ 2026-10-25 补：以前是 16 个平铺条目，规格里是 7 个分组。
+ *    「只放已经落地的菜单」—— 规格里的「告警规则」页没做，不占位。
+ */
 const SIDEBAR: SidebarItem[] = [
   { key: '/admin', icon: <DashboardOutlined />, label: '首页', to: '/admin' },
-  { key: '/admin/users', icon: <TeamOutlined />, label: '用户', to: '/admin/users' },
   {
-    key: '/admin/memories',
-    icon: <BookOutlined />,
-    label: '用户记忆',
-    to: '/admin/memories',
-  },
-  {
-    key: '/admin/knowledge/documents',
-    icon: <UploadOutlined />,
-    label: '文档管理',
-    to: '/admin/knowledge/documents',
-  },
-  {
-    key: '/admin/knowledge/test',
+    key: 'group-knowledge',
     icon: <FileSearchOutlined />,
-    label: '检索测试',
-    to: '/admin/knowledge/test',
+    label: '知识库',
+    children: [
+      {
+        key: '/admin/knowledge/documents',
+        icon: <UploadOutlined />,
+        label: '文档管理',
+        to: '/admin/knowledge/documents',
+      },
+      {
+        key: '/admin/knowledge/test',
+        icon: <FileSearchOutlined />,
+        label: '检索测试',
+        to: '/admin/knowledge/test',
+      },
+    ],
   },
   {
-    key: '/admin/models',
+    key: 'group-model',
     icon: <SlidersOutlined />,
-    label: '模型选择',
-    to: '/admin/models',
+    label: '模型 & 提示词',
+    children: [
+      {
+        key: '/admin/models',
+        icon: <SlidersOutlined />,
+        label: '模型选择',
+        to: '/admin/models',
+      },
+      {
+        key: '/admin/prompts',
+        icon: <EditOutlined />,
+        label: '提示词配置',
+        to: '/admin/prompts',
+      },
+    ],
   },
   {
-    key: '/admin/prompts',
-    icon: <EditOutlined />,
-    label: '提示词配置',
-    to: '/admin/prompts',
+    key: 'group-tools',
+    icon: <ToolOutlined />,
+    label: '工具',
+    children: [
+      {
+        key: '/admin/tools',
+        icon: <ToolOutlined />,
+        label: '工具列表',
+        to: '/admin/tools',
+      },
+      {
+        key: '/admin/tool-logs',
+        icon: <FileSearchOutlined />,
+        label: '调用记录',
+        to: '/admin/tool-logs',
+      },
+    ],
   },
   {
-    key: '/admin/settings',
-    icon: <SettingOutlined />,
-    label: '租户设置',
-    to: '/admin/settings',
+    key: 'group-evaluation',
+    icon: <ExperimentOutlined />,
+    label: '评测',
+    children: [
+      {
+        key: '/admin/evaluation/datasets',
+        icon: <ExperimentOutlined />,
+        label: '评测集',
+        to: '/admin/evaluation/datasets',
+      },
+      {
+        key: '/admin/evaluation/runs',
+        icon: <TrophyOutlined />,
+        label: '评测结果',
+        to: '/admin/evaluation/runs',
+      },
+    ],
   },
   {
-    key: '/admin/observability/traces',
+    key: 'group-observability',
     icon: <LineChartOutlined />,
     label: '观测',
-    to: '/admin/observability/traces',
+    children: [
+      {
+        key: '/admin/observability/traces',
+        icon: <LineChartOutlined />,
+        label: 'Trace 列表',
+        to: '/admin/observability/traces',
+      },
+      {
+        key: '/admin/observability/cost',
+        icon: <FundOutlined />,
+        label: '成本分析',
+        to: '/admin/observability/cost',
+      },
+    ],
   },
   {
-    key: '/admin/observability/cost',
-    icon: <FundOutlined />,
-    label: '成本分析',
-    to: '/admin/observability/cost',
+    key: 'group-users',
+    icon: <TeamOutlined />,
+    label: '用户',
+    children: [
+      { key: '/admin/users', icon: <TeamOutlined />, label: '用户列表', to: '/admin/users' },
+      {
+        key: '/admin/memories',
+        icon: <BookOutlined />,
+        label: '用户记忆',
+        to: '/admin/memories',
+      },
+      {
+        key: '/admin/audit',
+        icon: <AuditOutlined />,
+        label: '操作审计',
+        to: '/admin/audit',
+      },
+    ],
   },
   {
-    key: '/admin/evaluation/datasets',
-    icon: <ExperimentOutlined />,
-    label: '评测集',
-    to: '/admin/evaluation/datasets',
-  },
-  {
-    key: '/admin/evaluation/runs',
-    icon: <TrophyOutlined />,
-    label: '评测结果',
-    to: '/admin/evaluation/runs',
-  },
-  {
-    key: '/admin/api-keys',
-    icon: <KeyOutlined />,
-    label: 'API 密钥',
-    to: '/admin/api-keys',
-  },
-  {
-    key: '/admin/audit',
-    icon: <AuditOutlined />,
-    label: '审计日志',
-    to: '/admin/audit',
+    key: 'group-settings',
+    icon: <SettingOutlined />,
+    label: '设置',
+    children: [
+      {
+        key: '/admin/settings',
+        icon: <SettingOutlined />,
+        label: '租户配置',
+        to: '/admin/settings',
+      },
+      {
+        key: '/admin/api-keys',
+        icon: <KeyOutlined />,
+        label: 'API 密钥',
+        to: '/admin/api-keys',
+      },
+    ],
   },
 ];
 
@@ -156,7 +224,7 @@ function AlertBanner(): ReactElement | null {
   return (
     <div style={{ marginBottom: 16, display: 'flex', flexDirection: 'column', gap: 8 }}>
       {alerts.map((a) => (
-        <Alert key={a.id} type={a.level} showIcon message={a.title} description={a.detail} />
+        <Alert key={a.id} type={a.level} showIcon title={a.title} description={a.detail} />
       ))}
     </div>
   );

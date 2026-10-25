@@ -13,9 +13,9 @@ import hljsLightCss from 'highlight.js/styles/github.css?inline';
 import hljsDarkCss from 'highlight.js/styles/github-dark.css?inline';
 
 /**
- * Markdown 渲染 —— docs/04-d §7 公共组件 / docs/04-b §4.9 特殊元素
+ * Markdown 渲染 —— docs/04-d §7 公共组件 / docs/04-b §4.7 特殊元素
  *
- * 规格要求（04-b §4.9）：
+ * 规格要求（04-b §4.7）：
  *  - **代码块用 highlight.js 高亮 + 右上角复制按钮**
  *  - **引用块**：左侧蓝色边 + 浅灰背景
  *  - **链接**：自动识别 + 新窗口打开
@@ -80,7 +80,7 @@ export function Markdown(props: MarkdownProps): ReactElement {
         );
       },
 
-      /** 引用块：左侧蓝色边 + 浅灰背景（04-b §4.9） */
+      /** 引用块：左侧蓝色边 + 浅灰背景（04-b §4.7） */
       blockquote({ children }) {
         return (
           <blockquote
@@ -98,7 +98,7 @@ export function Markdown(props: MarkdownProps): ReactElement {
         );
       },
 
-      /** 链接：新窗口打开（04-b §4.9「自动识别 + 新窗口打开」） */
+      /** 链接：新窗口打开（04-b §4.7「自动识别 + 新窗口打开」） */
       a({ children, href, ...rest }) {
         return (
           <a

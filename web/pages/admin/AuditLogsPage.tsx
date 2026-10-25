@@ -1,6 +1,6 @@
 import type { ReactElement } from 'react';
 import { useEffect, useMemo, useState } from 'react';
-import { Alert, Button, Card, DatePicker, Select, Space, Table, Tag, Typography } from 'antd';
+import { Alert, Button, Card, DatePicker, Select, Space, Table, Tag, Typography, theme } from 'antd';
 import type { TableColumnsType } from 'antd';
 import { ReloadOutlined } from '@ant-design/icons';
 import dayjs, { type Dayjs } from 'dayjs';
@@ -41,6 +41,11 @@ const ACTION_LABEL: Record<string, string> = {
   TENANT_MODEL_ACTIVATE: '启用模型',
   TENANT_MODEL_DELETE: '删除模型',
   TENANT_SETTINGS_CHANGE: '修改租户设置',
+  TOOL_CREATED: '注册工具',
+  TOOL_UPDATED: '修改工具',
+  TOOL_ENABLED: '启用工具',
+  TOOL_DISABLED: '禁用工具',
+  TOOL_DELETED: '删除工具',
   USER_CREATED: '创建用户',
   USER_UPDATED: '修改用户',
   USER_DELETED: '删除用户',
@@ -86,6 +91,8 @@ function actionLabel(action: string): string {
  * UI 详见 docs/04-c-ui-后台管理页面.md §5.10
  */
 export function AdminAuditLogsPage(): ReactElement {
+  // 颜色走 antd token —— 写死浅色的话，深色模式下几乎看不见
+  const { token } = theme.useToken();
   const [rows, setRows] = useState<AuditItem[] | null>(null);
   const [pagination, setPagination] = useState<{ total: number } | null>(null);
   const [errMsg, setErrMsg] = useState<string | null>(null);
@@ -214,7 +221,7 @@ export function AdminAuditLogsPage(): ReactElement {
       ellipsis: true,
       render: (rt: string | null, row) =>
         rt === null ? (
-          <span style={{ color: 'rgba(0,0,0,0.45)' }}>—</span>
+          <span style={{ color: token.colorTextTertiary }}>—</span>
         ) : (
           <Space size={6}>
             <span>{rt}</span>
@@ -232,7 +239,7 @@ export function AdminAuditLogsPage(): ReactElement {
       key: 'ip',
       width: 150,
       render: (ip: string | null) =>
-        ip === null ? <span style={{ color: 'rgba(0,0,0,0.45)' }}>—</span> : ip,
+        ip === null ? <span style={{ color: token.colorTextTertiary }}>—</span> : ip,
     },
   ];
 
@@ -250,7 +257,7 @@ export function AdminAuditLogsPage(): ReactElement {
       />
 
       {errMsg !== null && (
-        <Alert type="error" showIcon message={errMsg} style={{ marginBottom: 16 }} />
+        <Alert type="error" showIcon title={errMsg} style={{ marginBottom: 16 }} />
       )}
 
       <Card styles={{ body: { padding: 16 } }}>
@@ -307,7 +314,7 @@ export function AdminAuditLogsPage(): ReactElement {
                   whiteSpace: 'pre-wrap',
                   wordBreak: 'break-all',
                   fontSize: 12,
-                  background: 'rgba(0,0,0,0.03)',
+                  background: token.colorFillQuaternary,
                   padding: 12,
                   borderRadius: 6,
                 }}

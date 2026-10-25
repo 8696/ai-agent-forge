@@ -71,18 +71,20 @@ export async function guardUserInput(
   actor: GuardActor,
 ): Promise<InputGuardResult> {
   // ---- 1. 脱敏 ----
-  let text = rawText;
-  let maskedCount = 0;
-  if (config.SECURITY.PII_MASK_ENABLED) {
-    const masked = maskPii(rawText);
-    text = masked.text;
-    maskedCount = masked.hits.length;
-    if (maskedCount > 0) {
-      logger.info(
-        { tenantId: actor.tenantId, userId: actor.userId, maskedCount },
-        '输入里有敏感数据，已脱敏',
-      );
-    }
+  // ⚠️ **无条件执行，且排在最前面** —— 后面所有环节（审核 / 检索 / 落库 / 日志 / prompt）
+  //    拿到的都是脱敏后的文本。
+  //
+  //    这里**故意不给开关**：脱敏是「写进历史库之前的最后一道防线」，
+  //    一旦能通过 .env 关掉，就等于允许把身份证 / 银行卡明文存进数据库。
+  //    （跟 `CONFIG_ENCRYPTION_KEY` 一个思路：安全相关的开关不给「关掉就降级成明文」的余地。）
+  const masked = maskPii(rawText);
+  let text = masked.text;
+  const maskedCount = masked.hits.length;
+  if (maskedCount > 0) {
+    logger.info(
+      { tenantId: actor.tenantId, userId: actor.userId, maskedCount },
+      '输入里有敏感数据，已脱敏',
+    );
   }
 
   // ---- 2. 敏感词（本地词库，零成本零延迟）----

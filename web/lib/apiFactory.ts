@@ -3,15 +3,34 @@ import { attachTokenInterceptor, onUnauthorized } from './apiShared';
 
 const TOKEN_KEY = 'agent_platform_token';
 
+/**
+ * 取 token —— 「记住我」的两种存法都看。
+ *
+ *  - localStorage   → 记住我（跨浏览器重启保留，到 JWT 过期为止，默认 7 天）
+ *  - sessionStorage → 没记住（关掉标签页/浏览器就没了）
+ */
 export function getToken(): string | null {
-  return localStorage.getItem(TOKEN_KEY);
+  return localStorage.getItem(TOKEN_KEY) ?? sessionStorage.getItem(TOKEN_KEY);
 }
 
-export function setToken(token: string | null): void {
+/**
+ * 存 token。
+ *
+ * @param remember 「记住我」勾没勾（docs/04-b §3.2）。
+ *   - true  → localStorage，跨浏览器重启保留
+ *   - false → sessionStorage，关掉浏览器就没了
+ *   - null  → 登出 / token 过期：两个存储都清掉
+ */
+export function setToken(token: string | null, remember = true): void {
+  localStorage.removeItem(TOKEN_KEY);
+  sessionStorage.removeItem(TOKEN_KEY);
   if (token === null) {
-    localStorage.removeItem(TOKEN_KEY);
-  } else {
+    return;
+  }
+  if (remember) {
     localStorage.setItem(TOKEN_KEY, token);
+  } else {
+    sessionStorage.setItem(TOKEN_KEY, token);
   }
 }
 

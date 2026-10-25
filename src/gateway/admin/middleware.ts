@@ -2,6 +2,7 @@ import type { Context, Next } from 'koa';
 import type { JwtPayload, TenantUserJwtPayload } from '../../lib/jwt';
 import { AuthError } from '../../lib/errors';
 import { assertPasswordChanged } from '../password-change-gate';
+import { runWithTenant } from '../../lib/tenant-context';
 
 /**
  * admin 子系统：要求 token 是租户 admin（role=admin）
@@ -21,5 +22,7 @@ export function requireAdmin(ctx: Context, next: Next): Promise<void> {
   ctx.state.adminUser = u as TenantUserJwtPayload;
   // 被要求先改密码的账号，除了 /me 和 /change-password 之外一律挡住
   assertPasswordChanged(ctx);
-  return next();
+  // 把后续整条链路（含 fire-and-forget 出去的后台任务）放进本租户的上下文，
+  // 让租户作用域钩子能自动给查询补上 tenant_id 过滤（A1）
+  return runWithTenant(u.tenant_id, next);
 }

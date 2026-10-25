@@ -53,15 +53,13 @@
 | ------------ | ---------------------- | ------------------------------------------------------------------------------------- |
 | 公司 Logo    | `image: 'logo.png'`    | `<Avatar shape="circle" style={{ background: '#1677ff' }}><RobotOutlined /></Avatar>` |
 | 用户头像     | `image: avatar.png`    | `<Avatar icon={<UserOutlined />} />`（无头像时）                                      |
-| 文件类型图标 | `image: file-icon.png` | `<FilePdfOutlined />` / `<FileWordOutlined />` / `<FileTextOutlined />`（按扩展名选） |
+| 文件类型图标 | `image: file-icon.png` | `<FilePdfOutlined />` / `<FileTextOutlined />`（按扩展名选）                          |
 | 占位插画     | `image: empty.png`     | AntD `<Empty />`（自带 SVG）                                                          |
 | 状态指示     | `image: success.png`   | AntD `<Badge status="success" />` / `<CheckCircleOutlined />`                         |
 | 操作按钮图标 | `image: button.png`    | AntD `icon` prop（如 `<Button icon={<DeleteOutlined />}>删除</Button>`）              |
 
 **例外（这些是真内容，不是 UI 装饰）**：
 
-- 用户上传的图片（聊天里发给 AI 看的）
-- AI 生成的图片（图像生成功能输出）
 - 用户上传的文档预览（PDF 第一页缩略图）
 
 > 例外里的图片用 `<img>` 标签或 AntD `<Image>` 组件展示；其余一律 AntD 图标。
@@ -112,8 +110,8 @@
 │ │折叠)│ │                      │ │
 │ │     │ │  ▢ 思考模式 ✓         │ │
 │ │     │ │                      │ │
-│ │     │ │  [输入框] [📎] [🎤] [发送]│
-│ │     │ │  [思考] [图像] [文件]   │ ← 输入框上方 toggle
+│ │     │ │  [输入框] [发送]          │
+│ │     │ │  [思考] [文件]          │ ← 输入框上方 toggle
 │ └─────┘ └─────────────────────┘ │
 └─────────────────────────────────┘
 ```
@@ -159,9 +157,9 @@
   ├─ 模型选择（C4 · 当前供应商 + 备选）
   └─ 提示词配置（C3 · 文件编辑器 + 版本切换）
 
-🛠 工具（C2 · ⏳ 暂不做 · 等外部系统接入需求）
-  ├─ 工具列表（⏳ 暂不做）
-  └─ 工具调用日志（⏳ 暂不做）
+🛠 工具（C2 · ✅ 已落地 2026-10-25）
+  ├─ 工具列表（`/admin/tools`）✅
+  └─ 工具调用记录（`/admin/tool-logs`）✅
 
 📈 评测
   ├─ 评测集（P6 · 上传 + 列表）
@@ -204,7 +202,7 @@
 ```
 
 > ⚠️ **首页和智能问答是两个页面**（2026-10-24 之前是两个 URL 指向同一个组件）。
-> 首页是概览 + 入口，聊天页是纯对话 —— 详见 [04-b](./04-b-UI-登录与聊天挂件.md) §4.12。
+> 首页是概览 + 入口，聊天页是纯对话 —— 详见 [04-b](./04-b-UI-登录与聊天挂件.md) §4.10。
 
 ### 2.4 AntD Menu 配置示例
 

@@ -1,32 +1,17 @@
 import type { ReactElement } from 'react';
 import { useEffect, useState } from 'react';
-import { Alert, Button, Card, Descriptions, Empty, Space, Tag, Typography } from 'antd';
+import { Alert, Button, Card, Descriptions, Empty, Tag, Typography, theme } from 'antd';
 import { ArrowLeftOutlined, ReloadOutlined } from '@ant-design/icons';
 import { useNavigate, useParams } from 'react-router-dom';
 import { PageHeader } from '../../components/shell/PageHeader';
+import { TraceTimeline } from '../../components/TraceTimeline';
 import {
   fetchTraceDetail,
   observabilityErrorMessage,
   type TraceDetail,
-  type TraceSpan,
 } from '../../lib/adminObservability';
 
-const { Text, Paragraph } = Typography;
-
-/** span 的 kind → 中文名 + 颜色 */
-const SPAN_KIND_META: Record<string, { label: string; color: string }> = {
-  http: { label: 'HTTP 路由', color: 'blue' },
-  retrieval: { label: '知识库检索', color: 'cyan' },
-  llm: { label: '模型调用', color: 'purple' },
-  guard: { label: '安全审核', color: 'volcano' },
-  cost: { label: '成本记账', color: 'gold' },
-  storage: { label: '存储', color: 'green' },
-  step: { label: '步骤', color: 'default' },
-};
-
-function spanMeta(kind: string): { label: string; color: string } {
-  return SPAN_KIND_META[kind] ?? { label: kind, color: 'default' };
-}
+const { Text } = Typography;
 
 /**
  * /admin/observability/traces/:id —— Trace 详情（D2）
@@ -44,7 +29,6 @@ export function ObservabilityTraceDetailPage(): ReactElement {
   const navigate = useNavigate();
   const [detail, setDetail] = useState<TraceDetail | null>(null);
   const [errMsg, setErrMsg] = useState<string | null>(null);
-  const [openSpan, setOpenSpan] = useState<string | null>(null);
 
   const load = async (): Promise<void> => {
     setErrMsg(null);
@@ -68,7 +52,7 @@ export function ObservabilityTraceDetailPage(): ReactElement {
           title="Trace 详情"
           breadcrumb={[{ title: '首页' }, { title: '观测' }, { title: 'Trace 详情' }]}
         />
-        <Alert type="error" showIcon message={errMsg} style={{ marginBottom: 16 }} />
+        <Alert type="error" showIcon title={errMsg} style={{ marginBottom: 16 }} />
         <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/admin/observability/traces')}>
           返回列表
         </Button>
@@ -143,7 +127,7 @@ export function ObservabilityTraceDetailPage(): ReactElement {
           <Alert
             type="error"
             showIcon
-            message="失败原因"
+            title="失败原因"
             description={t.error_message}
             style={{ marginTop: 16 }}
           />
@@ -158,85 +142,9 @@ export function ObservabilityTraceDetailPage(): ReactElement {
           </Text>
         }
       >
-        {detail.spans.length === 0 ? (
-          <Empty description="这次调用没有记录 span" />
-        ) : (
-          detail.spans.map((span: TraceSpan) => {
-            const meta = spanMeta(span.kind);
-            const expanded = openSpan === span.id;
-            return (
-              <Card
-                key={span.id}
-                size="small"
-                style={{ marginBottom: 8 }}
-                styles={{ body: { padding: 12 } }}
-                onClick={() => setOpenSpan(expanded ? null : span.id)}
-              >
-                <Space orientation="vertical" size={6} style={{ width: '100%' }}>
-                  <Space wrap size={8}>
-                    <Text type="secondary" style={{ fontSize: 12, fontFamily: 'monospace' }}>
-                      {new Date(span.started_at).toLocaleTimeString()}
-                    </Text>
-                    <Tag color={meta.color}>{meta.label}</Tag>
-                    <Text strong>{span.name}</Text>
-                    <Text type="secondary">{span.duration_ms ?? 0} ms</Text>
-                    {span.status === 'error' && <Tag color="red">失败</Tag>}
-                  </Space>
-                  {span.error_message !== null && (
-                    <Text type="danger" style={{ fontSize: 12 }}>
-                      {span.error_message}
-                    </Text>
-                  )}
-                  {expanded && (
-                    <Space orientation="vertical" size={8} style={{ width: '100%' }}>
-                      <JsonBlock title="入参" value={span.input} />
-                      <JsonBlock title="出参" value={span.output} />
-                    </Space>
-                  )}
-                </Space>
-              </Card>
-            );
-          })
-        )}
+        <TraceTimeline spans={detail.spans} />
       </Card>
     </div>
   );
 }
 
-function JsonBlock({
-  title,
-  value,
-}: {
-  title: string;
-  value: Record<string, unknown> | null;
-}): ReactElement {
-  if (value === null || Object.keys(value).length === 0) {
-    return (
-      <div>
-        <Text type="secondary" style={{ fontSize: 12 }}>
-          {title}：（无）
-        </Text>
-      </div>
-    );
-  }
-  return (
-    <div>
-      <Text type="secondary" style={{ fontSize: 12 }}>
-        {title}
-      </Text>
-      <Paragraph
-        style={{
-          margin: 0,
-          fontSize: 12,
-          fontFamily: 'monospace',
-          background: 'rgba(0,0,0,0.03)',
-          padding: 8,
-          borderRadius: 4,
-          whiteSpace: 'pre-wrap',
-        }}
-      >
-        {JSON.stringify(value, null, 2)}
-      </Paragraph>
-    </div>
-  );
-}

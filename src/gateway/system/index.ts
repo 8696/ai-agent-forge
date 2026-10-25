@@ -6,4 +6,5 @@
  */
 export { systemTenantRouter } from './tenant-routes';
 export { systemAuthRouter } from './auth-routes';
+export { systemAuditRouter } from './audit-routes';
 export { requireSystemUser } from './middleware';

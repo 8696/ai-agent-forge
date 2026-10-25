@@ -1,6 +1,7 @@
 import Router from '@koa/router';
 import type { Context } from 'koa';
 import { pipeUIMessageStreamToResponse } from 'ai';
+import { z } from 'zod';
 import { config } from '../../config';
 import { Session, Tenant } from '../../models';
 import { AppError, NotFoundError } from '../../lib/errors';
@@ -11,6 +12,8 @@ import {
   type ChatRequestBody,
 } from '../../services/chat';
 import { runChatTurn } from '../customer';
+import { grantToolApproval, rejectToolApproval } from '../../services/tool-approvals';
+import { runWithTenant } from '../../lib/tenant-context';
 import { signWidgetToken, verifyWidgetToken } from './widget-token';
 
 /**
@@ -25,6 +28,8 @@ import { signWidgetToken, verifyWidgetToken } from './widget-token';
  *   POST /:tenantCode/sessions     新建匿名会话 → 返回 session_id + token
  *   GET  /:tenantCode/session      凭 token 恢复会话 + 历史消息
  *   POST /:tenantCode/messages     ★ 流式发消息（SSE），凭 token 认领会话
+ *   POST /:tenantCode/tool-approvals       确认一次敏感工具调用（B3 HITL）
+ *   POST /:tenantCode/tool-approvals/reject 取消一次敏感工具调用
  *
  * 会话落库：sessions.channel = 'widget'，sessions.user_id = NULL
  *   —— 这两列本来就为挂件预留好了（见 src/models/Session.ts）。
@@ -90,21 +95,65 @@ async function resolveSession(ctx: Context, tenant: Tenant): Promise<Session> {
   return session;
 }
 
+/**
+ * 所有挂件端点的统一入口。
+ *
+ * 挂件没有登录态 —— 租户靠 URL 里的 tenantCode 定位。
+ * 定位到之后，把后续整条链路（含 SSE 流里的工具调用）放进**该租户**的上下文，
+ * 租户作用域钩子据此自动补 tenant_id 过滤（A1）。
+ *
+ * ⚠️ 为什么不在 router 上挂一个 use 中间件统一做：
+ *    @koa/router 的 use 中间件拿不到命名参数（ctx.params 在那一层是空的），
+ *    租户号解析不到，所以只能在 handler 里做。
+ */
+function widgetHandler(
+  handler: (ctx: Context, tenant: Tenant) => Promise<void>,
+): (ctx: Context) => Promise<void> {
+  return async (ctx: Context) => {
+    const tenant = await resolveTenant(ctx);
+    await runWithTenant(tenant.id, () => handler(ctx, tenant));
+  };
+}
+
+// ===== 敏感工具的人工确认（B3 HITL）=====
+//
+// 挂件是匿名会话，没有登录态 —— 但**会话本身是认领得到的**
+// （token → session id），所以「这条会话里的敏感工具」照样能确认 / 取消。
+// 之前这块是断的：挂件里 AI 说「请确认」，用户点不了任何按钮。
+
+const toolApprovalBodySchema = z.object({
+  /** 注册名（模型调用的就是这个名字） */
+  tool_name: z.string().trim().min(1).max(64),
+  /** 模型当时给的入参 —— 批准绑定到「工具名 + 这份入参」 */
+  args: z.unknown(),
+});
+
+publicWidgetRouter.post('/:tenantCode/tool-approvals', widgetHandler(async (ctx, tenant) => {
+  const session = await resolveSession(ctx, tenant);
+  const input = toolApprovalBodySchema.parse(ctx.request.body ?? {});
+  const granted = await grantToolApproval(session.id, tenant.id, input.tool_name, input.args);
+  ctx.body = { ok: true, tool_name: input.tool_name, approval_key: granted.key };
+}));
+
+publicWidgetRouter.post('/:tenantCode/tool-approvals/reject', widgetHandler(async (ctx, tenant) => {
+  const session = await resolveSession(ctx, tenant);
+  const input = toolApprovalBodySchema.parse(ctx.request.body ?? {});
+  const rejected = await rejectToolApproval(session.id, tenant.id, input.tool_name, input.args);
+  ctx.body = { ok: true, tool_name: input.tool_name, approval_key: rejected.key };
+}));
+
 // ===== 租户信息 =====
 
-publicWidgetRouter.get('/:tenantCode/info', async (ctx) => {
-  const tenant = await resolveTenant(ctx);
+publicWidgetRouter.get('/:tenantCode/info', widgetHandler(async (ctx, tenant) => {
   ctx.body = {
     tenant_code: tenant.code,
     tenant_name: tenant.name,
   };
-});
+}));
 
 // ===== 新建匿名会话 =====
 
-publicWidgetRouter.post('/:tenantCode/sessions', async (ctx) => {
-  const tenant = await resolveTenant(ctx);
-
+publicWidgetRouter.post('/:tenantCode/sessions', widgetHandler(async (ctx, tenant) => {
   const session = await Session.create({
     tenant_id: tenant.id,
     // 匿名：没有用户
@@ -125,12 +174,11 @@ publicWidgetRouter.post('/:tenantCode/sessions', async (ctx) => {
     tenant_name: tenant.name,
     started_at: session.started_at.toISOString(),
   };
-});
+}));
 
 // ===== 恢复会话（关掉浏览器再打开 → 历史还在）=====
 
-publicWidgetRouter.get('/:tenantCode/session', async (ctx) => {
-  const tenant = await resolveTenant(ctx);
+publicWidgetRouter.get('/:tenantCode/session', widgetHandler(async (ctx, tenant) => {
   const session = await resolveSession(ctx, tenant);
   const { messages } = await loadSessionUiMessages(session.id, 200);
   ctx.body = {
@@ -140,12 +188,11 @@ publicWidgetRouter.get('/:tenantCode/session', async (ctx) => {
     title: session.title,
     messages,
   };
-});
+}));
 
 // ===== ★ 流式发消息 =====
 
-publicWidgetRouter.post('/:tenantCode/messages', async (ctx) => {
-  const tenant = await resolveTenant(ctx);
+publicWidgetRouter.post('/:tenantCode/messages', widgetHandler(async (ctx, tenant) => {
   const session = await resolveSession(ctx, tenant);
 
   // 跑一轮对话（限流 / 预算 / 审核 / 落库 / 历史 / 提示词，全在开流之前）
@@ -167,4 +214,4 @@ publicWidgetRouter.post('/:tenantCode/messages', async (ctx) => {
     stream: turn.stream,
     ...(config.CHAT.KEEPALIVE_MS > 0 ? { keepAliveMs: config.CHAT.KEEPALIVE_MS } : {}),
   });
-});
+}));

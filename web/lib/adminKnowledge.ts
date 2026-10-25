@@ -6,7 +6,7 @@ import { adminApi } from './adminApi';
  */
 
 export type DocumentStatus = 'uploaded' | 'indexing' | 'ready' | 'failed';
-export type DocumentFileType = 'pdf' | 'word' | 'markdown' | 'txt';
+export type DocumentFileType = 'pdf' | 'markdown' | 'txt';
 
 export interface KnowledgeDocument {
   id: string;

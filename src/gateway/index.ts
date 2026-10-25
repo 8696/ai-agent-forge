@@ -22,6 +22,7 @@ export { jwtAuth } from './jwt-base';
 export {
   systemTenantRouter,
   systemAuthRouter,
+  systemAuditRouter,
   requireSystemUser,
 } from './system';
 export {
@@ -33,6 +34,8 @@ export {
   adminEvaluationRouter,
   adminMemoryRouter,
   adminAuditRouter,
+  adminToolRouter,
+  adminToolLogRouter,
   requireAdmin,
 } from './admin';
 export {

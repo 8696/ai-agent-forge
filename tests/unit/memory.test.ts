@@ -331,7 +331,6 @@ describe('buildPrompt · 记忆段的拼接位置', () => {
   it('记忆段拼在资料段之前（资料更权威、位置更靠后）', () => {
     const prompt = buildPrompt({
       tenantName: '测试公司',
-      settings: null,
       overrideContent: null,
       memoryText: '\n## 关于当前用户的信息（用户记忆）\n- [画像] 用户是售后主管\n',
       hits: [hit],
@@ -350,7 +349,6 @@ describe('buildPrompt · 记忆段的拼接位置', () => {
   it('没有记忆时 systemText 里不出现记忆段标题', () => {
     const prompt = buildPrompt({
       tenantName: '测试公司',
-      settings: null,
       overrideContent: null,
       hits: [hit],
       systemTokenBudget: 6000,

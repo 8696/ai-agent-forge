@@ -15,6 +15,7 @@ import {
   Typography,
   Upload,
   message,
+  theme,
 } from 'antd';
 import type { TableColumnsType } from 'antd';
 import {
@@ -49,6 +50,8 @@ const JSONL_EXAMPLE = `{"question": "年假可以跨年结转吗？", "reference
  * UI 详见 docs/04-c-ui-后台管理页面.md §5.6.1
  */
 export function EvaluationDatasetsPage(): ReactElement {
+  // 颜色走 antd token —— 写死浅色的话，深色模式下几乎看不见
+  const { token } = theme.useToken();
   const [rows, setRows] = useState<EvaluationDataset[] | null>(null);
   const [errMsg, setErrMsg] = useState<string | null>(null);
 
@@ -164,7 +167,7 @@ export function EvaluationDatasetsPage(): ReactElement {
       key: 'latest_score',
       width: 110,
       render: (v: number | null) =>
-        v === null ? <span style={{ color: 'rgba(0,0,0,0.45)' }}>未跑过</span> : `${v.toFixed(2)} / 5`,
+        v === null ? <span style={{ color: token.colorTextTertiary }}>未跑过</span> : `${v.toFixed(2)} / 5`,
     },
     {
       title: '创建时间',
@@ -230,7 +233,7 @@ export function EvaluationDatasetsPage(): ReactElement {
       />
 
       {errMsg !== null && (
-        <Alert type="error" showIcon message={errMsg} style={{ marginBottom: 16 }} />
+        <Alert type="error" showIcon title={errMsg} style={{ marginBottom: 16 }} />
       )}
 
       <Card styles={{ body: { padding: 16 } }}>
@@ -264,7 +267,7 @@ export function EvaluationDatasetsPage(): ReactElement {
           setCreatingOpen(false);
           createForm.resetFields();
         }}
-        destroyOnClose
+        destroyOnHidden
       >
         <Form form={createForm} layout="vertical" preserve={false}>
           <Space size={12} style={{ display: 'flex' }} align="start">
@@ -312,9 +315,9 @@ export function EvaluationDatasetsPage(): ReactElement {
       <Drawer
         open={detail !== null}
         title={detail === null ? '' : `评测集 · ${detail.dataset.name}`}
-        width={720}
+        size={720}
         onClose={() => setDetail(null)}
-        destroyOnClose
+        destroyOnHidden
       >
         {detail !== null && (
           <>

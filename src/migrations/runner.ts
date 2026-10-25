@@ -22,6 +22,12 @@ import * as m017 from './017-create-user-memories';
 import * as m018 from './018-add-tenant-model-usage-scope';
 import * as m019 from './019-add-tenant-model-summary-scope';
 import * as m020 from './020-add-api-key-scope';
+import * as m021 from './021-alter-documents-file-type';
+import * as m022 from './022-create-tools';
+import * as m023 from './023-messages-parts-column';
+import * as m024 from './024-create-tool-call-logs';
+import * as m025 from './025-add-tool-call-rejected';
+import * as m026 from './026-add-tool-updated-by';
 
 /**
  * umzug 迁移 runner（详见 docs/03-b-技术栈-后端栈.md §B.2）
@@ -141,6 +147,36 @@ export function buildMigrator(): Umzug<QueryInterface> {
         name: '020-add-api-key-scope',
         up: (params) => m020.up(params),
         down: (params) => m020.down(params),
+      },
+      {
+        name: '021-alter-documents-file-type',
+        up: (params) => m021.up(params),
+        down: (params) => m021.down(params),
+      },
+      {
+        name: '022-create-tools',
+        up: (params) => m022.up(params),
+        down: (params) => m022.down(params),
+      },
+      {
+        name: '023-messages-parts-column',
+        up: (params) => m023.up(params),
+        down: (params) => m023.down(params),
+      },
+      {
+        name: '024-create-tool-call-logs',
+        up: (params) => m024.up(params),
+        down: (params) => m024.down(params),
+      },
+      {
+        name: '025-add-tool-call-rejected',
+        up: (params) => m025.up(params),
+        down: (params) => m025.down(params),
+      },
+      {
+        name: '026-add-tool-updated-by',
+        up: (params) => m026.up(params),
+        down: (params) => m026.down(params),
       },
     ],
   });

@@ -10,6 +10,8 @@ export { AdminHomePage } from './AdminHomePage';
 export { AdminUsersPage } from './UsersPage';
 export { AdminAuditLogsPage } from './AuditLogsPage';
 export { AdminApiKeysPage } from './ApiKeysPage';
+export { ToolsPage } from './ToolsPage';
+export { ToolLogsPage } from './ToolLogsPage';
 export { AdminMemoriesPage } from './MemoriesPage';
 export { KnowledgeDocumentsPage } from './KnowledgeDocumentsPage';
 export { KnowledgeSearchPage } from './KnowledgeSearchPage';

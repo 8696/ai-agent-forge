@@ -3,9 +3,9 @@ import { useEffect, useState } from 'react';
 import { Alert, Button, Card, DatePicker, Empty, Select, Space, Table, Tag, Typography } from 'antd';
 import type { TableColumnsType } from 'antd';
 import { ReloadOutlined } from '@ant-design/icons';
-import ReactECharts from 'echarts-for-react';
 import dayjs, { type Dayjs } from 'dayjs';
 import { PageHeader } from '../../components/shell/PageHeader';
+import { Chart } from '../../components/Chart';
 import {
   fetchCostAnalysis,
   observabilityErrorMessage,
@@ -144,7 +144,7 @@ export function ObservabilityCostPage(): ReactElement {
       />
 
       {errMsg !== null && (
-        <Alert type="error" showIcon message={errMsg} style={{ marginBottom: 16 }} />
+        <Alert type="error" showIcon title={errMsg} style={{ marginBottom: 16 }} />
       )}
 
       <Card styles={{ body: { padding: 16 } }} style={{ marginBottom: 16 }}>
@@ -197,7 +197,7 @@ export function ObservabilityCostPage(): ReactElement {
             {data.series.length === 0 ? (
               <Empty description="这个时间范围内没有 LLM 调用" />
             ) : (
-              <ReactECharts option={chartOption} style={{ height: 320 }} notMerge />
+              <Chart option={chartOption} height={320} />
             )}
           </Card>
 

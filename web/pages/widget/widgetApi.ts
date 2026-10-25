@@ -134,3 +134,42 @@ export async function resumeWidgetSession(
     { headers: { 'x-widget-token': token } },
   );
 }
+
+/**
+ * 确认一次敏感工具调用（B3 HITL）。
+ *
+ * 挂件是匿名会话 —— 但会话本身是 token 认领来的，所以照样能确认。
+ * 之前这里是个死路：AI 说「请确认」，用户点不了任何按钮。
+ */
+export async function approveWidgetToolCall(
+  tenantCode: string,
+  token: string,
+  toolName: string,
+  args: unknown,
+): Promise<{ ok: boolean }> {
+  return request<{ ok: boolean }>(
+    `/api/v1/public/widget/${encodeURIComponent(tenantCode)}/tool-approvals`,
+    {
+      method: 'POST',
+      headers: { 'x-widget-token': token },
+      body: JSON.stringify({ tool_name: toolName, args }),
+    },
+  );
+}
+
+/** 取消一次敏感工具调用（用户反悔） */
+export async function rejectWidgetToolCall(
+  tenantCode: string,
+  token: string,
+  toolName: string,
+  args: unknown,
+): Promise<{ ok: boolean }> {
+  return request<{ ok: boolean }>(
+    `/api/v1/public/widget/${encodeURIComponent(tenantCode)}/tool-approvals/reject`,
+    {
+      method: 'POST',
+      headers: { 'x-widget-token': token },
+      body: JSON.stringify({ tool_name: toolName, args }),
+    },
+  );
+}

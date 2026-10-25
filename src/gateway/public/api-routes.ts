@@ -53,6 +53,11 @@ const askBodySchema = z.object({
    * 必须是这把 key 所属租户下的 channel='api' 会话，否则 404。
    */
   session_id: z.string().trim().min(1).max(64).optional(),
+  /**
+   * 是否开「思考模式」（docs/04-b §4.4）。
+   * 只能把思考**打开** —— 租户配了 `thinking_budget_tokens` 的话一直生效。
+   */
+  thinking: z.boolean().optional(),
 });
 
 /** 从 ctx.state 里取鉴权结果（apiKeyAuth 已经保证一定存在） */
@@ -111,10 +116,15 @@ async function resolveOrCreateSession(
 }
 
 /** 把「这轮问什么」转成服务层认的形状，并按租户侧的字数上限校验 */
-function parseQuestion(question: string, maxInputChars: number): {
+function parseQuestion(
+  question: string,
+  maxInputChars: number,
+  thinking = false,
+): {
   userText: string;
   isRegenerate: false;
   regenerateTargetId: null;
+  thinking: boolean;
 } {
   const trimmed = question.trim();
   if (trimmed === '') {
@@ -123,7 +133,12 @@ function parseQuestion(question: string, maxInputChars: number): {
   if (trimmed.length > maxInputChars) {
     throw new ValidationError(`question 超过 ${maxInputChars} 字`);
   }
-  return { userText: trimmed, isRegenerate: false, regenerateTargetId: null };
+  return {
+    userText: trimmed,
+    isRegenerate: false,
+    regenerateTargetId: null,
+    thinking: thinking === true,
+  };
 }
 
 /** 流里的 chunk（线上就是 JSON 对象，这里只取用得到的几个字段） */
@@ -152,6 +167,8 @@ interface CollectedAnswer {
   citations: unknown;
   /** 输出审核结果（data-moderation part） */
   moderation: unknown;
+  /** 工具调用记录（data-tool-call part，B3）—— 一次调用一条 */
+  toolCalls: unknown[];
   /** 流内错误文案 */
   errorText: string | null;
 }
@@ -169,6 +186,7 @@ async function collectStream(stream: ReadableStream<unknown>): Promise<Collected
   let citations: unknown = null;
   let moderation: unknown = null;
   let errorText: string | null = null;
+  const toolCalls: unknown[] = [];
 
   for (;;) {
     const { done, value } = await reader.read();
@@ -185,12 +203,15 @@ async function collectStream(stream: ReadableStream<unknown>): Promise<Collected
       citations = chunk.data ?? null;
     } else if (chunk.type === 'data-moderation') {
       moderation = chunk.data ?? null;
+    } else if (chunk.type === 'data-tool-call') {
+      // 工具调用记录（B3）：一次调用一条
+      toolCalls.push(chunk.data ?? null);
     } else if (chunk.type === 'error' && typeof chunk.errorText === 'string') {
       errorText = chunk.errorText;
     }
   }
 
-  return { text, citations, moderation, errorText };
+  return { text, citations, moderation, toolCalls, errorText };
 }
 
 // ===== ★ 只读：知识库检索 =====
@@ -257,7 +278,7 @@ publicApiRouter.post('/chat', requireApiScope('write'), async (ctx) => {
     ctx,
     session,
     tenant,
-    parseBody: (maxInputChars) => parseQuestion(input.question, maxInputChars),
+    parseBody: (maxInputChars) => parseQuestion(input.question, maxInputChars, input.thinking),
     rateLimitScope: `apikey:${principal.keyId}`,
     traceName: 'api.chat',
     traceKind: 'api',
@@ -279,6 +300,8 @@ publicApiRouter.post('/chat', requireApiScope('write'), async (ctx) => {
     answer: collected.text,
     citations: collected.citations,
     moderation: collected.moderation,
+    // 工具调用记录（B3）：外部系统能知道 AI 调了哪些工具、结果是什么
+    tool_calls: collected.toolCalls,
   };
 });
 
@@ -294,7 +317,7 @@ publicApiRouter.post('/chat/stream', requireApiScope('write'), async (ctx) => {
     ctx,
     session,
     tenant,
-    parseBody: (maxInputChars) => parseQuestion(input.question, maxInputChars),
+    parseBody: (maxInputChars) => parseQuestion(input.question, maxInputChars, input.thinking),
     rateLimitScope: `apikey:${principal.keyId}`,
     traceName: 'api.chat.stream',
     traceKind: 'api',

@@ -3,11 +3,11 @@ import { useEffect, useState } from 'react';
 import { Alert, Button, Card, Col, Empty, Row, Table, Tag, Typography, theme } from 'antd';
 import type { TableColumnsType } from 'antd';
 import { ReloadOutlined, RightOutlined, ShopOutlined } from '@ant-design/icons';
-import ReactECharts from 'echarts-for-react';
 import { Link } from 'react-router-dom';
 import { getCurrentUser } from '../../lib/auth';
 import { fetchSystemStats, type SystemStats } from '../../lib/systemApi';
 import { PageHeader } from '../../components/shell/PageHeader';
+import { Chart } from '../../components/Chart';
 
 const { Text } = Typography;
 
@@ -169,7 +169,7 @@ export function SystemHomePage(): ReactElement {
         ) : stats.trend.length === 0 ? (
           <Empty description="最近 7 天还没有 LLM 调用记录" />
         ) : (
-          <ReactECharts option={trendOption} style={{ height: 280 }} notMerge />
+          <Chart option={trendOption} height={280} />
         )}
       </Card>
 

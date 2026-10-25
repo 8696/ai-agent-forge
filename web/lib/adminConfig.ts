@@ -1,4 +1,5 @@
 import { adminApi } from './adminApi';
+import { apiErrorMessage } from './apiError';
 
 /**
  * admin 租户级配置客户端 —— 对应 src/gateway/admin/config-routes.ts
@@ -166,20 +167,35 @@ export interface SettingItem {
   updated_at: string | null;
 }
 
+/** 本租户的基本信息（只读展示，见 docs/04-c §5.9.1） */
+export interface TenantBasicInfo {
+  id: string;
+  code: string;
+  name: string;
+  plan: string;
+}
+
 export async function fetchSettings(): Promise<{
   settings: SettingItem[];
-  /** 本租户的基本信息（只读展示，见 docs/04-c §5.9.1） */
-  tenant: { id: string; code: string; name: string; plan: string };
+  /**
+   * 本租户的基本信息（只读展示，见 docs/04-c §5.9.1）
+   *
+   * ⚠️ 标成可空：老后端（没起 `tenant` 字段的那版）不返回这个键，
+   * 拿到的是 `undefined` 而不是 `null` —— 页面要用 `== null` 兜底，
+   * 不能只判 `!== null`（那样 undefined 会漏过去，渲染时炸 `.name`）。
+   */
+  tenant: TenantBasicInfo | null;
   groups: string[];
   notes: string[];
 }> {
   const { data } = await adminApi.get<{
     settings: SettingItem[];
-    tenant: { id: string; code: string; name: string; plan: string };
+    tenant?: TenantBasicInfo | null;
     groups: string[];
     notes: string[];
   }>('/config/settings');
-  return data;
+  // 字段缺失统一归一成 null，别让 undefined 混进「有没有」的判断里
+  return { ...data, tenant: data.tenant ?? null };
 }
 
 /** 批量保存 `{ key: 值 }`；值为 null 表示清除覆盖、回落平台默认 */
@@ -302,17 +318,5 @@ export async function deletePromptVersion(version: string): Promise<void> {
  * 与 adminKnowledge.ts 的同名函数同构（后端错误体 { code, message, details }）。
  */
 export function configErrorMessage(err: unknown, fallback: string): string {
-  const e = err as {
-    response?: { status?: number; data?: { message?: string } };
-    message?: string;
-  };
-  const status = e.response?.status;
-  const serverMessage = e.response?.data?.message;
-  if (status !== undefined && serverMessage !== undefined) {
-    return serverMessage;
-  }
-  if (status !== undefined) {
-    return `${fallback}（HTTP ${status}）`;
-  }
-  return e.message ?? fallback;
+  return apiErrorMessage(err, fallback);
 }

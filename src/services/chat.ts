@@ -4,6 +4,7 @@ import {
   createUIMessageStream,
   isReasoningUIPart,
   isTextUIPart,
+  stepCountIs,
   streamText,
   toUIMessageStream,
   type DataUIPart,
@@ -14,7 +15,7 @@ import {
 } from 'ai';
 import type { ChatDataTypes, ChatUIMessage } from '@shared/types/chat';
 import { Session, Message } from '../models';
-import type { MessageStatus, MessageToolResults, MessageUsage } from '../models';
+import type { MessageStatus, MessageParts, MessageUsage } from '../models';
 import type { DataPartShape } from '../models/Message';
 import { NotFoundError, ValidationError } from '../lib/errors';
 import { getBreaker, CircuitOpenError } from '../lib/circuit-breaker';
@@ -50,6 +51,42 @@ import { checkBudgetAndAlert, recordLlmUsage } from './cost-tracking';
 import { getSettingValue } from './tenant-settings';
 import { extractAndApplyMemories } from './memory';
 import type { SpanHandle, TraceHandle } from './trace';
+import { renderToolsBlock, type ToolApprovalHint } from '@shared/prompts/chat/tools';
+import { approvalKey, buildToolSet, type ToolRuntime } from '../tools/execute';
+import { markToolExecuted } from './tool-approvals';
+import { writeToolCallLog } from './tool-call-logs';
+import type { ResolvedTool } from '../tools/resolve';
+
+/**
+ * 工具循环的最大步数（B3 工具调用）。
+ *
+ * 模型可能反复调同一个工具（拿不到想要的数据就一直试），
+ * 没有上限就是一次对话烧掉几十次 LLM 调用 —— 上限 5 步，
+ * 超了 SDK 自己停，工具调用次数也就封顶了。
+ */
+const TOOL_MAX_STEPS = 5;
+
+/**
+ * 用户临时打开「思考模式」时用的兜底推理预算（token）。
+ *
+ * 租户没配 `thinking_budget_tokens`（默认 0 = 关）时，用户在输入区点了
+ * 「思考模式」就用这个预算开一轮。刻意取小值 —— 这是**用户临时的**要求，
+ * 不是租户级的长期设置，别让一次勾选烧掉一大笔 token。
+ */
+const THINKING_FALLBACK_BUDGET_TOKENS = 1024;
+
+/**
+ * 算这一轮实际用的思考预算（0 = 不开）。
+ *
+ * ⚠️ **只能「开」不能「关」** —— 用户勾选不能把租户配的思考模式关掉
+ *    （那是租户的成本决策）；反过来租户配了 0，用户本轮勾一下是允许的。
+ */
+export function resolveThinkingBudget(tenantBudget: number, userRequested: boolean): number {
+  if (tenantBudget > 0) {
+    return tenantBudget;
+  }
+  return userRequested ? THINKING_FALLBACK_BUDGET_TOKENS : 0;
+}
 
 /**
  * 对话服务层 —— B1 多轮对话 + LLM 流式（docs/12-b-需求-ai对话能力.md §B1）
@@ -189,7 +226,7 @@ export async function deleteSession(id: string, actor: SessionActor): Promise<vo
 // 消息持久化
 // ============================================================
 
-/** 首条用户消息截断成会话标题（04-b §4.7 规格：前 20 字） */
+/** 首条用户消息截断成会话标题（04-b §4.5 规格：前 20 字） */
 export const SESSION_TITLE_MAX = 20;
 
 function titleFromFirstUserMessage(text: string): string {
@@ -242,7 +279,7 @@ export async function insertAssistantPlaceholder(
     existing.content = '';
     existing.thinking_content = null;
     existing.usage = null;
-    existing.tool_results = null;
+    existing.parts = null;
     existing.status = 'streaming';
     await existing.save();
     return existing.id;
@@ -277,7 +314,7 @@ export async function finalizeAssistantMessage(id: string, patch: FinalizePatch)
     {
       content: patch.content,
       thinking_content: patch.thinking,
-      tool_results: patch.dataParts.length > 0 ? { data_parts: patch.dataParts } : null,
+      parts: patch.dataParts.length > 0 ? { data_parts: patch.dataParts } : null,
       usage: patch.usage,
       status: patch.status,
     },
@@ -334,19 +371,23 @@ function historyToCountable(rows: readonly Message[]): TokenCountableMessage[] {
 }
 
 // ============================================================
-// data part 存取（见 MessageToolResults 注释里的语义重载约定）
+// data part 存取（2026-10-25 起落在 messages.parts 列）
+//
+// ⚠️ 以前 data part 借用 `tool_results`（DDL 原意是「工具调用的输出」），
+//    两种语义混在一列里。迁移 023 把它们分开了：
+//    `parts` = data part 数组；`tool_results` = 真正的工具输出。
 // ============================================================
 
-export function writeDataParts(parts: readonly DataPartShape[]): MessageToolResults | null {
+export function writeDataParts(parts: readonly DataPartShape[]): MessageParts | null {
   return parts.length > 0 ? { data_parts: [...parts] } : null;
 }
 
 export function readDataParts(row: Message): DataPartShape[] {
-  const raw = row.tool_results;
+  const raw = row.parts;
   if (raw === null || typeof raw !== 'object') {
     return [];
   }
-  const parts = (raw as MessageToolResults).data_parts;
+  const parts = (raw as MessageParts).data_parts;
   return Array.isArray(parts) ? parts : [];
 }
 
@@ -433,7 +474,6 @@ export interface ContextWindow {
 
 export interface BuildContextInput {
   tenantName: string;
-  tenantSettings: Record<string, unknown> | null;
   /** 租户自定义提示词正文（docs/12-c §C3）；null = 用内置默认 */
   promptContent?: string | null;
   /** 租户覆盖的检索召回条数；null/undefined = 用进程级默认 */
@@ -469,6 +509,11 @@ export interface BuildContextInput {
    * 空串 = 这个用户没有记忆。
    */
   memoryText?: string | null;
+  /**
+   * 可用工具段（B3 工具调用）—— 由服务层用租户启用的工具渲染好传进来。
+   * 空串 = 这个租户没有启用任何工具。
+   */
+  toolsText?: string | null;
 }
 
 /**
@@ -541,10 +586,10 @@ export function buildContextWindow(input: BuildContextInput): ContextWindow {
   // 4) 提示词：租户自定义正文优先，编号由 renderRagContext 分配（和 data-citations 同源）
   const prompt = buildPrompt({
     tenantName: input.tenantName,
-    settings: input.tenantSettings,
     overrideContent: input.promptContent ?? null,
     summaryText: summaryBlock,
     memoryText,
+    toolsText: input.toolsText ?? '',
     hits: keptHits,
     // 没命中时给模型一句明话，避免它凭印象编；
     // 检索整体故障时用另一句措辞，用户能从 UI 上看出是系统问题
@@ -597,6 +642,13 @@ export interface ParsedRequest {
   isRegenerate: boolean;
   /** 重新生成时被覆盖的那条 assistant 的 id */
   regenerateTargetId: string | null;
+  /**
+   * 用户本轮是否要求「思考模式」（docs/04-b §4.4 的那个开关）。
+   *
+   * ⚠️ **它只能把思考「打开」，不能把租户配的关掉** ——
+   *    租户级的 `thinking_budget_tokens` 是成本决策，租户配了 > 0 就一直生效。
+   */
+  thinking: boolean;
 }
 
 /**
@@ -636,6 +688,8 @@ export function parseChatRequest(body: ChatRequestBody, maxInputChars?: number):
     userText,
     isRegenerate,
     regenerateTargetId: isRegenerate ? last.id : null,
+    // 思考模式开关（docs/04-b §4.4）：只有严格的 true 才算开
+    thinking: body.thinking === true,
   };
 }
 
@@ -650,7 +704,6 @@ export function textOfUiMessage(message: ChatUIMessage): string {
 export interface StreamContext {
   session: Session;
   tenantName: string;
-  tenantSettings: Record<string, unknown> | null;
   assistantRowId: string;
   userText: string;
   /**
@@ -660,6 +713,13 @@ export interface StreamContext {
   historyRows: Message[];
   /** 租户级 LLM 配置（docs/12-c §C4）：模型 / 温度 / 输出上限 / 缓存开关 */
   llm: ResolvedLlmSettings;
+  /**
+   * 用户本轮要求「思考模式」（docs/04-b §4.4 的那个开关）。
+   *
+   * ⚠️ 只能把思考**打开** —— 租户配了 `thinking_budget_tokens > 0` 就一直生效，
+   *    这里关不掉（那是租户的成本决策）。
+   */
+  thinkingEnabled?: boolean;
   /** 租户生效的提示词正文（docs/12-c §C3）；null = 用内置默认 */
   promptContent: string | null;
   /** 客户端 IP（写审计日志用） */
@@ -680,6 +740,33 @@ export interface StreamContext {
   /** 租户覆盖的摘要段 token 上限；null/undefined = 用进程级默认 */
   summaryTokenBudget?: number | null;
   /**
+   * 本轮可用的工具（B3 工具调用）—— **由路由层在开流之前查好传进来**。
+   * 跟 historyRows 同一个理由：查库失败要在还能返 500 的时候失败。
+   * 空数组 = 这个租户没有启用任何工具（tool 列表为空，模型看不到工具）。
+   */
+  tools?: ResolvedTool[];
+  /**
+   * 用户已批准的敏感工具（B3 HITL）。
+   * 键的格式见 `approvalKey()` —— 工具名 + 入参指纹。
+   * 空集 = 没有批准过任何敏感操作。
+   */
+  toolApprovals?: ReadonlySet<string>;
+  /** 用户明确取消过的敏感工具（点了「取消」）—— 闸门直接回「用户拒绝」 */
+  toolRejections?: ReadonlySet<string>;
+  /**
+   * 工具名 → 用户已确认的那份入参。
+   * 模型改了参数时，闸门把它回传给它（「用这组参数再调一次」），
+   * 用户不用为了参数对不上再点一次确认。
+   */
+  toolApprovedArgs?: ReadonlyMap<string, unknown>;
+  /**
+   * 已批准但**还没真正执行**的敏感调用（B3 HITL）。
+   *
+   * 提示词里要主动提醒模型「请用同样的参数再调一次」——
+   * 光靠用户回一句「确认」，模型可能只回「好的」就完了，工具永远没跑。
+   */
+  pendingToolApprovals?: ToolApprovalHint[];
+  /**
    * 观测句柄（D2）。路由层创建、这里消费：
    * 检索 / 调模型 / 记账三段各自记成 span，流结束时把 trace 收掉。
    * 不传 = 不采集（单测直接调 createChatStream 时就是这种情况）。
@@ -693,13 +780,14 @@ export interface StreamContext {
  * 调用方负责把它 pipe 到响应上；execute 里的一切失败都通过 onError 变成流内 error part。
  */
 export function createChatStream(ctxData: StreamContext) {
-  const { session, tenantName, tenantSettings, assistantRowId, userText, historyRows, llm } =
-    ctxData;
+  const { session, tenantName, assistantRowId, userText, historyRows, llm } = ctxData;
 
   // execute 外部作用域：streamText 的 usage 要在 onEnd 里取。
   // 用对象包一层而不是裸 let —— 赋值发生在回调里，TS 的控制流分析会把裸变量
   // 在 onEnd 处误判成初始值（null），直接 optional chain 会报 never。
-  const generation: { usage: PromiseLike<LanguageModelUsage> | null } = { usage: null };
+  const generation: { totalUsage: PromiseLike<LanguageModelUsage> | null } = {
+    totalUsage: null,
+  };
 
   // 输出审核结果：execute 里判出来，onEnd 里用来决定「落什么进 messages」。
   // 同样用对象包一层，理由同上。
@@ -836,10 +924,60 @@ export function createChatStream(ctxData: StreamContext) {
         );
       }
 
+      // ---- 工具（B3 工具调用）----
+      //
+      // 工具清单是**路由层查好的**（跟 historyRows 同一个理由：查库失败要在
+      // 还能返 500 的时候失败，塞进 execute 就只能变成流内 error 了）。
+      //
+      // 这里做两件事：
+      //  1) 渲染「可用工具」段 → 注入系统提示词，让模型知道有哪些工具、什么时候用
+      //  2) 组装 AI SDK 的 tool 集合（超时 / 降级 / span / 落库 part 都在包装层里）
+      const resolvedTools = ctxData.tools ?? [];
+      const toolsText = renderToolsBlock(
+        resolvedTools.map((t) => ({ name: t.name, description: t.description })),
+        // 用户点过「确认执行」但模型还没再调一次 → 提示词里主动提醒它再调一次
+        ctxData.pendingToolApprovals ?? [],
+      );
+      const toolRuntime: ToolRuntime = {
+        tenantId: session.tenant_id,
+        sessionId: session.id,
+        userId: session.user_id ?? null,
+        // 用户已批准的敏感工具（会话级）
+        approvals: ctxData.toolApprovals ?? new Set<string>(),
+        // 用户取消过的
+        rejections: ctxData.toolRejections ?? new Set<string>(),
+        // 工具名 → 用户已确认的那份入参
+        approvedArgs: ctxData.toolApprovedArgs ?? new Map<string, unknown>(),
+        // 每次工具调用记一条 span（docs/12-b §B3 验收：写一条 span）
+        span: (name, kind, input) => ctxData.trace?.span(name, kind, input),
+        // 敏感工具真的跑完了 → 这条批准用掉了，别再提醒模型
+        onExecuted: (toolName, args) => {
+          void markToolExecuted(session.id, session.tenant_id, approvalKey(toolName, args));
+        },
+        // 工具调用结束 → ① 落一条 data-tool-call part（刷新页面后卡片还在）
+        //                 ② 写一条工具调用流水（后台「工具调用记录」页读它）
+        onCall: async (record) => {
+          writer.write({
+            type: 'data-tool-call',
+            // id 必须带 tool_call_id：同一个工具被调多次时，固定 id 会互相覆盖而不是追加
+            id: `tool-${record.tool_call_id}`,
+            data: { ...record },
+          });
+          await writeToolCallLog({
+            tenantId: session.tenant_id,
+            sessionId: session.id,
+            userId: session.user_id ?? null,
+            messageId: assistantRowId,
+            traceId: ctxData.trace?.id ?? null,
+            record,
+          });
+        },
+      };
+      const toolSet = buildToolSet(resolvedTools, toolRuntime);
+
       // ---- 组装上下文 ----
       const window = buildContextWindow({
         tenantName,
-        tenantSettings,
         promptContent: ctxData.promptContent,
         retrievalTopK: llm.retrievalTopK,
         maxHistoryTurns: llm.maxHistoryTurns,
@@ -851,6 +989,7 @@ export function createChatStream(ctxData: StreamContext) {
         retrievalError,
         summaryState: ctxData.summaryState ?? null,
         memoryText: ctxData.memoryText ?? '',
+        toolsText,
       });
 
       // 引用片段**必须带 id**：AI SDK 客户端对 data part 的去重只在 `chunk.id != null`
@@ -880,7 +1019,9 @@ export function createChatStream(ctxData: StreamContext) {
       if (window.droppedTurns > 0) {
         writer.write({
           type: 'data-truncated',
-          transient: true,
+          // ⚠️ **不能标 transient** —— transient 的 part 不进 `message.parts`，
+          //    也就不会落进 `messages.parts`：刷新页面后这条提示就没了，
+          //    用户看到的历史跟当时屏幕上显示的不一致（2026-10-25 修）。
           data: {
             dropped_turns: window.droppedTurns,
             // 开了摘要压缩就说清楚「不是丢掉，是压成摘要」——
@@ -928,6 +1069,12 @@ export function createChatStream(ctxData: StreamContext) {
         data: { phase: 'generating', message: '正在组织回答…' },
       });
 
+      // 思考模式的预算（docs/04-b §4.4）：
+      //   - 租户配了 `thinking_budget_tokens > 0` → 一直生效（租户的成本决策）
+      //   - 租户没配（0）但用户本轮点了「思考模式」→ 用兜底预算开一轮
+      //   - 都没开 → 0（不传 thinking 参数）
+      const thinkingBudget = resolveThinkingBudget(llm.thinkingBudgetTokens, ctxData.thinkingEnabled === true);
+
       // 凭据 / 模型 / 温度全部来自租户配置（docs/12-c §C4），没配的项回落 .env。
       // getLlm() 的兜底校验已经在路由层做过（缺凭据会在开流前报出来）
       const anthropic = createAnthropic({ apiKey: llm.apiKey, baseURL: llm.baseUrl });
@@ -964,22 +1111,36 @@ export function createChatStream(ctxData: StreamContext) {
         messages: window.history,
         temperature: llm.temperature,
         maxOutputTokens: llm.maxOutputTokens,
-        // 思考模式：默认关闭（budget=0）。各 provider 对 thinking 参数的支持程度不同，
+        // ---- 工具（B3 工具调用）----
+        //
+        // AI SDK 的**自动工具循环**：模型说要工具 → SDK 调 execute →
+        // 结果回灌进 messages → 继续生成。**不手写 while 循环**
+        //（v5+ 用 stopWhen，旧的 maxSteps 已移除）。
+        //
+        // 步数上限防死循环：模型拿不到想要的数据时可能反复调同一个工具，
+        // 没有上限就是一次对话烧掉几十次 LLM 调用。
+        ...(Object.keys(toolSet).length > 0
+          ? { tools: toolSet, stopWhen: stepCountIs(TOOL_MAX_STEPS) }
+          : {}),
+        // 思考模式：各 provider 对 thinking 参数的支持程度不同，
         // 打开前先在目标 provider 上验一轮（docs/06 §6.4）
-        ...(llm.thinkingBudgetTokens > 0
+        ...(thinkingBudget > 0
           ? {
               providerOptions: {
                 anthropic: {
                   thinking: {
                     type: 'enabled' as const,
-                    budgetTokens: llm.thinkingBudgetTokens,
+                    budgetTokens: thinkingBudget,
                   },
                 },
               },
             }
           : {}),
       });
-      generation.usage = result.usage;
+      // ⚠️ **用 totalUsage 不用 usage**：
+      //    `usage` 是**最后一步**的用量，`totalUsage` 才是**整个工具循环**的累计。
+      //    工具循环会让一轮产生多次 LLM 调用，取错就等于少记账（成本分析会偏低）。
+      generation.totalUsage = result.totalUsage;
       // LLM span 到 onEnd 里再关（流式生成真正结束才知道耗时和 token）
       llmSpanHolder.span = ctxData.trace?.span('llm.generate', 'llm', {
         provider: llm.provider,
@@ -989,7 +1150,16 @@ export function createChatStream(ctxData: StreamContext) {
         retrieved: window.hits.length,
       });
 
-      writer.merge(toUIMessageStream({ stream: result.stream, sendReasoning: true }));
+      writer.merge(
+        toUIMessageStream({
+          stream: result.stream,
+          sendReasoning: true,
+          // 必须传 tools —— 不传的话 SDK 不会把工具调用转成 UI part。
+          // ⚠️ 前端**只渲染我们自己的 data-tool-call part**，原生 tool-* part 不渲染
+          //（原生 part 不落库，刷新后会消失；data-tool-call 落库）。
+          ...(Object.keys(toolSet).length > 0 ? { tools: toolSet } : {}),
+        }),
+      );
 
       // ---- 输出审核（D4）----
       //
@@ -1023,7 +1193,7 @@ export function createChatStream(ctxData: StreamContext) {
       const thinking = parts.filter(isReasoningUIPart).map((p) => p.text).join('');
 
       let usage: MessageUsage | null = null;
-      const pending: PromiseLike<LanguageModelUsage> | null = generation.usage;
+      const pending: PromiseLike<LanguageModelUsage> | null = generation.totalUsage;
       if (pending !== null) {
         try {
           const u = await pending;

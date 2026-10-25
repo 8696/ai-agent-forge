@@ -206,7 +206,7 @@ export function PromptEditorPage(): ReactElement {
       />
 
       {error !== null && (
-        <Alert type="error" showIcon message={error} style={{ marginBottom: 16 }} />
+        <Alert type="error" showIcon title={error} style={{ marginBottom: 16 }} />
       )}
 
       <Row gutter={16}>
@@ -253,7 +253,7 @@ export function PromptEditorPage(): ReactElement {
               <Alert
                 style={{ marginTop: 12 }}
                 type="info"
-                message="当前用的是内置默认提示词"
+                title="当前用的是内置默认提示词"
                 description="新建一个版本并发布，即可完全自定义本租户的回答风格与规则。"
               />
             )}
@@ -286,7 +286,7 @@ export function PromptEditorPage(): ReactElement {
                 type="info"
                 showIcon
                 style={{ marginBottom: 12 }}
-                message="这是内置默认提示词"
+                title="这是内置默认提示词"
                 description="点「新建版本」复制一份，就能在后台编辑自己的版本了。"
               />
             )}
@@ -315,7 +315,7 @@ export function PromptEditorPage(): ReactElement {
                 <Alert
                   type="warning"
                   showIcon
-                  message="这是当前生效的版本"
+                  title="这是当前生效的版本"
                   description="生产中的版本不能直接改（避免线上行为无预告地漂移）。想调整请「以此新建草稿」，改完再发布。"
                 />
               )}
@@ -324,7 +324,7 @@ export function PromptEditorPage(): ReactElement {
                 <Alert
                   type="info"
                   showIcon
-                  message="这是历史版本"
+                  title="这是历史版本"
                   description="可以直接点「发布」把它切回生产，或先复制成新草稿再改。"
                 />
               )}

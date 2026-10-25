@@ -49,6 +49,22 @@
 > - **租户详情的统计块**（用户数 / 会话数 / 文档数 / 累计花费）—— 全部按 tenant_id 过滤
 > - 集成测试 `tests/integration/system-tenant-filters.test.ts`（9 个用例）
 
+> ✅ **2026-10-26 补上 `/system/audit`（平台方的审计日志）** ——
+> 上面那句「所有 audit_logs 留痕（`/system/audit` 也能查）」以前**没有对应的页面和端点**：
+>
+>   - **后端**：`GET /api/v1/system/audit` + `/audit/actions`（`src/gateway/system/audit-routes.ts`）
+>     —— **跨租户 + 含系统级日志**（`tenant_id` 为空那类：平台方改租户启停 / 到期时间）
+>   - **前端**：`/system/audit` 页面（跨租户表格 + 租户 / 操作类型 / 时间筛选 + 展开看 details）
+>   - **跟租户后台的 `/admin/audit` 是两个视角**：租户 admin 只看得到本租户的
+>     （后端强制 `tenant_id = 'x'`，SQL 里 `NULL = 'x'` 恒为 false，系统级日志天然看不到）；
+>     平台方这边什么都看得到
+>   - 集成测试 `tests/integration/system-audit.test.ts`（5 个用例，含「租户 admin 打过来 401」）
+>
+> ⚠️ **租户列表的「删除」按钮不做**（2026-10-26 确认）——
+> 上面的 ASCII 草图里有「删除」，但 **12-e 的 F1 / F2 两条需求都没要求删租户**，
+> 后端也没有 `DELETE /tenants/:id`。删租户牵涉一堆级联（会话 / 消息 / 文档 / 向量库 /
+> 审计日志），不是加个按钮的事 —— 要做的话单独派活（走「软删 + 保留审计」的流程）。
+
 ### 6.2 总览 `/system/dashboard` ✅ 已落地 2026-10-24
 
 > 实际路由是 `/system`（首页就是总览），不是 `/system/dashboard`。
@@ -87,17 +103,25 @@
 > - `<RequireAuth>` —— 把三套 Layout 里各抄一遍的守卫逻辑收成一个组件
 >   （没登录跳本子系统登录页 / 角色不对回 `/` / 被要求改密跳改密页）
 > - `<Markdown>` —— 代码块 highlight.js 高亮 + 复制按钮、引用块蓝色边 + 浅灰底、
->   链接新窗口打开（04-b §4.9）。**highlight.js 的配色跟着深色模式切**
+>   链接新窗口打开（04-b §4.7）。**highlight.js 的配色跟着深色模式切**
 >   （用 Vite 的 `?inline` 拿 CSS 文本，按模式注入一份）。
 >   单测 `tests/unit/markdown-component.test.tsx`（8 个用例）
 >
 > ⚠️ `<ChatMessage>` 仍然**没有单独抽出来** —— 两个聊天页（customer / widget）的
 > AI 气泡差异不小（customer 有 👍👎 反馈、widget 是匿名没有反馈），
 > 强行合并的风险比收益大。两边的**用户气泡**已经统一了（时间戳 + 品牌色 token）。
-| `<Chart>`               | ECharts 照本封装                   | `web/components/Chart.tsx`         |
-| `<TraceTimeline>`       | Trace 时间线                       | `web/components/TraceTimeline.tsx` |
+| `<Chart>`               | ECharts 照本封装                   | `web/components/Chart.tsx` ✅ 2026-10-26 抽出来了 |
+| `<TraceTimeline>`       | Trace 时间线                       | `web/components/TraceTimeline.tsx` ✅ 2026-10-26 抽出来了 |
 | `<ActiveModelsFooter>`  | 页脚展示当前激活 LLM / Embedding   | `web/components/ActiveModelsFooter.tsx` |
 | `<Empty>` / `<Loading>` | 空状态 / 加载                      | AntD 自带                          |
+
+> ✅ **2026-10-26 补齐了 `<Chart>` 和 `<TraceTimeline>`**：
+>   - `<Chart>`：以前 4 个页面各自 `import ReactECharts` 直接用，高度 / `notMerge` 各写各的。
+>     现在统一走封装（高度必填参数，`notMerge` 恒开 —— 数据点数量变化时不 merge，
+>     否则旧折线会残留）。⚠️ option 用宽松的 `EChartsCoreOption` 类型
+>     （各页面的 option 是对象字面量直接推出来的，严格类型会全部报类型错）
+>   - `<TraceTimeline>`：以前那段 span 时间线的逻辑内联在 `ObservabilityTraceDetailPage` 里，
+>     现在独立成组件（展开状态也收进组件内部，页面不用再管）
 
 ### 7.1 路由守卫
 
@@ -209,7 +233,6 @@
 - **业务面新功能**：在对应模块的 children 加菜单项
 - **新业务模块**：在 Sider 顶层加一级菜单
 - **未来可预见的**（菜单先占位 + 灰显）：
-  - 「语音 / 视频通话」
   - 「AI 工作流编排」
   - 「团队协作 / 多人会话」
   - 「API 开发者门户」
@@ -220,11 +243,9 @@
 
 | 现在的           | 未来加                                   |
 | ---------------- | ---------------------------------------- |
-| 文字 + 图片理解  | 语音输入 / 输出、视频理解、文件理解      |
+| 文字             | 视频理解、文件理解                      |
 | 思考模式         | 多模态思考（带图片推理）                 |
 | 联网（占位）     | 真实联网检索                             |
-| 图像生成（占位） | DALL-E / Stable Diffusion / 智谱 CogView |
-| 文件上传到知识库 | 文件直接发给 AI（不索引）                |
 | 历史会话列表     | 会话标签 / 收藏夹 / 共享会话             |
 
 ### 10.3 后台功能的扩展点
@@ -267,7 +288,15 @@
 - [ ] 首屏 < 2 秒
 - [ ] 路由切换 < 500ms
 - [x] 错误边界兜底（白屏防护）—— ✅ 2026-10-25（`<ErrorBoundary>`）
-- [ ] SSE 断流重连
+- [~] SSE 断流重连 —— ⚠️ **2026-10-26 做了一半，明确说清楚差在哪**
+  - ✅ **客户端能恢复**：断流后错误提示条上多一个「**重试**」按钮（把刚才那条问题重发一遍），
+    消息气泡上本来就有「重新生成」
+  - ❌ **服务端续传（自动 reconnect）没做**：AI SDK 的 `useChat({ resume: true })` 需要后端
+    提供「按消息 id 重放流」的端点（`prepareReconnectToStreamRequest`），本项目没有 ——
+    SSE 是**边生成边吐**的，持久化的 `messages.parts` 是**最终状态**而不是可重放的事件日志。
+    要做续传，得先把流拆成可重放的事件序列存起来，是另一个量级的改动
+  - ⚠️ **不做自动重试**：流断的时候上游可能已经算过 token 了，自动重发等于悄悄多花一次钱。
+    让人点一下更保险
 - [x] JWT 过期自动跳登录 —— ✅ 2026-10-25（401 拦截器跳本子系统的登录页）
 
 ### 11.4 国际化 / 扩展
@@ -283,29 +312,47 @@
 | 路由                              | 页面         | 角色              |
 | --------------------------------- | ------------ | ----------------- |
 | `/system/login`                   | 系统级登录   | SaaS 平台方       |
-| `/system/dashboard`               | 系统总览     | SaaS 平台方       |
+| `/system`                         | 系统总览     | SaaS 平台方       |
 | `/system/tenants`                 | 租户列表     | SaaS 平台方       |
+| `/system/tenants/:id`             | 租户详情     | SaaS 平台方       |
+| `/system/audit`                   | 审计日志     | SaaS 平台方       |
+| `/system/change-password`         | 改密码       | SaaS 平台方       |
 | `/admin/login`                    | 租户后台登录 | 后台用户          |
-| `/admin/dashboard`                | 看板         | 后台用户          |
+| `/admin`                          | 首页看板     | 后台用户          |
 | `/admin/knowledge/documents`      | 文档管理     | 后台用户（admin） |
 | `/admin/knowledge/test`           | 检索测试 ★   | 后台用户          |
-| `/admin/model`                    | 模型选择     | 后台用户（admin） |
-| `/admin/model/prompt`             | 提示词配置   | 后台用户（admin） |
+| `/admin/models`                   | 模型选择     | 后台用户（admin） |
+| `/admin/prompts`                  | 提示词配置   | 后台用户（admin） |
 | `/admin/tools`                    | 工具管理     | 后台用户（admin） |
+| `/admin/tool-logs`                | 工具调用记录 | 后台用户（admin） |
 | `/admin/evaluation/datasets`      | 评测集       | 后台用户（admin） |
 | `/admin/evaluation/runs`          | 评测结果     | 后台用户（admin） |
 | `/admin/observability/traces`     | Trace 列表   | 后台用户（admin） |
 | `/admin/observability/traces/:id` | Trace 详情   | 后台用户（admin） |
 | `/admin/observability/cost`       | 成本分析     | 后台用户（admin） |
-| `/admin/observability/alerts`     | 告警规则     | 后台用户（admin） |
 | `/admin/users`                    | 用户管理     | 后台用户（admin） |
+| `/admin/memories`                 | 用户记忆     | 后台用户（admin） |
 | `/admin/audit`                    | 审计日志     | 后台用户（admin） |
+| `/admin/api-keys`                 | API 密钥     | 后台用户（admin） |
 | `/admin/settings`                 | 租户设置     | 后台用户（admin） |
+| `/admin/change-password`          | 改密码       | 后台用户          |
 | `/customer/login`                 | 前台用户登录 | 前台用户          |
+| `/customer`                       | 用户中心首页 | 前台用户          |
 | `/customer/chat`                  | 聊天主页     | 前台用户          |
+| `/customer/memories`              | 我的记忆     | 前台用户          |
+| `/customer/change-password`      | 改密码       | 前台用户          |
 | `/widget/:tenantCode`             | 公开聊天挂件 | 匿名 / 前台用户   |
 
-**共 23 个路由**（3 个登录 + 3 个 system + 15 个 admin + 2 个 account/widget）。
+**共 31 个路由**（3 个登录 + 3 个改密 + 5 个 system + 19 个 admin + 5 个 customer + 1 个挂件）。
+
+> ⚠️ **2026-10-26 订正**：这份清单以前跟实现对不上 ——
+>   - 规格里写 `/system/dashboard` / `/admin/dashboard`，实现是 `/system` / `/admin`（首页就是 index 路由）
+>   - 规格里写 `/admin/model` / `/admin/model/prompt`，实现拆成了 `/admin/models` + `/admin/prompts`
+>     （C3 / C4 落地时按「三页分开」改的）
+>   - 规格里列的 `/admin/observability/alerts`（告警规则页）**没做** ——
+>     告警阈值改成通用配置页「成本」分类下的 3 个可配项了，**不占独立菜单**
+>   - 补上了实现里有、规格里漏的：`/system/audit`、`/admin/memories`、`/admin/api-keys`、
+>     `/admin/tool-logs`、`/customer`（用户中心首页）、三处 `/change-password`
 
 ---
 

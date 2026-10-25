@@ -2,12 +2,12 @@ import type { ReactElement } from 'react';
 import { useEffect, useState } from 'react';
 import { Alert, Button, Card, Col, Empty, Row, Space, Tag, Typography, theme } from 'antd';
 import { ReloadOutlined, RightOutlined, TeamOutlined } from '@ant-design/icons';
-import ReactECharts from 'echarts-for-react';
 import { Link, useNavigate } from 'react-router-dom';
 import { getCurrentUser } from '../../lib/auth';
 import { fetchAlerts, type AdminAlert } from '../../lib/adminConfig';
 import { fetchSummary, type ObservabilitySummary } from '../../lib/adminObservability';
 import { PageHeader } from '../../components/shell/PageHeader';
+import { Chart } from '../../components/Chart';
 
 const { Text } = Typography;
 
@@ -171,7 +171,7 @@ export function AdminHomePage(): ReactElement {
             {trend.length === 0 ? (
               <Empty description="最近 7 天还没有对话记录" />
             ) : (
-              <ReactECharts option={conversationOption} style={{ height: 260 }} notMerge />
+              <Chart option={conversationOption} height={260} />
             )}
           </Card>
         </Col>
@@ -180,7 +180,7 @@ export function AdminHomePage(): ReactElement {
             {trend.length === 0 ? (
               <Empty description="最近 7 天还没有 LLM 调用" />
             ) : (
-              <ReactECharts option={costOption} style={{ height: 260 }} notMerge />
+              <Chart option={costOption} height={260} />
             )}
           </Card>
         </Col>

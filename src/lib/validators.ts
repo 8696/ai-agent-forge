@@ -1,4 +1,9 @@
 import { z } from 'zod';
+import {
+  TENANT_CODE_CHARSET_PATTERN,
+  TENANT_CODE_MAX_LENGTH,
+  TENANT_CODE_MIN_LENGTH,
+} from '@shared/validation/tenant-code';
 
 /**
  * 通用 Zod schemas —— 与 docs/16-需求技术对照表 A2 / A3 关键代码段一致
@@ -9,9 +14,9 @@ import { z } from 'zod';
 
 export const tenantCodeSchema = z
   .string()
-  .min(3)
-  .max(32)
-  .regex(/^[a-z0-9-]+$/, '租户号只能包含小写字母 / 数字 / 连字符');
+  .min(TENANT_CODE_MIN_LENGTH)
+  .max(TENANT_CODE_MAX_LENGTH)
+  .regex(TENANT_CODE_CHARSET_PATTERN, '租户号只能包含小写字母 / 数字 / 连字符');
 
 export const roleSchema = z.enum(['admin', 'customer']);
 

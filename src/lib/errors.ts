@@ -81,3 +81,19 @@ export class BudgetExceededError extends AppError {
     super(message, 'COST_BUDGET_EXCEEDED', 403, details);
   }
 }
+
+/**
+ * 查询试图跨租户 —— A1（docs/12-a-需求-多租户与登录.md §A1）
+ *
+ * 由租户作用域钩子抛出（`src/lib/tenant-scope.ts`）：
+ * 一次查询显式指定了**别的**租户的 `tenant_id`。
+ *
+ * 500 而不是 403：这不是「用户没权限」，而是**代码写错了**——
+ * 说明有人在一个租户的上下文里查了另一个租户的数据。
+ * 报 500 是故意让它在错误率指标里显眼，别被静默吞掉。
+ */
+export class TenantIsolationError extends AppError {
+  constructor(message: string) {
+    super(message, 'TENANT_ISOLATION_VIOLATION', 500);
+  }
+}

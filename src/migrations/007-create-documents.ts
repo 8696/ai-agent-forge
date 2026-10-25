@@ -9,7 +9,8 @@ import { tableExists } from './helpers/schema';
  *  - 本表只存**元数据**，向量存 Qdrant（docs/05-b §5.6）；两边靠 `id` ↔ payload.doc_id 关联
  *  - status 流转 uploaded → indexing → ready / failed，由 src/rag/ingest.ts 维护
  *  - chunk_count 索引完成后回填，跟 Qdrant 里该 doc_id 的点数对齐
- *  - file_type ENUM 保留 'word'（docs/05-a 原定），但当前上传只放行 pdf / markdown / txt
+ *  - file_type ENUM 原本保留 'word'（docs/05-a 原定），2026-10-25 把 DOCX 解析
+ *    从需求里整个删掉后，由迁移 021 收窄成 ENUM('pdf','markdown','txt')
  *  - idx_tenant_uploaded：文档列表默认按「租户 + 上传时间倒序」翻页
  *  - idx_status：失败重试 / 状态筛选
  */

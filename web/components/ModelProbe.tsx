@@ -71,7 +71,7 @@ export function ModelProbe(): ReactElement {
             <Alert
               type="success"
               showIcon
-              message={`✓ ${result.provider} · ${result.model} · ${result.durationMs}ms`}
+              title={`✓ ${result.provider} · ${result.model} · ${result.durationMs}ms`}
               description={
                 <div style={{ fontSize: 12 }}>
                   <div>
@@ -90,7 +90,7 @@ export function ModelProbe(): ReactElement {
             <Alert
               type="error"
               showIcon
-              message={`✗ ${result.provider} 探活失败`}
+              title={`✗ ${result.provider} 探活失败`}
               description={
                 <Text code style={{ fontSize: 12 }}>
                   {result.error}

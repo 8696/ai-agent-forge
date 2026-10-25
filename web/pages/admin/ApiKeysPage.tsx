@@ -15,6 +15,7 @@ import {
   Tag,
   Typography,
   message,
+  theme,
 } from 'antd';
 import type { TableColumnsType } from 'antd';
 import { CopyOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons';
@@ -85,6 +86,8 @@ const SCOPE_OPTIONS: Array<{ value: ApiKeyScope; label: string }> = [
  * UI 详见 docs/04-c-ui-后台管理页面.md §5.9.4
  */
 export function AdminApiKeysPage(): ReactElement {
+  // 颜色走 antd token —— 写死浅色的话，深色模式下几乎看不见
+  const { token } = theme.useToken();
   const [rows, setRows] = useState<ApiKeyItem[] | null>(null);
   const [errMsg, setErrMsg] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -289,7 +292,7 @@ export function AdminApiKeysPage(): ReactElement {
       />
 
       {errMsg !== null && (
-        <Alert type="error" showIcon message={errMsg} style={{ marginBottom: 16 }} />
+        <Alert type="error" showIcon title={errMsg} style={{ marginBottom: 16 }} />
       )}
 
       <Card styles={{ body: { padding: 16 } }}>
@@ -320,7 +323,7 @@ export function AdminApiKeysPage(): ReactElement {
         cancelText="取消"
         onOk={() => void onCreate()}
         onCancel={() => setCreating(false)}
-        destroyOnClose
+        destroyOnHidden
       >
         <Form form={createForm} layout="vertical" preserve={false}>
           <Form.Item
@@ -363,12 +366,12 @@ export function AdminApiKeysPage(): ReactElement {
         <Alert
           type="warning"
           showIcon
-          message="完整密钥只显示这一次"
+          title="完整密钥只显示这一次"
           description="关掉这个弹窗就再也看不到了（服务端只存 bcrypt 哈希）。请立刻复制并保存到你们的密钥管理里。"
           style={{ marginBottom: 16 }}
         />
         {fresh !== null && (
-          <Space direction="vertical" size={8} style={{ width: '100%' }}>
+          <Space orientation="vertical" size={8} style={{ width: '100%' }}>
             <Text type="secondary" style={{ fontSize: 12 }}>
               {fresh.name}
             </Text>
@@ -379,7 +382,7 @@ export function AdminApiKeysPage(): ReactElement {
                 gap: 8,
                 padding: '10px 12px',
                 borderRadius: 8,
-                border: '1px solid rgba(0,0,0,0.08)',
+                border: `1px solid ${token.colorFillSecondary}`,
                 wordBreak: 'break-all',
                 fontFamily: 'monospace',
                 fontSize: 13,

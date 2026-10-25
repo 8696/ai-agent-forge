@@ -3,16 +3,15 @@
 > **本文件是 `05-数据模型.md` 的 §5.1-§5.5 节**（原主文件已拆分为 05-a / 05-b 两份）。本份负责**MySQL 核心表的 DDL + 索引策略 + 数据量估算 + 备份 + 迁移管理**。
 > 向量库 Qdrant 部分见 `05-b-数据模型-qdrant.md`。
 >
-> **已落地 18 张表**（`src/models/` 下有对应 Sequelize 模型）：
+> **已落地 20 张表**（`src/models/` 下有对应 Sequelize 模型）：
 > `tenants` / `users` / `system_users` / `api_keys` / `documents` / `sessions` / `messages` /
 > `prompt_versions` / `tenant_models` / `tenant_settings` / `audit_logs` / `cost_logs` /
 > `traces` / `spans` / `evaluation_datasets` / `evaluation_items` / `evaluation_runs` /
-> `evaluation_results`。
-> 另有 `tools` / `missions` 两张是 **暂不做的规格**（工具管理 / 工作流），本期未建表 ——
-> 这两条需求的定位见 [12-b §B3 §B5 §B6](./12-b-需求-ai对话能力.md) 与
-> [12-c §C2](./12-c-需求-管理员可配置.md)（2026-10-25 起从「Phase 2」改成
-> 「暂不做 · 等外部系统接入需求」）。两张表的 DDL 已于 2026-10-25 修正过，
-> 下方每张表下面都写了改了什么、为什么。
+> `evaluation_results` / **`tools`** / **`tool_call_logs`**
+> （2026-10-25 落地，B3 工具调用 + C2 工具管理）。
+> 另有 `missions` 一张是 **未做的规格**（任务状态机 / 工作流），本期未建表 ——
+> 定位见 [12-b §B5](./12-b-需求-ai对话能力.md)。它的 DDL 已在下方写好，
+> 下一轮做 B5 时直接建。
 
 MySQL 8.0，字符集 `utf8mb4_unicode_ci`。所有时间字段用 `DATETIME(6)`（微秒精度，便于 trace 分析），主键统一 `VARCHAR(36)`（UUID）。
 
@@ -107,6 +106,7 @@ CREATE TABLE messages (
   thinking_content MEDIUMTEXT COMMENT '思考模式的推理过程（与 content 分离）',
   tool_calls JSON COMMENT '工具调用的输入（role=tool 时为空）',
   tool_results JSON COMMENT '工具调用的输出',
+  parts JSON COMMENT 'AI SDK 的 data part 数组（引用片段 / 工具调用记录）',
   usage JSON COMMENT '{ input_tokens, output_tokens, cache_read_tokens }',
   status ENUM('streaming', 'complete', 'failed', 'cancelled') DEFAULT 'complete' COMMENT '消息状态（流式用）',
   feedback TINYINT NULL COMMENT '用户反馈：1=点赞 / -1=点踩 / NULL=无',
@@ -129,11 +129,16 @@ CREATE TABLE messages (
 > 表不存在 → 建全；表存在 → 补缺列、补缺索引，并 `MODIFY` 把 `channel` 收敛到含 `web` 的定义
 > （MySQL 不支持直接给 ENUM 追加值，只能 MODIFY）。
 >
-> **`tool_results` 的语义被重载**：DDL 原意是「工具调用的输出」（工具调用做起来才有值），
-> 但 B1 需要把 AI SDK 的 `data-citations` / `data-status` 这些 data part 落库
-> （否则刷新页面后历史回答的「来源」角标就丢了），所以本期这一列只装
-> `{ data_parts: [...] }`。**做工具调用之前必须先加一条迁移把 data part 挪走**
-> （例如新增 `parts JSON` 列），否则同一列里两种形状混着，前端要靠 key 猜。
+> ⚠️ **`tool_results` 曾经被重载，现在分开了**：
+> DDL 原意是「工具调用的输出」，但 B1 需要把 AI SDK 的 `data-citations` / `data-status`
+> 这些 data part 落库（否则刷新页面后历史回答的「来源」角标就丢了），
+> 于是这一列被临时借用去装 `{ data_parts: [...] }` —— 两种语义混在一列里，前端要靠 key 猜。
+>
+> **2026-10-25（B3 工具调用落地时）已分开**：
+>  - 新增 `parts JSON` 列 —— 装 data part 数组（引用片段 + 工具调用记录）
+>  - `tool_results` 语义还给「真正的工具调用输出」
+>  - 迁移 `023-messages-parts-column` 负责回填（实测搬了 74 行）并清空 `tool_results`
+>
 > 读写统一走 `src/services/chat.ts` 的 `readDataParts` / `extractDataParts`。
 >
 > **`status='streaming'` 的僵尸行**：assistant 消息在开流之前就先建行（正文为空），
@@ -148,7 +153,7 @@ CREATE TABLE documents (
   tenant_id VARCHAR(36) NOT NULL COMMENT '所属租户',
   title VARCHAR(500) NOT NULL COMMENT '文档标题（原始文件名）',
   source VARCHAR(500) COMMENT '本地存储路径（./data/uploads/{tenant_id}/xxx.pdf）',
-  file_type ENUM('pdf', 'word', 'markdown', 'txt') COMMENT '文件类型',
+  file_type ENUM('pdf', 'markdown', 'txt') COMMENT '文件类型',
   file_path VARCHAR(1000) COMMENT '完整磁盘路径（绝对路径）',
   status ENUM('uploaded', 'indexing', 'ready', 'failed') DEFAULT 'uploaded' COMMENT '索引状态',
   chunk_count INT DEFAULT 0 COMMENT '已分块的块数（索引完成后回填）',
@@ -166,8 +171,11 @@ CREATE TABLE documents (
 > `documents` 表（字段更少），它逐列比对、缺哪补哪，保证新旧两种库都收敛到同一 schema。
 > 收敛迁移 `down()` 不删列（删列丢数据且无法从旧脚本可靠重建），回滚走 `yarn migrate:undo` + 备份恢复。
 >
-> **`file_type` 的 `'word'` 目前是预留值**：上传只放行 `pdf` / `markdown` / `txt`
-> （解析器没有引入 mammoth）。传 `.docx` 会被 400 挡掉，库里的 `file_type` 也就不会出现 `word`。
+> **`file_type` 没有 `'word'`**：2026-10-25 把 **DOCX 解析整个从需求里删掉**
+> （上传格式只剩 PDF / Markdown / TXT，见 [01](./01-需求与场景.md) §1.1），
+> 迁移 `021-alter-documents-file-type.ts` 把库里的列收窄成
+> `ENUM('pdf','markdown','txt')`。上传白名单（`src/services/document-upload.ts`）
+> 只放行这三种扩展名，传 `.docx` 返 400。
 
 ### 工具注册表（tools）
 
@@ -180,11 +188,23 @@ CREATE TABLE tools (
   type ENUM('builtin', 'http', 'mcp') DEFAULT 'builtin' COMMENT 'builtin=平台自带；http=租户自己的 HTTP 接口；mcp=外部 MCP 服务',
   config JSON COMMENT '配置：builtin=工具标识；http=url/method/headers/body_template/parameters；mcp=mcp_server_url/mcp_server_path/headers',
   enabled BOOLEAN DEFAULT TRUE COMMENT '是否启用',
+  requires_confirmation BOOLEAN DEFAULT FALSE COMMENT '是否敏感操作（true 时模型调用它要先让用户确认）',
+  created_by VARCHAR(36) COMMENT '注册人 user id',
   created_at DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6) COMMENT '创建时间',
+  updated_at DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6) COMMENT '更新时间',
   UNIQUE INDEX uk_tenant_name (tenant_id, name),
   INDEX idx_tenant_enabled (tenant_id, enabled)
-) COMMENT '工具注册表（暂不做 · 等外部系统接入需求）';
+) COMMENT '工具注册表（B3 工具调用 / C2 工具管理）';
 ```
+
+> **建表迁移**：`src/migrations/022-create-tools.ts`（2026-10-25 落地）。
+>
+> **实现放代码，注册放数据库**：`config.builtin` 指向 `src/tools/builtin/registry.ts` 里的实现，
+> `description` 是**给模型看的**（租户能改 → 能调教模型调不调它）。
+>
+> ⚠️ **`requires_confirmation` / `created_by` / `updated_at` 三列是落地时补的**
+> （原 DDL 没有）：敏感标记是 HITL 的入口；`created_by` 跟其他 admin 可写表一样记操作人；
+> `updated_at` 是因为 PATCH 之后要知道最后改于何时（原 DDL 只有 `created_at`）。
 
 > ⚠️ **2026-10-25 修正**（原设计稿的三个错，已在上方改掉）：
 >
@@ -198,6 +218,9 @@ CREATE TABLE tools (
 >   `builtin` 的内置工具集本期不定，`mcp` 又要求客户那边跑 MCP server ——
 >   **中间那类最常见的「租户自己有 REST 接口」无处可落**。
 >   现在补上 `http` 类型（`config` 装 `url` / `method` / `headers` / `body_template`）。
+>
+> **落地状态（2026-10-25）**：本轮**只开放 `builtin`**（6 个内置 mock 工具，
+> 实现在 `src/tools/builtin/`），`http` / `mcp` 端点层直接拒绝 —— 出网策略还没定。
 >
 > `type='http'` 的工具要**调租户自己的接口**，安全边界见下面的说明 ——
 > 它跟「租户填 LLM Base URL」不是同一套策略，不能直接套用。
@@ -223,6 +246,46 @@ CREATE TABLE tools (
 > `headers` 里的密钥走 AES-256-GCM 加密存储（复用 `src/lib/crypto.ts`），
 > 接口**永不回明文**。
 
+### 工具调用流水表（tool_call_logs）✅ B3 已落地 2026-10-25
+
+```sql
+CREATE TABLE tool_call_logs (
+  id VARCHAR(36) PRIMARY KEY COMMENT 'UUID',
+  tenant_id VARCHAR(36) NOT NULL COMMENT '所属租户',
+  user_id VARCHAR(36) NULL COMMENT '触发调用的用户（匿名挂件 / 对外 API 为空）',
+  session_id VARCHAR(36) NULL COMMENT '所属会话',
+  message_id VARCHAR(36) NULL COMMENT '关联的 assistant 消息 id',
+  tool_call_id VARCHAR(64) NOT NULL COMMENT 'SDK 分配的调用 id',
+  tool_name VARCHAR(100) NOT NULL COMMENT '注册名（模型调用的就是这个名字）',
+  builtin VARCHAR(64) NULL COMMENT '内置实现 key',
+  status ENUM('ok', 'error', 'timeout', 'awaiting_confirmation') DEFAULT 'ok' COMMENT 'ok=成功 / error=抛错 / timeout=超时 / awaiting_confirmation=待用户确认（未执行）',
+  args JSON COMMENT '请求参数（模型给的入参）',
+  output JSON COMMENT '响应参数（工具的返回值）',
+  error VARCHAR(1000) NULL COMMENT '失败原因（成功时为空）',
+  duration_ms INT DEFAULT 0 COMMENT '耗时（毫秒）',
+  trace_id VARCHAR(36) NULL COMMENT '关联的 trace',
+  created_at DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6) COMMENT '调用时间',
+  INDEX idx_tenant_created (tenant_id, created_at),
+  INDEX idx_tenant_tool (tenant_id, tool_name, created_at),
+  INDEX idx_session (session_id)
+) COMMENT '工具调用流水（B3 工具调用）';
+```
+
+> **建表迁移**：`src/migrations/024-create-tool-call-logs.ts`（2026-10-25）。
+>
+> **一行 = 一次工具调用**，带**请求参数**和**响应参数** —— 后台「工具调用记录」页读它。
+>
+> 工具调用记录本来就落在 `messages.parts` 的 `data-tool-call` part 里（含参数和结果），
+> 但那是 **JSON 列**，没法按时间 / 工具 / 状态建索引 —— 分页翻页都得全表扫，
+> 「只看失败的」「只看某个工具的」更做不了。要一个能筛的列表就得有正经的列。
+>
+> **写入路径**：工具执行包装层（`src/tools/execute.ts`）是所有工具调用的**唯一出口**，
+> 每次调用结束都写一行 —— 不会漏记。⚠️ 写库失败只 warn，**不影响用户的对话**
+> （观测是旁路，跟 trace 一个道理）。
+>
+> `awaiting_confirmation` 这一档是 HITL 闸门拦下的调用 —— 工具**没有真正执行**，
+> 所以 `output` 是空的。
+
 ### 任务表（missions，工作流主表）
 
 ```sql
@@ -240,7 +303,7 @@ CREATE TABLE missions (
   INDEX idx_session (session_id),
   INDEX idx_tenant_state (tenant_id, state),
   INDEX idx_state (state, updated_at)
-) COMMENT '任务表（暂不做 · 等外部系统接入需求）';
+) COMMENT '任务表（B5 状态机工作流 · 未做）';
 ```
 
 > ⚠️ **2026-10-25 修正**：原 DDL 只有 `idx_session` / `idx_state`，

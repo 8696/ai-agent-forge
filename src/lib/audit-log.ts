@@ -1,5 +1,5 @@
 import { Op } from 'sequelize';
-import { AuditLog, User, type AuditAction } from '../models';
+import { AuditLog, SystemUser, User, type AuditAction } from '../models';
 import { logger } from '../logger';
 
 /**
@@ -87,7 +87,15 @@ export interface AuditListParams {
 /** 列表里的一行 */
 export interface AuditLogItem {
   id: string;
-  tenant_id: string;
+  /**
+   * 所属租户。
+   *
+   * ⚠️ **可能是 null** —— 系统级日志（平台方改租户启停 / 到期时间那类）
+   * 本来就没有租户归属。租户 admin 那边永远拿不到 null（他们的 where 是
+   * `tenant_id = 'acme'`，SQL 里 `NULL = 'acme'` 恒为 false）；
+   * 只有平台方的跨租户视图（`listAllAuditLogs`）才会看到 null。
+   */
+  tenant_id: string | null;
   /** 操作者 id；系统级操作里可能是 system_users.id */
   user_id: string | null;
   /** 操作者邮箱；查不到（用户已删 / 系统账号）时为 null */
@@ -235,4 +243,123 @@ async function resolveUserEmails(
     map.set(u.id, u.email);
   }
   return map;
+}
+
+// ============================================================
+// 平台方视角：跨租户查审计日志
+// ============================================================
+
+/**
+ * 列**全部**审计日志（平台方视角，跨租户 + 含系统级日志）
+ *
+ * ⚠️ **只能由 system 子系统调用** —— 这正是租户隔离的另一面：
+ *   租户 admin 看到的只有自己租户的日志（`listAuditLogs`），
+ *   平台方能看到全部 —— 包括 `tenant_id` 为空的系统级日志
+ *   （平台方改租户启停 / 到期时间那类，租户 admin 是看不到的）。
+ *
+ * ⚠️ **这里没有 tenant_id 过滤**，所以「租户作用域钩子」不会自动补 ——
+ *    恰恰是因为它只在 system 命名空间被调用（那边**没有**租户上下文）。
+ *    这个前提写在这里，改调用方的时候别忘了。
+ */
+export async function listAllAuditLogs(
+  params: AuditListParams & { /** 按租户过滤（不传 = 全部） */ tenantId?: string | undefined },
+): Promise<AuditListResult> {
+  const where: Record<string, unknown> = {};
+  if (params.tenantId !== undefined && params.tenantId !== '') {
+    where['tenant_id'] = params.tenantId;
+  }
+  if (params.userId !== undefined && params.userId !== '') {
+    where['user_id'] = params.userId;
+  }
+  if (params.action !== undefined && params.action !== '') {
+    where['action'] = params.action;
+  }
+  if (params.resourceType !== undefined && params.resourceType !== '') {
+    where['resource_type'] = params.resourceType;
+  }
+  if (params.from !== undefined || params.to !== undefined) {
+    where['created_at'] = {
+      ...(params.from !== undefined ? { [Op.gte]: params.from } : {}),
+      ...(params.to !== undefined ? { [Op.lte]: params.to } : {}),
+    };
+  }
+
+  const { rows, count } = await AuditLog.findAndCountAll({
+    where,
+    order: [
+      ['created_at', 'DESC'],
+      ['id', 'DESC'],
+    ],
+    limit: params.pageSize,
+    offset: (params.page - 1) * params.pageSize,
+  });
+
+  const emails = await resolveUserEmailsAcrossTenants(
+    rows.map((r) => r.user_id),
+  );
+
+  return {
+    logs: rows.map((r) => ({
+      id: String(r.id),
+      // 系统级日志的 tenant_id 是 null —— 页面要能区分「系统级」和「某租户的」
+      tenant_id: r.tenant_id,
+      user_id: r.user_id,
+      user_email: r.user_id === null ? null : (emails.get(r.user_id) ?? null),
+      action: r.action,
+      resource_type: r.resource_type,
+      resource_id: r.resource_id,
+      details: r.details ?? null,
+      ip: r.ip,
+      created_at: r.created_at.toISOString(),
+    })),
+    pagination: {
+      page: params.page,
+      page_size: params.pageSize,
+      total: count,
+      total_pages: Math.ceil(count / params.pageSize),
+    },
+  };
+}
+
+/**
+ * 跨租户解析操作者邮箱（平台方视角）。
+ *
+ * ⚠️ 同样**只在 system 命名空间**被调用（那边没有租户上下文，
+ *    所以租户作用域钩子不会给这条查询补 tenant_id 过滤）。
+ */
+async function resolveUserEmailsAcrossTenants(
+  userIds: Array<string | null>,
+): Promise<Map<string, string>> {
+  const ids = [...new Set(userIds.filter((id): id is string => id !== null && id !== ''))];
+  if (ids.length === 0) {
+    return new Map();
+  }
+  // 平台方账号在 system_users 表，租户账号在 users 表 —— 两边都要查
+  const [users, systemUsers] = await Promise.all([
+    User.findAll({ where: { id: { [Op.in]: ids } }, attributes: ['id', 'email'] }),
+    SystemUser.findAll({ where: { id: { [Op.in]: ids } }, attributes: ['id', 'email'] }),
+  ]);
+  const map = new Map<string, string>();
+  for (const u of users) {
+    map.set(u.id, u.email);
+  }
+  for (const u of systemUsers) {
+    map.set(u.id, u.email);
+  }
+  return map;
+}
+
+/**
+ * 列**全部**日志里出现过的 action（平台方视角）
+ *
+ * ⚠️ 同 `listAllAuditLogs` —— 只在 system 命名空间被调用（那边没有租户上下文，
+ *    租户作用域钩子不会补 tenant_id 过滤）。
+ */
+export async function listAllAuditActions(): Promise<string[]> {
+  const rows = await AuditLog.findAll({
+    attributes: ['action'],
+    group: ['action'],
+    order: [['action', 'ASC']],
+  });
+  return rows.map((r) => r.action).filter((a): a is string => typeof a === 'string');
 }

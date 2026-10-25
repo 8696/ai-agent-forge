@@ -37,20 +37,34 @@ export interface MessageUsage {
 }
 
 /**
- * messages.tool_results JSON 列 —— **语义重载，读之前务必看这段**
+ * messages.parts JSON 列 —— AI SDK 的 data part 数组（落库用）
  *
- * DDL 原意是「工具调用的输出」（Phase 2 才有工具）。本期没有工具，
- * 但 AI SDK 的引用片段（data-citations）和阶段心跳（data-status）需要落库，
- * 否则刷新页面后历史回答的「来源」角标就丢了。
+ * 装的是消息上所有 `data-*` part：引用片段（data-citations）、
+ * 工具调用记录（data-tool-call）等。刷新页面后靠这一列还原 UI。
  *
- * 所以本期约定：tool_results 只装 `{ data_parts: DataPart[] }`，
- * **未来做工具调用时必须先加一条迁移把 data part 挪走**（例如新增 `parts JSON` 列），
- * 否则同一列里两种形状混着，前端解析要靠 key 猜，很容易写错。
+ * ⚠️ **这一列是 2026-10-25 从 `tool_results` 里挪出来的** ——
+ * 以前 data part 借用了 `tool_results`（DDL 原意是「工具调用的输出」），
+ * 两种语义混在一列里，前端只能靠 key 猜。迁移 `023-messages-parts-column`
+ * 把 data part 搬到了这里，`tool_results` 语义还给真正的工具输出。
+ */
+export interface MessageParts {
+  data_parts: DataPartShape[];
+  [key: string]: unknown;
+}
+
+/**
+ * messages.tool_results JSON 列 —— 真正的工具调用输出
  *
- * 读写统一走 src/services/chat.ts 的 readDataParts / writeDataParts，别在别处直接碰这一列。
+ * DDL 原意就是「工具调用的输出」（B3 工具调用，2026-10-25 落地）。
+ * ⚠️ 这一列**不再装 data part** —— data part 在 `parts` 列里。
+ *
+ * 读写统一走 src/services/chat.ts，别在别处直接碰这一列。
  */
 export interface MessageToolResults {
-  data_parts: DataPartShape[];
+  /** 工具调用名 */
+  tool?: string;
+  /** 工具的返回值 */
+  output?: unknown;
   [key: string]: unknown;
 }
 
@@ -65,7 +79,7 @@ export interface DataPartShape {
  *
  * - DB 是对话历史的真理来源：会话历史、上下文重建、评测回放都从这里读
  * - `usage` 存 LLM 返回的真实 token 数；本地的 estimateTokens() 只用于预算截断，不用于计费
- * - `tool_results` 被重载存放 AI SDK 的 data part（引用片段），详见 MessageToolResults 的注释
+ * - `parts` 存 AI SDK 的 data part 数组（引用片段 / 工具调用记录）；`tool_results` 存工具输出
  * - timestamps: false —— DDL 只有 created_at
  */
 @Table({ tableName: 'messages', timestamps: false })
@@ -100,15 +114,22 @@ export class Message extends Model {
   @Column({ type: DataType.TEXT('medium'), allowNull: true })
   declare thinking_content: string | null;
 
-  /** 工具调用的输入 —— Phase 2 启用工具时才有值，本期恒为 null */
+  /** 工具调用的输入 —— B3 工具调用后有值 */
   @Column({ type: DataType.JSON, allowNull: true })
   declare tool_calls: unknown;
 
   /**
-   * 工具调用的输出 —— **本期被重载**，见类注释「data part 的存放约定」
+   * 工具调用的输出（B3 工具调用）
    */
   @Column({ type: DataType.JSON, allowNull: true })
   declare tool_results: MessageToolResults | null;
+
+  /**
+   * AI SDK 的 data part 数组（引用片段 / 工具调用记录）。
+   * 2026-10-25 从 `tool_results` 挪出来的独立列（迁移 `023-messages-parts-column`）。
+   */
+  @Column({ type: DataType.JSON, allowNull: true })
+  declare parts: MessageParts | null;
 
   @Column({ type: DataType.JSON, allowNull: true })
   declare usage: MessageUsage | null;

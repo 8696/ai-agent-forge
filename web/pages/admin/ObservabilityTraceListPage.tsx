@@ -10,6 +10,7 @@ import {
   Table,
   Tag,
   Typography,
+  theme,
 } from 'antd';
 import type { TableColumnsType } from 'antd';
 import { ReloadOutlined } from '@ant-design/icons';
@@ -35,6 +36,8 @@ const { Text } = Typography;
  * UI 详见 docs/04-c-ui-后台管理页面.md §5.7.1
  */
 export function ObservabilityTraceListPage(): ReactElement {
+  // 颜色走 antd token —— 写死浅色的话，深色模式下几乎看不见
+  const { token } = theme.useToken();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const [rows, setRows] = useState<TraceItem[] | null>(null);
@@ -126,7 +129,7 @@ export function ObservabilityTraceListPage(): ReactElement {
       width: 160,
       ellipsis: true,
       render: (m: string | null) =>
-        m === null ? <span style={{ color: 'rgba(0,0,0,0.45)' }}>—</span> : m,
+        m === null ? <span style={{ color: token.colorTextTertiary }}>—</span> : m,
     },
     {
       title: '耗时',
@@ -134,7 +137,7 @@ export function ObservabilityTraceListPage(): ReactElement {
       key: 'duration_ms',
       width: 100,
       render: (d: number | null) =>
-        d === null ? <span style={{ color: 'rgba(0,0,0,0.45)' }}>—</span> : `${d} ms`,
+        d === null ? <span style={{ color: token.colorTextTertiary }}>—</span> : `${d} ms`,
     },
     {
       title: 'Token',
@@ -156,7 +159,7 @@ export function ObservabilityTraceListPage(): ReactElement {
       key: 'error_message',
       ellipsis: true,
       render: (e: string | null) =>
-        e === null ? <span style={{ color: 'rgba(0,0,0,0.45)' }}>—</span> : <Text type="danger">{e}</Text>,
+        e === null ? <span style={{ color: token.colorTextTertiary }}>—</span> : <Text type="danger">{e}</Text>,
     },
   ];
 
@@ -174,7 +177,7 @@ export function ObservabilityTraceListPage(): ReactElement {
       />
 
       {errMsg !== null && (
-        <Alert type="error" showIcon message={errMsg} style={{ marginBottom: 16 }} />
+        <Alert type="error" showIcon title={errMsg} style={{ marginBottom: 16 }} />
       )}
 
       <Card styles={{ body: { padding: 16 } }}>

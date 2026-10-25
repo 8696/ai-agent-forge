@@ -82,6 +82,39 @@ export type ChatDataTypes = {
     /** 拦截原因（给用户看的中文文案） */
     reason: string;
   };
+  /**
+   * 工具调用记录（B3 工具调用）
+   *
+   * 一次调用一条，落进 `messages.parts` 落库 —— 刷新页面后卡片还在。
+   * 前端渲染成「工具调用卡片」：工具名 + 入参 + 结果摘要 + 耗时。
+   *
+   * ⚠️ **key 里的连字符会原样出现在事件名里** —— SDK 的 data part 事件名是
+   * `data-${key}`，所以这里的 `tool-call` → 线上事件名 `data-tool-call`。
+   * （写成 camelCase 会变成 `data-toolCall`，前端两处都要跟着改，容易写岔。）
+   */
+  'tool-call': {
+    /** SDK 分配的调用 id（也用作 data part 的 id，保证重复调用不会互相覆盖） */
+    tool_call_id: string;
+    /** 注册名（模型调用的就是这个名字） */
+    tool_name: string;
+    /** 内置实现 key */
+    builtin: string;
+    /** 模型给的入参 */
+    args: unknown;
+    /**
+     * ok=成功 / error=抛错 / timeout=超时 /
+     * awaiting_confirmation=待用户确认（没执行） / rejected=用户已取消
+     */
+    status: 'ok' | 'error' | 'timeout' | 'awaiting_confirmation' | 'rejected';
+    /** 工具的返回值（失败时是降级文案） */
+    output: unknown;
+    /** 失败原因 */
+    error: string | null;
+    /** 耗时（毫秒） */
+    duration_ms: number;
+    /** 待确认时的提示（前端用来渲染「需要你确认」+ 确认按钮） */
+    confirm_hint?: string;
+  };
 };
 
 /**

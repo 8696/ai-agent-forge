@@ -27,7 +27,7 @@ import { Tenant } from './Tenant';
  */
 export type DocumentStatus = 'uploaded' | 'indexing' | 'ready' | 'failed';
 
-export type DocumentFileType = 'pdf' | 'word' | 'markdown' | 'txt';
+export type DocumentFileType = 'pdf' | 'markdown' | 'txt';
 
 /** documents.metadata JSON 列允许存放的键（运行时不校验，多余键透传） */
 export interface DocumentMetadata {
@@ -62,7 +62,7 @@ export class Document extends Model {
   declare title: string;
 
   @Column({
-    type: DataType.ENUM('pdf', 'word', 'markdown', 'txt'),
+    type: DataType.ENUM('pdf', 'markdown', 'txt'),
     allowNull: true,
   })
   declare file_type: DocumentFileType | null;

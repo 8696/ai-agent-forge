@@ -19,6 +19,7 @@ import {
   Tag,
   Typography,
   message,
+  theme,
 } from 'antd';
 import type { TableColumnsType } from 'antd';
 import { PlusOutlined, ReloadOutlined } from '@ant-design/icons';
@@ -74,6 +75,8 @@ const CATEGORY_COLOR: Record<MemoryCategory, string> = {
  * UI 详见 docs/04-c-ui-后台管理页面.md §5.11
  */
 export function AdminMemoriesPage(): ReactElement {
+  // 颜色走 antd token —— 写死浅色的话，深色模式下几乎看不见
+  const { token } = theme.useToken();
   // ===== 左侧：用户 =====
   const [owners, setOwners] = useState<MemoryOwner[] | null>(null);
   const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
@@ -385,7 +388,7 @@ export function AdminMemoriesPage(): ReactElement {
       />
 
       {errMsg !== null && (
-        <Alert type="error" showIcon message={errMsg} style={{ marginBottom: 16 }} />
+        <Alert type="error" showIcon title={errMsg} style={{ marginBottom: 16 }} />
       )}
 
       <Row gutter={[16, 16]} align="stretch">
@@ -429,7 +432,7 @@ export function AdminMemoriesPage(): ReactElement {
                       >
                         {o.email}
                       </div>
-                      <div style={{ fontSize: 12, color: 'rgba(0,0,0,0.45)', marginTop: 2 }}>
+                      <div style={{ fontSize: 12, color: token.colorTextTertiary, marginTop: 2 }}>
                         {o.memory_count} 条记忆
                         {o.last_hit_at !== null && (
                           <> · 最后被引用 {new Date(o.last_hit_at).toLocaleDateString()}</>
@@ -569,7 +572,7 @@ export function AdminMemoriesPage(): ReactElement {
           setCreatingOpen(false);
           createForm.resetFields();
         }}
-        destroyOnClose
+        destroyOnHidden
       >
         <Form form={createForm} layout="vertical" preserve={false}>
           <Form.Item
@@ -595,9 +598,9 @@ export function AdminMemoriesPage(): ReactElement {
       <Drawer
         open={detail !== null}
         title={detail === null ? '' : '编辑记忆'}
-        width={460}
+        size={460}
         onClose={() => setDetail(null)}
-        destroyOnClose
+        destroyOnHidden
         extra={
           <Space>
             <Button onClick={() => setDetail(null)}>取消</Button>

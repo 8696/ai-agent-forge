@@ -1,10 +1,10 @@
 import type { ReactElement } from 'react';
 import { useEffect, useMemo, useState } from 'react';
-import { Alert, Button, Card, Drawer, Empty, Progress, Space, Table, Tag, Typography, message } from 'antd';
+import { Alert, Button, Card, Drawer, Empty, Progress, Space, Table, Tag, Typography, message, theme } from 'antd';
 import type { TableColumnsType } from 'antd';
 import { ReloadOutlined } from '@ant-design/icons';
-import ReactECharts from 'echarts-for-react';
 import { PageHeader } from '../../components/shell/PageHeader';
+import { Chart } from '../../components/Chart';
 import {
   evaluationErrorMessage,
   fetchRunDetail,
@@ -16,11 +16,15 @@ import {
 
 const { Paragraph, Text } = Typography;
 
+/**
+ * 四个评分维度 —— 配色不写死 hex，而是记「用哪个 token」，
+ * 实际颜色在组件里用 theme.useToken() 取（深浅色自动切换）。
+ */
 const DIMENSIONS = [
-  { key: 'accuracy', label: '准确性', color: '#1677ff' },
-  { key: 'completeness', label: '完整性', color: '#52c41a' },
-  { key: 'style', label: '风格', color: '#faad14' },
-  { key: 'safety', label: '安全性', color: '#eb2f96' },
+  { key: 'accuracy', label: '准确性', colorToken: 'colorPrimary' },
+  { key: 'completeness', label: '完整性', colorToken: 'colorSuccess' },
+  { key: 'style', label: '风格', colorToken: 'colorWarning' },
+  { key: 'safety', label: '安全性', colorToken: 'colorError' },
 ] as const;
 
 /**
@@ -48,6 +52,13 @@ export function EvaluationRunsPage(): ReactElement {
     results: EvaluationResult[];
     stats: { p95_latency_ms: number; max_cost: number; avg_cost: number };
   } | null>(null);
+
+  // 图表 / 维度标签的配色走 antd token —— 写死 hex 的话暗色模式下对不上
+  const { token } = theme.useToken();
+  const dimensions = useMemo(
+    () => DIMENSIONS.map((d) => ({ ...d, color: token[d.colorToken] })),
+    [token],
+  );
 
   const load = async (): Promise<void> => {
     setErrMsg(null);
@@ -91,14 +102,14 @@ export function EvaluationRunsPage(): ReactElement {
     return {
       tooltip: { trigger: 'axis' },
       // type:'scroll' —— 窄容器里四项图例会挤成一坨互相压字
-      legend: { type: 'scroll', data: DIMENSIONS.map((d) => d.label) },
+      legend: { type: 'scroll', data: dimensions.map((d) => d.label) },
       grid: { left: 50, right: 20, top: 40, bottom: 40 },
       xAxis: {
         type: 'category',
         data: ordered.map((r) => new Date(r.started_at).toLocaleString('zh-CN')),
       },
       yAxis: { type: 'value', min: 0, max: 5, name: '分数' },
-      series: DIMENSIONS.map((d) => ({
+      series: dimensions.map((d) => ({
         name: d.label,
         type: 'line',
         smooth: true,
@@ -106,7 +117,7 @@ export function EvaluationRunsPage(): ReactElement {
         itemStyle: { color: d.color },
       })),
     };
-  }, [rows]);
+  }, [rows, dimensions]);
 
   const columns: TableColumnsType<EvaluationRun> = [
     {
@@ -172,7 +183,7 @@ export function EvaluationRunsPage(): ReactElement {
       key: 'total_score',
       width: 100,
       render: (v: number | null) =>
-        v === null ? <span style={{ color: 'rgba(0,0,0,0.45)' }}>—</span> : `${v.toFixed(2)} / 5`,
+        v === null ? <span style={{ color: token.colorTextTertiary }}>—</span> : `${v.toFixed(2)} / 5`,
     },
     {
       title: '四维',
@@ -180,7 +191,7 @@ export function EvaluationRunsPage(): ReactElement {
       width: 240,
       render: (_: unknown, row) => (
         <Space size={4} wrap>
-          {DIMENSIONS.map((d) => (
+          {dimensions.map((d) => (
             <Tag key={d.key} style={{ fontSize: 11 }}>
               {d.label} {row[d.key] === null ? '—' : row[d.key]?.toFixed(1)}
             </Tag>
@@ -211,14 +222,14 @@ export function EvaluationRunsPage(): ReactElement {
       />
 
       {errMsg !== null && (
-        <Alert type="error" showIcon message={errMsg} style={{ marginBottom: 16 }} />
+        <Alert type="error" showIcon title={errMsg} style={{ marginBottom: 16 }} />
       )}
 
       {hasRunning && (
         <Alert
           type="info"
           showIcon
-          message="有评测正在后台跑，每 5 秒自动刷新一次进度"
+          title="有评测正在后台跑，每 5 秒自动刷新一次进度"
           style={{ marginBottom: 16 }}
         />
       )}
@@ -227,7 +238,7 @@ export function EvaluationRunsPage(): ReactElement {
         {(rows ?? []).length === 0 ? (
           <Empty description="还没有跑批记录，先去「评测集」页跑一次" />
         ) : (
-          <ReactECharts option={trendOption} style={{ height: 300 }} notMerge />
+          <Chart option={trendOption} height={300} />
         )}
       </Card>
 
@@ -262,21 +273,21 @@ export function EvaluationRunsPage(): ReactElement {
             ? ''
             : `跑批详情 · ${detail.run.dataset_name ?? ''} · ${new Date(detail.run.started_at).toLocaleString()}`
         }
-        width={860}
+        size={860}
         onClose={() => setDetail(null)}
-        destroyOnClose
+        destroyOnHidden
       >
         {detail !== null && (
           <>
             <Space size={24} wrap style={{ marginBottom: 16 }}>
-              {DIMENSIONS.map((d) => (
+              {dimensions.map((d) => (
                 <div key={d.key}>
                   <Text type="secondary" style={{ fontSize: 12 }}>
                     {d.label}
                   </Text>
                   <div style={{ fontSize: 20, fontWeight: 600 }}>
                     {detail.run[d.key] === null ? '—' : detail.run[d.key]?.toFixed(2)}
-                    <span style={{ fontSize: 12, fontWeight: 400, color: 'rgba(0,0,0,0.45)' }}>
+                    <span style={{ fontSize: 12, fontWeight: 400, color: token.colorTextTertiary }}>
                       {' '}
                       / 5
                     </span>
@@ -310,7 +321,7 @@ export function EvaluationRunsPage(): ReactElement {
             </Space>
 
             {detail.run.error_message !== null && (
-              <Alert type="error" showIcon message="失败原因" description={detail.run.error_message} style={{ marginBottom: 16 }} />
+              <Alert type="error" showIcon title="失败原因" description={detail.run.error_message} style={{ marginBottom: 16 }} />
             )}
 
             {detail.results.length === 0 ? (
@@ -327,7 +338,7 @@ export function EvaluationRunsPage(): ReactElement {
                       {r.answer}
                     </Paragraph>
                     <Space wrap size={4}>
-                      {DIMENSIONS.map((d) => (
+                      {dimensions.map((d) => (
                         <Tag key={d.key} color={r.scores[d.key] >= 4 ? 'green' : r.scores[d.key] >= 3 ? 'gold' : 'red'}>
                           {d.label} {r.scores[d.key]}
                         </Tag>

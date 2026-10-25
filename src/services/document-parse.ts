@@ -5,8 +5,9 @@ import type { DocumentFileType } from '../models';
 /**
  * 文档正文提取 —— 详见 docs/12-c-需求-管理员可配置.md §C1
  *
- * 当前支持 PDF / Markdown / TXT（docs/05-a 的 file_type 里还有一个 'word'，
- * 但 mammoth 没引入，暂时不会产生这个值）。
+ * 当前支持 PDF / Markdown / TXT。**不支持 Word（.docx）** —— 2026-10-25 已把
+ * DOCX 解析从需求里整个删掉（docs/01 §1.1 的上传格式、docs/05-a 的 file_type
+ * ENUM 都去掉了 'word'），迁移 `021-alter-documents-file-type` 收窄了库里的列。
  *
  * pdf-parse v2 的用法：`new PDFParse({ data })` → `getText()` → **必须 destroy()**，
  * 漏掉会泄漏 worker / 文件句柄，进程跑久了会耗尽 fd。
@@ -29,8 +30,6 @@ export async function extractText(
     case 'markdown':
     case 'txt':
       return extractPlainText(absolutePath);
-    case 'word':
-      throw new Error('暂不支持 Word 文档（file_type=word 尚未启用）');
     default: {
       // 类型来自数据库 ENUM，跑到这里说明库里出现了新值
       const unreachable: never = fileType;

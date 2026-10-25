@@ -4,6 +4,7 @@ import {
   Alert,
   Button,
   Card,
+  Checkbox,
   Empty,
   Flex,
   Input,
@@ -35,6 +36,8 @@ import { DefaultChatTransport } from 'ai';
 import { useSearchParams } from 'react-router-dom';
 import type { ChatUIMessage, CitationHit, SessionListItem } from '@shared/types/chat';
 import {
+  approveToolCall,
+  rejectToolCall,
   chatTransportOptions,
   createSession,
   deleteSession,
@@ -47,6 +50,7 @@ import {
 } from '../../lib/customerChat';
 import { PageHeader } from '../../components/shell';
 import { Markdown } from '../../components/Markdown';
+import { ToolCallList, toolCallsOf, type ToolCallRecord } from '../../components/ToolCallList';
 import { formatMessageTime } from '../../lib/datetime';
 
 /**
@@ -82,6 +86,20 @@ function textOf(m: ChatUIMessage): string {
     .join('');
 }
 
+/** 最后一条用户消息的正文 —— 断流后拿它来「重试」 */
+function lastUserTextOf(messages: ChatUIMessage[]): string | null {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const m = messages[i];
+    if (m !== undefined && m.role === 'user') {
+      const t = textOf(m);
+      if (t !== '') {
+        return t;
+      }
+    }
+  }
+  return null;
+}
+
 function thinkingOf(m: ChatUIMessage): string {
   return m.parts
     .filter((p): p is Extract<typeof p, { type: 'reasoning' }> => p.type === 'reasoning')
@@ -98,6 +116,21 @@ function thinkingOf(m: ChatUIMessage): string {
 function moderationOf(m: ChatUIMessage): { blocked: boolean; reason: string } | null {
   for (const part of m.parts) {
     if (part.type === 'data-moderation') {
+      return part.data;
+    }
+  }
+  return null;
+}
+
+/**
+ * 上下文预算裁剪提示 —— 后端在裁掉早期轮次时下发 data-truncated part。
+ *
+ * ⚠️ 这个 part **会落库**（不是 transient），所以刷新页面后历史里也带着它 ——
+ *    之前标了 transient，只在当次流里显示，刷新就没了（历史跟当时屏幕对不上）。
+ */
+function truncatedOf(m: ChatUIMessage): { dropped_turns: number; message: string } | null {
+  for (const part of m.parts) {
+    if (part.type === 'data-truncated') {
       return part.data;
     }
   }
@@ -310,7 +343,7 @@ export function ChatPage(): ReactElement {
       />
 
       {error !== null && (
-        <Alert type="error" showIcon message={error} style={{ marginBottom: 16 }} />
+        <Alert type="error" showIcon title={error} style={{ marginBottom: 16 }} />
       )}
 
       <Flex gap={16} style={{ height: 'calc(100vh - 190px)', minHeight: 420 }}>
@@ -404,7 +437,7 @@ function SessionLoader({
   if (error !== null) {
     return (
       <Flex align="center" justify="center" style={{ flex: 1, padding: 24 }}>
-        <Alert type="error" showIcon message={error} />
+        <Alert type="error" showIcon title={error} />
       </Flex>
     );
   }
@@ -441,11 +474,25 @@ function ChatPanel({
   const [phase, setPhase] = useState<Phase>('idle');
   const [notice, setNotice] = useState<string | null>(null);
   const [feedbackMap, setFeedbackMap] = useState<Record<string, 1 | -1>>({});
+  /** 正在确认中的那次工具调用（B3 HITL） */
+  const [approvingToolId, setApprovingToolId] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
+  // 「思考模式」开关（docs/04-b §4.4）：本轮要不要让模型先推理再回答。
+  // 用 ref 传给 transport —— transport 只在 sessionId 变化时重建，
+  // 直接把 state 塞进去会被冻在创建那一刻。
+  const [thinking, setThinking] = useState(false);
+  const thinkingRef = useRef(false);
+  useEffect(() => {
+    thinkingRef.current = thinking;
+  }, [thinking]);
+
   const transport = useMemo(
-    () => new DefaultChatTransport(chatTransportOptions(sessionId)),
+    () =>
+      new DefaultChatTransport(
+        chatTransportOptions(sessionId, () => ({ thinking: thinkingRef.current })),
+      ),
     [sessionId],
   );
 
@@ -470,6 +517,7 @@ function ChatPanel({
   });
 
   const busy = status === 'submitted' || status === 'streaming';
+  const lastUserText = useMemo(() => lastUserTextOf(messages), [messages]);
 
   /**
    * 自动发出带过来的问题（首页点「推荐问题 / 资料」跳过来）。
@@ -511,6 +559,56 @@ function ChatPanel({
     setPhase('retrieving');
     void sendMessage({ text });
   }, [busy, input, sendMessage]);
+
+  /**
+   * 确认一次敏感工具调用（B3 HITL）。
+   *
+   * 后端的闸门在工具执行**之前**就把调用拦下了 —— 工具并没有真的跑，
+   * 模型拿到的是一个「需要确认」的工具结果。所以这里点确认之后要**让模型再调一次**
+   *（同样的参数），这次闸门放行，工具才真的执行。
+   *
+   * 跟随的用户消息只写「确认执行」（自然一点）；
+   * **「请再调一次」这件事由后端在系统提示词里提醒**
+   * （见 shared/prompts/chat/tools.ts 的「待执行的确认」段）——
+   * 光靠用户这一句话，模型可能回一句「好的」就完了，工具还是没跑。
+   */
+  const onApproveTool = useCallback(
+    async (call: ToolCallRecord): Promise<void> => {
+      setApprovingToolId(call.tool_call_id);
+      try {
+        await approveToolCall(sessionId, call.tool_name, call.args);
+        message.success('已确认，正在让 AI 继续执行');
+        void sendMessage({ text: '确认执行' });
+      } catch (err: unknown) {
+        message.error(errorMessage(err, '确认失败'));
+      } finally {
+        setApprovingToolId(null);
+      }
+    },
+    [sessionId, sendMessage],
+  );
+
+  /**
+   * 取消一次敏感工具调用（用户反悔）。
+   *
+   * 取消之后闸门会回「用户拒绝执行这个操作」，模型如实告诉用户，
+   * **不会再问第三次** —— 所以这里也发一句话过去，让模型立刻收尾。
+   */
+  const onRejectTool = useCallback(
+    async (call: ToolCallRecord): Promise<void> => {
+      setApprovingToolId(call.tool_call_id);
+      try {
+        await rejectToolCall(sessionId, call.tool_name, call.args);
+        message.success('已取消，AI 不会再执行这次调用');
+        void sendMessage({ text: '取消这个操作，不用执行了' });
+      } catch (err: unknown) {
+        message.error(errorMessage(err, '取消失败'));
+      } finally {
+        setApprovingToolId(null);
+      }
+    },
+    [sessionId, sendMessage],
+  );
 
   const onFeedback = useCallback(
     async (messageId: string, value: 1 | -1): Promise<void> => {
@@ -576,6 +674,9 @@ function ChatPanel({
                   setNotice(null);
                   regenerate();
                 }}
+                onApproveTool={(call) => void onApproveTool(call)}
+                onRejectTool={(call) => void onRejectTool(call)}
+                approvingToolId={approvingToolId}
               />
             ),
           )
@@ -588,7 +689,7 @@ function ChatPanel({
           <Alert
             type="info"
             showIcon
-            message={notice}
+            title={notice}
             closable
             onClose={() => setNotice(null)}
             style={{ marginBottom: 8 }}
@@ -598,10 +699,28 @@ function ChatPanel({
           <Alert
             type="error"
             showIcon
-            message={streamErrorMessage(error, '请求失败，请稍后重试')}
+            title={streamErrorMessage(error, '请求失败，请稍后重试')}
+            action={
+              // 断流后的「重试」：把刚才那条问题重发一遍。
+              // ⚠️ 不做**自动**重试 —— 流断的时候上游可能已经算过 token 了，
+              //    自动重发等于悄悄多花一次钱。让人点一下更保险。
+              lastUserText !== null ? (
+                <Button size="small" onClick={() => void sendMessage({ text: lastUserText })}>
+                  重试
+                </Button>
+              ) : undefined
+            }
             style={{ marginBottom: 8 }}
           />
         )}
+        <Flex gap={12} align="center" style={{ marginBottom: 8 }}>
+          <Checkbox checked={thinking} onChange={(e) => setThinking(e.target.checked)}>
+            思考模式
+          </Checkbox>
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            开启后 AI 先推理再回答（折叠在「思考过程」里）
+          </Text>
+        </Flex>
         <Flex gap={8} align="flex-end">
           <Input.TextArea
             value={input}
@@ -676,6 +795,9 @@ function AssistantBubble({
   onFeedback,
   onCopy,
   onRegenerate,
+  onApproveTool,
+  onRejectTool,
+  approvingToolId,
 }: {
   message: ChatUIMessage;
   busy: boolean;
@@ -683,12 +805,19 @@ function AssistantBubble({
   onFeedback: (value: 1 | -1) => void;
   onCopy: () => void;
   onRegenerate: () => void;
+  /** 确认一次敏感工具调用（B3 HITL） */
+  onApproveTool?: ((call: ToolCallRecord) => void) | undefined;
+  /** 取消一次敏感工具调用 */
+  onRejectTool?: ((call: ToolCallRecord) => void) | undefined;
+  approvingToolId?: string | null | undefined;
 }): ReactElement {
   const { token } = theme.useToken();
   const text = textOf(msg);
   const thinking = thinkingOf(msg);
   const citations = citationsOf(msg);
   const moderation = moderationOf(msg);
+  const toolCalls = toolCallsOf(msg);
+  const truncated = truncatedOf(msg);
   // 没过审的回答：正文已经被后端拦下，这里不渲染原文，只显示拦截提示
   const blocked = moderation !== null && moderation.blocked;
   const isStreaming = busy && text === '';
@@ -729,7 +858,25 @@ function AssistantBubble({
           </details>
         ))}
 
+      {truncated !== null && (
+        <Alert
+          type="info"
+          showIcon
+          title={truncated.message}
+          style={{ fontSize: 12 }}
+        />
+      )}
+
       {citations !== null && citations.length > 0 && <CitationList hits={citations} />}
+
+      {toolCalls.length > 0 && (
+        <ToolCallList
+          calls={toolCalls}
+          onApprove={onApproveTool}
+          onReject={onRejectTool}
+          approvingId={approvingToolId}
+        />
+      )}
 
       {isStreaming ? (
         <Space>
@@ -740,7 +887,7 @@ function AssistantBubble({
         <Alert
           type="warning"
           showIcon
-          message={moderation?.reason ?? '该回答未通过内容审核，已被拦截'}
+          title={moderation?.reason ?? '该回答未通过内容审核，已被拦截'}
           description="回答内容触发了安全策略，已被拦截且不会保存到对话记录。"
         />
       ) : (

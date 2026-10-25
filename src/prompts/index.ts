@@ -19,24 +19,15 @@ import { estimateTokens } from '../lib/token-estimate';
  * 只在这里 import 后端专有的东西（logger / token 估算），shared/ 那边保持零依赖。
  */
 
-/** 租户 settings 里可覆盖的字段（与 src/models/Tenant.ts 的 TenantSettings 对齐） */
-export interface PromptOverrides {
-  /** 提示词版本号；本期只认默认版本，其他值静默回落 */
-  prompt_version?: string;
-  [key: string]: unknown;
-}
-
 export interface ResolvedPrompt {
   /** 渲染好的系统提示词正文 */
   text: string;
   /** 实际生效的版本号 */
   version: string;
-  /** 是否发生了回落（认不出的版本号）—— 调用方可记日志 */
-  fellBack: boolean;
 }
 
 /**
- * 按租户设置挑提示词。
+ * 内置默认提示词。
  *
  * ⚠️ **这是兜底路径，不是主路径**：
  * 租户自带的提示词正文由 `src/services/prompt-registry.ts` 从 `prompt_versions` 表解析，
@@ -45,40 +36,24 @@ export interface ResolvedPrompt {
  * 走到这里说明**没拿到租户正文** —— 常见原因是配置指向的版本号在库里不存在
  * （版本被删了 / 配置写错了）。此时回落内置默认并 warn 一行，不报错：
  * 对终端用户来说「用默认提示词答错了」远好过「整轮对话 500」。
+ *
+ * ⚠️ 2026-10-25：**不再读 `tenants.settings`**。
+ * 那个 JSON 列从来没有写入路径（迁移 013 已经把租户配置搬进 `tenant_settings` KV 表），
+ * 读它永远拿到 null —— 留着只会让人以为「租户提示词版本走的是 settings 列」。
  */
-export function resolvePrompt(
-  tenantName: string,
-  settings: PromptOverrides | null,
-): ResolvedPrompt {
-  const requested = settings?.prompt_version;
-  if (requested === undefined || requested === DEFAULT_PROMPT_VERSION) {
-    return {
-      text: renderSystemPrompt(DEFAULT_SYSTEM_PROMPT, tenantName),
-      version: DEFAULT_PROMPT_VERSION,
-      fellBack: false,
-    };
-  }
-
-  logger.warn(
-    { tenantName, requested },
-    '租户配置的提示词版本没有解析出正文（版本可能已被删除），回落内置默认',
-  );
+export function resolvePrompt(tenantName: string): ResolvedPrompt {
   return {
     text: renderSystemPrompt(DEFAULT_SYSTEM_PROMPT, tenantName),
     version: DEFAULT_PROMPT_VERSION,
-    fellBack: true,
   };
 }
 
 export interface BuildPromptInput {
   /** 租户显示名，替换模板里的 {{tenantName}} */
   tenantName: string;
-  /** 租户级设置（可为空） */
-  settings: PromptOverrides | null;
   /**
    * 租户自定义的提示词正文（docs/12-c §C3，在 prompt_versions 表里）。
-   * 给了就用它、忽略 settings.prompt_version —— 正文已经由
-   * src/services/prompt-registry.ts 解析好了，这里只负责拼资料段。
+   * 给了就用它 —— 正文已经由 src/services/prompt-registry.ts 解析好了，这里只负责拼资料段。
    */
   overrideContent?: string | null;
   /**
@@ -102,6 +77,18 @@ export interface BuildPromptInput {
   memoryText?: string | null;
   /** 已按相关度降序、且过了 token 预算裁剪的检索片段 */
   hits: Parameters<typeof renderRagContext>[0];
+  /**
+   * 可用工具段（B3 工具调用，见 shared/prompts/chat/tools.ts）。
+   * 空串 / null = 这个租户没有启用任何工具。
+   *
+   * ⚠️ **单独注入，不能烤进基础提示词** —— 租户自定义提示词会整体替换 base，
+   * 烤进去的话租户一改提示词工具就消失了，模型会以为没有工具可用。
+   *
+   * 位置在 base 之后、内容块（摘要 / 记忆 / 资料）之前：
+   * 工具段是**能力声明**（不是证据），而三段内容块要保持在末尾连续 ——
+   * 「位置越靠后模型越容易当成当下的依据」，摘要 / 记忆不能让它们跟资料段脱节。
+   */
+  toolsText?: string | null;
   /** 检索为空时的降级文案（区分「库是空的」和「没命中」） */
   emptyNotice?: string;
   /** 系统提示词的 token 上限；超了硬截断并 warn */
@@ -130,9 +117,8 @@ export function buildPrompt(input: BuildPromptInput): BuiltPrompt {
       ? {
           text: renderSystemPrompt(override, input.tenantName),
           version: 'tenant',
-          fellBack: false,
         }
-      : resolvePrompt(input.tenantName, input.settings);
+      : resolvePrompt(input.tenantName);
   const rag = renderRagContext(input.hits, input.emptyNotice ?? NO_HITS_NOTICE);
 
   let baseText = base.text;
@@ -150,7 +136,7 @@ export function buildPrompt(input: BuildPromptInput): BuiltPrompt {
 
   return {
     ...base,
-    systemText: `${baseText}${input.summaryText ?? ''}${input.memoryText ?? ''}${rag.text}`,
+    systemText: `${baseText}${input.toolsText ?? ''}${input.summaryText ?? ''}${input.memoryText ?? ''}${rag.text}`,
     rag,
     truncatedSystem,
   };

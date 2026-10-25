@@ -112,12 +112,12 @@ export function SystemTenantDetailPage(): ReactElement {
         >
           返回列表
         </Button>
-        <Alert type="error" showIcon message={errMsg} />
+        <Alert type="error" showIcon title={errMsg} />
       </div>
     );
   }
   if (data === null) {
-    return <Alert showIcon message="加载中..." type="info" />;
+    return <Alert showIcon title="加载中..." type="info" />;
   }
 
   const onPatch = async (values: {
@@ -302,7 +302,7 @@ export function SystemTenantDetailPage(): ReactElement {
           </Card>
 
           <Card title="启停 & 到期" style={{ borderRadius: 12 }}>
-            <Space direction="vertical" size={16} style={{ width: '100%' }}>
+            <Space orientation="vertical" size={16} style={{ width: '100%' }}>
               <div>
                 <Text type="secondary" style={{ fontSize: 13 }}>
                   状态
@@ -388,7 +388,7 @@ export function SystemTenantDetailPage(): ReactElement {
         <Col xs={24}>
           <Card title="初始 admin 账号" style={{ borderRadius: 12 }}>
             {data.admin === null ? (
-              <Alert type="error" showIcon message="该租户没有 admin 账号（异常状态）" />
+              <Alert type="error" showIcon title="该租户没有 admin 账号（异常状态）" />
             ) : (
               <Row gutter={[16, 16]}>
                 <Col xs={24} md={16}>
@@ -423,7 +423,7 @@ export function SystemTenantDetailPage(): ReactElement {
                   </Descriptions>
                 </Col>
                 <Col xs={24} md={8}>
-                  <Space direction="vertical" size={8}>
+                  <Space orientation="vertical" size={8}>
                     <Button
                       danger
                       block
@@ -453,7 +453,7 @@ export function SystemTenantDetailPage(): ReactElement {
           resetForm.resetFields();
           setResetOpen(false);
         }}
-        destroyOnClose
+        destroyOnHidden
       >
         <Form form={resetForm} layout="vertical">
           <Form.Item
@@ -476,7 +476,7 @@ export function SystemTenantDetailPage(): ReactElement {
           expiresForm.resetFields();
           setExpiresOpen(false);
         }}
-        destroyOnClose
+        destroyOnHidden
       >
         <Form form={expiresForm} layout="vertical">
           <Form.Item

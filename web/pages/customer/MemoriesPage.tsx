@@ -74,7 +74,7 @@ const CATEGORY_COLOR: Record<MemoryCategory, string> = {
  *  - 删除 = 归档（软删），进「已删除」那个分组，还能恢复
  *  - 彻底删除 = 物理删，**不可恢复**。用户行使「删除我的全部个人数据」的权利时用这个
  *
- * UI 详见 docs/04-b-ui-登录与聊天挂件.md §4.11
+ * UI 详见 docs/04-b-ui-登录与聊天挂件.md §4.9
  */
 export function CustomerMemoriesPage(): ReactElement {
   const [rows, setRows] = useState<UserMemoryItem[] | null>(null);
@@ -391,7 +391,7 @@ export function CustomerMemoriesPage(): ReactElement {
       />
 
       {errMsg !== null && (
-        <Alert type="error" showIcon message={errMsg} style={{ marginBottom: 16 }} />
+        <Alert type="error" showIcon title={errMsg} style={{ marginBottom: 16 }} />
       )}
 
       <Card size="small" style={{ marginBottom: 16 }}>
@@ -473,7 +473,7 @@ export function CustomerMemoriesPage(): ReactElement {
           setCreatingOpen(false);
           createForm.resetFields();
         }}
-        destroyOnClose
+        destroyOnHidden
       >
         <Form form={createForm} layout="vertical" preserve={false}>
           <Form.Item
@@ -504,7 +504,7 @@ export function CustomerMemoriesPage(): ReactElement {
         confirmLoading={editSubmitting}
         onOk={submitEdit}
         onCancel={() => setEditing(null)}
-        destroyOnClose
+        destroyOnHidden
       >
         <Form form={editForm} layout="vertical" preserve={false}>
           <Form.Item

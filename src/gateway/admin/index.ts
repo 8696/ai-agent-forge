@@ -15,4 +15,6 @@ export { adminObservabilityRouter } from './observability-routes';
 export { adminEvaluationRouter } from './evaluation-routes';
 export { adminMemoryRouter } from './memory-routes';
 export { adminAuditRouter } from './audit-routes';
+export { adminToolRouter } from './tool-routes';
+export { adminToolLogRouter } from './tool-log-routes';
 export { requireAdmin } from './middleware';

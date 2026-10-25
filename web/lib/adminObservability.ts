@@ -1,4 +1,5 @@
 import { adminApi } from './adminApi';
+import { apiErrorMessage } from './apiError';
 
 /**
  * admin 观测 API 客户端 —— 对应 src/gateway/admin/observability-routes.ts
@@ -141,17 +142,5 @@ export async function fetchSummary(): Promise<ObservabilitySummary> {
  * 与 adminKnowledge.ts / adminConfig.ts 的同名函数同构。
  */
 export function observabilityErrorMessage(err: unknown, fallback: string): string {
-  const e = err as {
-    response?: { status?: number; data?: { message?: string } };
-    message?: string;
-  };
-  const status = e.response?.status;
-  const serverMessage = e.response?.data?.message;
-  if (status !== undefined && serverMessage !== undefined) {
-    return serverMessage;
-  }
-  if (status !== undefined) {
-    return `${fallback}（HTTP ${status}）`;
-  }
-  return e.message ?? fallback;
+  return apiErrorMessage(err, fallback);
 }

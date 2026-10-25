@@ -32,11 +32,19 @@ baseStyle.textContent = `
   html[data-theme='dark'] body { background: #141414; }
   /* 让 AntD 的滚动条更克制 */
   *::-webkit-scrollbar { width: 8px; height: 8px; }
-  *::-webkit-scrollbar-thumb {
+  /* 滚动条颜色跟着深色模式走 —— 写死黑的话，暗色下几乎看不见。
+     这里不能用 theme.useToken()（全局样式在 React 之外），
+     所以沿用本文件已有的 html[data-theme='...'] 写法。 */
+  html[data-theme='light'] *::-webkit-scrollbar-thumb {
     background: rgba(0,0,0,0.18);
     border-radius: 8px;
   }
-  *::-webkit-scrollbar-thumb:hover { background: rgba(0,0,0,0.28); }
+  html[data-theme='light'] *::-webkit-scrollbar-thumb:hover { background: rgba(0,0,0,0.28); }
+  html[data-theme='dark'] *::-webkit-scrollbar-thumb {
+    background: rgba(255,255,255,0.18);
+    border-radius: 8px;
+  }
+  html[data-theme='dark'] *::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.28); }
   *::-webkit-scrollbar-track { background: transparent; }
 `;
 document.head.appendChild(baseStyle);

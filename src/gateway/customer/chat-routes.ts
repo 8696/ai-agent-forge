@@ -34,6 +34,12 @@ import { guardUserInput } from '../../services/security-guard';
 import { getBudgetStatus } from '../../services/cost-tracking';
 import { getSettingValue } from '../../services/tenant-settings';
 import { startTrace, type TraceKind } from '../../services/trace';
+import { resolveTenantTools } from '../../tools/resolve';
+import {
+  grantToolApproval,
+  loadToolApprovals,
+  rejectToolApproval,
+} from '../../services/tool-approvals';
 
 /**
  * customer 对话路由 —— 详见 docs/12-b-需求-ai对话能力.md §B1（多轮对话 + LLM 流式）
@@ -319,6 +325,27 @@ export async function runChatTurn(options: ChatTurnOptions): Promise<ChatTurnRes
     //      里面带「摘要覆盖到哪条消息为止」的边界，用来把已经摘要过的历史切掉。
     const summaryState = await loadSummaryState(session.id, session.tenant_id);
 
+    // 8.7) 工具（B3 工具调用）。同样在开流之前查好 ——
+    //      查库失败要能返 500，而不是变成流内 error。
+    //      这里只查「本租户启用的工具」—— 别的租户注册的工具永远不会出现在这里。
+    const tools = await resolveTenantTools(session.tenant_id);
+
+    // 8.8) 用户对敏感工具的处置（B3 HITL）。同样在开流之前查好。
+    //      keys        = 已批准的（闸门放行用）
+    //      rejections  = 用户取消过的（闸门回「用户拒绝」）
+    //      approvedArgs = 工具名 → 用户确认的那份入参（模型改参数时回传给它）
+    //      pendingToolApprovals = 提示词里的提醒（已确认的「请再调一次」、
+    //                            已取消的「不要再调」）
+    const approvals = await loadToolApprovals(session.id, session.tenant_id);
+    const toolApprovals = approvals.keys;
+    const toolRejections = approvals.rejections;
+    const toolApprovedArgs = approvals.approvedArgs;
+    const pendingToolApprovals = [...approvals.pending, ...approvals.rejected].map((p) => ({
+      tool_name: p.tool_name,
+      args: p.args,
+      state: p.state === 'rejected' ? ('rejected' as const) : ('approved' as const),
+    }));
+
     // 9) 租户级配置：模型 / 温度 / 缓存开关（§C4）+ 生效的提示词正文（§C3）
     //    都在开流之前查完；租户没配就回落 .env 进程默认 + 内置默认提示词
     const resolvedPrompt = await resolveTenantPrompt(
@@ -335,15 +362,21 @@ export async function runChatTurn(options: ChatTurnOptions): Promise<ChatTurnRes
     const stream = createChatStream({
       session,
       tenantName: tenant.name,
-      tenantSettings: tenant.settings ?? null,
       assistantRowId,
       userText: safeUserText,
       historyRows,
       llm,
+      // 用户本轮点了「思考模式」→ 这一轮开推理（docs/04-b §4.4）
+      thinkingEnabled: parsed.thinking,
       promptContent: resolvedPrompt.origin === 'tenant' ? resolvedPrompt.text : null,
       memoryText,
       summaryState,
       summaryTokenBudget: llm.summaryTokenBudget,
+      tools,
+      toolApprovals,
+      toolRejections,
+      toolApprovedArgs,
+      pendingToolApprovals,
       ip: ctx.ip,
       trace,
     });
@@ -422,6 +455,55 @@ customerChatRouter.post('/sessions/:id/messages', async (ctx) => {
     // 也能避免长检索被 nginx 掐断。
     ...(config.CHAT.KEEPALIVE_MS > 0 ? { keepAliveMs: config.CHAT.KEEPALIVE_MS } : {}),
   });
+});
+
+// ===== 工具确认（B3 · HITL）=====
+
+const toolApprovalBodySchema = z.object({
+  /** 注册名（模型调用的名字） */
+  tool_name: z.string().trim().min(1).max(64),
+  /** 模型当时给的入参 —— 批准绑定到「工具名 + 这份入参」 */
+  args: z.unknown(),
+});
+
+/**
+ * POST /sessions/:id/tool-approvals/reject —— 用户**取消**一次敏感工具调用
+ *
+ * 点了「确认执行」还能反悔：拒绝之后闸门会回「用户拒绝执行这个操作」，
+ * 模型如实告诉用户，**不会再问第三次**。
+ */
+customerChatRouter.post('/sessions/:id/tool-approvals/reject', async (ctx) => {
+  const user = currentUser(ctx);
+  const actor = actorFromJwt(user);
+  const sessionId = ctx.params.id ?? '';
+  const input = toolApprovalBodySchema.parse(ctx.request.body ?? {});
+
+  // 会话归属（跨租户 / 跨用户一律 404）
+  await loadOwnedSession(sessionId, actor);
+
+  const rejected = await rejectToolApproval(sessionId, actor.tenantId, input.tool_name, input.args);
+  ctx.body = { ok: true, tool_name: input.tool_name, approval_key: rejected.key };
+});
+
+/**
+ * POST /sessions/:id/tool-approvals —— 用户确认一次敏感工具调用
+ *
+ * 前端在工具调用卡片上点「确认执行」时调它。确认记录写进会话的 metadata，
+ * 下一次模型用**相同参数**再调这个工具时闸门就放行（见 src/tools/execute.ts）。
+ *
+ * 入参变了就是另一件事 —— 批准不通用，模型换参数要重新确认。
+ */
+customerChatRouter.post('/sessions/:id/tool-approvals', async (ctx) => {
+  const user = currentUser(ctx);
+  const actor = actorFromJwt(user);
+  const sessionId = ctx.params.id ?? '';
+  const input = toolApprovalBodySchema.parse(ctx.request.body ?? {});
+
+  // 会话归属（跨租户 / 跨用户一律 404）
+  await loadOwnedSession(sessionId, actor);
+
+  const granted = await grantToolApproval(sessionId, actor.tenantId, input.tool_name, input.args);
+  ctx.body = { ok: true, tool_name: input.tool_name, approval_key: granted.key };
 });
 
 // ===== 反馈 =====

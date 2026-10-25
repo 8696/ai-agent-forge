@@ -1,5 +1,5 @@
 import type { ReactElement, ReactNode } from 'react';
-import { Card, Space, Typography } from 'antd';
+import { Button, Card, Space, Tooltip, Typography, theme } from 'antd';
 import { BrandMark } from './BrandMark';
 import { useThemeMode } from '../../lib/themeMode';
 import { pageGradient } from '../../theme';
@@ -30,6 +30,8 @@ interface AuthShellProps {
 export function AuthShell(props: AuthShellProps): ReactElement {
   // 整页渐变要跟深色模式走 —— 写死浅色渐变的话，暗色下登录页是一片白
   const mode = useThemeMode();
+  // 颜色走 antd token —— 写死浅色的话，深色模式下几乎看不见
+  const { token } = theme.useToken();
 
   return (
     <div
@@ -45,7 +47,7 @@ export function AuthShell(props: AuthShellProps): ReactElement {
     >
       {/* 顶部品牌 */}
       <div style={{ marginBottom: 28, textAlign: 'center' }}>
-        <Space direction="vertical" size={10} align="center">
+        <Space orientation="vertical" size={10} align="center">
           <BrandMark size="lg" variant={mode === 'dark' ? 'dark' : 'light'} />
           {props.badge !== undefined && props.badge}
         </Space>
@@ -55,11 +57,11 @@ export function AuthShell(props: AuthShellProps): ReactElement {
       <Card
         style={{
           width: '100%',
-          maxWidth: 420,
+          maxWidth: 400, // docs/04-b §3.4「卡片宽度：400px」
           borderRadius: 12,
           boxShadow:
             '0 12px 32px rgba(15, 23, 42, 0.08), 0 2px 6px rgba(15, 23, 42, 0.04)',
-          border: '1px solid rgba(0,0,0,0.04)',
+          border: `1px solid ${token.colorFillTertiary}`,
         }}
         styles={{ body: { padding: '32px 28px' } }}
       >
@@ -74,6 +76,16 @@ export function AuthShell(props: AuthShellProps): ReactElement {
           )}
         </div>
         {props.children}
+
+        {/* 「忘记密码」—— v1 不实现，UI 留位（docs/04-b §3.4）。
+            灰色禁用 + tooltip 说明为什么不能点，别让用户以为功能坏了。 */}
+        <div style={{ textAlign: 'center', marginTop: 18 }}>
+          <Tooltip title="请联系租户管理员重置密码">
+            <Button type="link" size="small" disabled style={{ padding: 0 }}>
+              忘记密码？
+            </Button>
+          </Tooltip>
+        </div>
       </Card>
 
       {/* 底部 */}
@@ -82,7 +94,7 @@ export function AuthShell(props: AuthShellProps): ReactElement {
           marginTop: 28,
           textAlign: 'center',
           fontSize: 12,
-          color: 'rgba(0,0,0,0.45)',
+          color: token.colorTextTertiary,
           display: 'flex',
           flexDirection: 'column',
           alignItems: 'center',

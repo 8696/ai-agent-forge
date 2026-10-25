@@ -12,7 +12,7 @@ import {
   renderSummaryBlock,
   SUMMARY_BLOCK_HEADER,
 } from '@shared/prompts/chat/summary';
-import { SUMMARY_SYSTEM_PROMPT, renderSummaryInput, type SummaryTurn } from '../prompts/summary';
+import { buildSummarySystemPrompt, renderSummaryInput, type SummaryTurn } from '../prompts/summary';
 import { recordLlmUsage } from './cost-tracking';
 import { getSettingValue } from './tenant-settings';
 import { resolveSummaryLlm, type ResolvedLlmSettings } from './llm-settings';
@@ -521,7 +521,7 @@ async function runSummaryUpdate(params: SummaryUpdateParams): Promise<SummaryUpd
       () =>
         generateText({
           model: anthropic(summaryLlm.model),
-          system: SUMMARY_SYSTEM_PROMPT,
+          system: buildSummarySystemPrompt(config.CHAT.SUMMARY_TARGET_CHARS),
           messages: [
             {
               role: 'user',

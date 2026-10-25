@@ -381,3 +381,55 @@ describe('prompt_version · 提示词生效指针（C3）', () => {
     expect(merged.promptVersion).toBeNull();
   });
 });
+
+/**
+ * 「一行一条」的多行列表配置 —— 目前只有「首页推荐问题」用它
+ *
+ * ⚠️ 2026-10-25 补：上限**一直有实现**（写入路径 `coerceSettingValue` 里），
+ *    但没有测试锁住 —— 哪天有人把那段校验删了，测试不会红。
+ */
+describe('多行列表配置 · 行数 / 每行长度上限', () => {
+  const spec = SETTINGS_REGISTRY.find((s) => s.key === 'home_suggested_questions');
+  const specOf = (): SettingSpec => {
+    if (spec === undefined) throw new Error('找不到 home_suggested_questions 配置项');
+    return spec;
+  };
+
+  it('推荐问题确实是 multiline 类型', () => {
+    expect(specOf().type).toBe('string');
+    expect(specOf().multiline).toBe(true);
+  });
+
+  it('8 条以内正常存（去掉空行和首尾空白）', () => {
+    const raw = ['  年假几天  ', '', '报销怎么走', '  ', '迟到怎么算'].join('\n');
+    const stored = coerceSettingValue(specOf(), raw);
+    expect(stored).toBe('年假几天\n报销怎么走\n迟到怎么算');
+  });
+
+  it('超过 8 条 → 400', () => {
+    const raw = Array.from({ length: 9 }, (_, i) => `问题${i + 1}`).join('\n');
+    expect(() => coerceSettingValue(specOf(), raw)).toThrow(/最多 8 行/);
+  });
+
+  it('正好 8 条 → 通过（边界值别误伤）', () => {
+    const raw = Array.from({ length: 8 }, (_, i) => `问题${i + 1}`).join('\n');
+    expect(coerceSettingValue(specOf(), raw).split('\n')).toHaveLength(8);
+  });
+
+  it('每条超过 100 字 → 400', () => {
+    const raw = 'x'.repeat(101);
+    expect(() => coerceSettingValue(specOf(), raw)).toThrow(/每行不能超过 100/);
+  });
+
+  it('正好 100 字 → 通过（边界值别误伤）', () => {
+    const raw = 'x'.repeat(100);
+    expect(coerceSettingValue(specOf(), raw)).toHaveLength(100);
+  });
+
+  it('整串超过 maxLength → 400（先于逐行校验）', () => {
+    // 21 行 × 100 字 = 2100+ > maxLength 2000
+    // （maxLength 的校验排在 multiline 校验之前，所以先撞它）
+    const raw = Array.from({ length: 21 }, () => 'y'.repeat(100)).join('\n');
+    expect(() => coerceSettingValue(specOf(), raw)).toThrow(/不能超过 2000 个字符/);
+  });
+});

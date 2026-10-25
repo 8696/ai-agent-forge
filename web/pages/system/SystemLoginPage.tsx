@@ -1,7 +1,7 @@
 import type { ReactElement } from 'react';
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Alert, Button, Form, Input, Tag } from 'antd';
+import { Alert, Button, Form, Input, Tag, theme } from 'antd';
 import { LockOutlined, MailOutlined, ControlOutlined } from '@ant-design/icons';
 import { systemApi } from '../../lib/systemApi';
 import { setToken } from '../../lib/apiFactory';
@@ -19,6 +19,8 @@ export function SystemLoginPage(): ReactElement {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(false);
   const [errMsg, setErrMsg] = useState<string | null>(null);
+  // 颜色走 antd token —— 写死浅色的话，深色模式下几乎看不见
+  const { token } = theme.useToken();
 
   const onFinish = async (values: FormValues): Promise<void> => {
     setLoading(true);
@@ -39,7 +41,7 @@ export function SystemLoginPage(): ReactElement {
     <AuthShell
       roleLabel="system 子系统 · SaaS 平台方"
       title="平台管理登录"
-      description="SaaS 平台方账号 · 跨租户运营"
+      description="没有 SaaS 平台方账号？联系系统部署方"
       badge={
         <Tag color="magenta" style={{ margin: 0, fontWeight: 500 }}>
           <ControlOutlined style={{ marginRight: 4 }} />
@@ -51,7 +53,7 @@ export function SystemLoginPage(): ReactElement {
         <Alert
           type="error"
           showIcon
-          message={errMsg}
+          title={errMsg}
           style={{ marginBottom: 18 }}
         />
       )}
@@ -72,7 +74,7 @@ export function SystemLoginPage(): ReactElement {
           ]}
         >
           <Input
-            prefix={<MailOutlined style={{ color: 'rgba(0,0,0,0.45)' }} />}
+            prefix={<MailOutlined style={{ color: token.colorTextTertiary }} />}
             placeholder="你的邮箱"
             autoComplete="email"
           />
@@ -84,7 +86,7 @@ export function SystemLoginPage(): ReactElement {
           rules={[{ required: true, message: '请输入密码' }]}
         >
           <Input.Password
-            prefix={<LockOutlined style={{ color: 'rgba(0,0,0,0.45)' }} />}
+            prefix={<LockOutlined style={{ color: token.colorTextTertiary }} />}
             placeholder="密码"
             autoComplete="current-password"
           />

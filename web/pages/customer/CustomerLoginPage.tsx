@@ -1,11 +1,12 @@
 import type { ReactElement } from 'react';
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { Alert, Button, Form, Input, Tag } from 'antd';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import { Alert, Button, Form, Input, Tag, theme } from 'antd';
 import { LockOutlined, MailOutlined, UserOutlined } from '@ant-design/icons';
 import { customerApi } from '../../lib/customerApi';
 import { setToken } from '../../lib/apiFactory';
 import { AuthShell } from '../../components/shell/AuthShell';
+import { TENANT_CODE_PATTERN, TENANT_CODE_HINT } from '@shared/validation/tenant-code';
 
 interface FormValues {
   email: string;
@@ -18,8 +19,13 @@ interface FormValues {
  */
 export function CustomerLoginPage(): ReactElement {
   const navigate = useNavigate();
+  // 租户号预填（?tenant_code=xxx）—— 公开挂件的「登录」按钮会带过来，
+  // 访客不用自己猜租户号（docs/04-a §2.3「用户头像菜单：登录」）
+  const [searchParams] = useSearchParams();
   const [loading, setLoading] = useState(false);
   const [errMsg, setErrMsg] = useState<string | null>(null);
+  // 颜色走 antd token —— 写死浅色的话，深色模式下几乎看不见
+  const { token } = theme.useToken();
 
   const onFinish = async (values: FormValues): Promise<void> => {
     setLoading(true);
@@ -49,7 +55,7 @@ export function CustomerLoginPage(): ReactElement {
     <AuthShell
       roleLabel="customer 子系统 · 租户前台"
       title="用户登录"
-      description="租户 customer 入口 · 需带租户号"
+      description="没有账号？联系你的租户管理员"
       badge={
         <Tag color="blue" style={{ margin: 0, fontWeight: 500 }}>
           <UserOutlined style={{ marginRight: 4 }} />
@@ -61,7 +67,7 @@ export function CustomerLoginPage(): ReactElement {
         <Alert
           type="error"
           showIcon
-          message={errMsg}
+          title={errMsg}
           style={{ marginBottom: 18 }}
         />
       )}
@@ -69,6 +75,7 @@ export function CustomerLoginPage(): ReactElement {
       <Form<FormValues>
         layout="vertical"
         onFinish={onFinish}
+        initialValues={{ tenant_code: searchParams.get('tenant_code') ?? '' }}
         disabled={loading}
         requiredMark={false}
         size="large"
@@ -78,11 +85,11 @@ export function CustomerLoginPage(): ReactElement {
           label="租户号"
           rules={[
             { required: true, message: '请输入租户号' },
-            { pattern: /^[a-z0-9-]{3,32}$/, message: '3-32 位，小写字母 / 数字 / 短横线' },
+            { pattern: TENANT_CODE_PATTERN, message: TENANT_CODE_HINT },
           ]}
         >
           <Input
-            prefix={<UserOutlined style={{ color: 'rgba(0,0,0,0.45)' }} />}
+            prefix={<UserOutlined style={{ color: token.colorTextTertiary }} />}
             placeholder="例：acme-corp"
             autoComplete="off"
           />
@@ -97,7 +104,7 @@ export function CustomerLoginPage(): ReactElement {
           ]}
         >
           <Input
-            prefix={<MailOutlined style={{ color: 'rgba(0,0,0,0.45)' }} />}
+            prefix={<MailOutlined style={{ color: token.colorTextTertiary }} />}
             placeholder="你的邮箱"
             autoComplete="email"
           />
@@ -109,7 +116,7 @@ export function CustomerLoginPage(): ReactElement {
           rules={[{ required: true, message: '请输入密码' }]}
         >
           <Input.Password
-            prefix={<LockOutlined style={{ color: 'rgba(0,0,0,0.45)' }} />}
+            prefix={<LockOutlined style={{ color: token.colorTextTertiary }} />}
             placeholder="密码"
             autoComplete="current-password"
           />

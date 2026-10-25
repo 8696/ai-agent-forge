@@ -6,6 +6,8 @@ import {
   Button,
   Card,
   Checkbox,
+  Drawer,
+  Dropdown,
   Empty,
   Flex,
   Input,
@@ -14,28 +16,36 @@ import {
   Tag,
   Tooltip,
   Typography,
+  message,
   theme,
 } from 'antd';
+import type { MenuProps } from 'antd';
 import {
   CloseOutlined,
   CopyOutlined,
-  CustomerServiceOutlined,
+  HistoryOutlined,
   LoadingOutlined,
+  LogoutOutlined,
   PaperClipOutlined,
   PlusOutlined,
   ReloadOutlined,
   SendOutlined,
+  UserOutlined,
 } from '@ant-design/icons';
 import { useChat } from '@ai-sdk/react';
 import { DefaultChatTransport } from 'ai';
 import type { ChatUIMessage, CitationHit } from '@shared/types/chat';
 import { Markdown } from '../../components/Markdown';
+import { ToolCallList, toolCallsOf, type ToolCallRecord } from '../../components/ToolCallList';
 import { formatMessageTime } from '../../lib/datetime';
+import { WidgetCollapsed, WidgetLayout } from '../../layouts/widget/WidgetLayout';
 import {
+  approveWidgetToolCall,
   clearWidgetToken,
   createWidgetSession,
   fetchWidgetInfo,
   readWidgetToken,
+  rejectWidgetToolCall,
   resumeWidgetSession,
   widgetErrorMessage,
   writeWidgetToken,
@@ -70,6 +80,20 @@ function citationsOf(m: ChatUIMessage): CitationHit[] | null {
   return null;
 }
 
+/** 最后一条用户消息的正文 —— 断流后拿它来「重试」 */
+function lastUserTextOf(messages: ChatUIMessage[]): string | null {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const m = messages[i];
+    if (m !== undefined && m.role === 'user') {
+      const t = textOf(m);
+      if (t !== '') {
+        return t;
+      }
+    }
+  }
+  return null;
+}
+
 function textOf(m: ChatUIMessage): string {
   return m.parts
     .filter((p): p is Extract<typeof p, { type: 'text' }> => p.type === 'text')
@@ -91,6 +115,20 @@ function thinkingOf(m: ChatUIMessage): string {
 function moderationOf(m: ChatUIMessage): { blocked: boolean; reason: string } | null {
   for (const part of m.parts) {
     if (part.type === 'data-moderation') {
+      return part.data;
+    }
+  }
+  return null;
+}
+
+/**
+ * 上下文预算裁剪提示 —— 后端在裁掉早期轮次时下发 data-truncated part。
+ *
+ * ⚠️ 这个 part **会落库**（不是 transient），所以刷新页面后历史里也带着它。
+ */
+function truncatedOf(m: ChatUIMessage): { dropped_turns: number; message: string } | null {
+  for (const part of m.parts) {
+    if (part.type === 'data-truncated') {
       return part.data;
     }
   }
@@ -163,67 +201,31 @@ export function WidgetPage(): ReactElement {
         }}
       >
         <Card style={{ maxWidth: 420, width: '100%' }}>
-          <Alert type="error" showIcon message="客服不可用" description={error} />
+          <Alert type="error" showIcon title="客服不可用" description={error} />
         </Card>
       </div>
     );
   }
 
   if (!open) {
-    return (
-      <div style={{ minHeight: '100vh', background: uiToken.colorBgLayout }}>
-        <Tooltip title="打开在线客服" placement="left">
-          <Button
-            type="primary"
-            shape="circle"
-            size="large"
-            icon={<CustomerServiceOutlined />}
-            onClick={() => setOpen(true)}
-            style={{ position: 'fixed', right: 24, bottom: 24, width: 56, height: 56 }}
-          />
-        </Tooltip>
-      </div>
-    );
+    return <WidgetCollapsed onOpen={() => setOpen(true)} />;
   }
 
   return (
-    <div
-      style={{
-        minHeight: '100vh',
-        background: uiToken.colorBgLayout,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        padding: 24,
-      }}
-    >
-      <div
-        style={{
-          width: '100%',
-          maxWidth: 760,
-          height: 'min(720px, calc(100vh - 48px))',
-          display: 'flex',
-          flexDirection: 'column',
-          background: uiToken.colorBgContainer,
-          borderRadius: 12,
-          boxShadow: '0 10px 40px rgba(0, 0, 0, 0.12)',
-          overflow: 'hidden',
-        }}
-      >
-        {initialMessages === null ? (
-          <Flex align="center" justify="center" style={{ flex: 1 }}>
-            <Spin />
-          </Flex>
-        ) : (
-          <WidgetChat
-            tenantCode={tenantCode}
-            tenantName={tenantName}
-            initialMessages={initialMessages}
-            onClose={() => setOpen(false)}
-          />
-        )}
-      </div>
-    </div>
+    <WidgetLayout>
+      {initialMessages === null ? (
+        <Flex align="center" justify="center" style={{ flex: 1 }}>
+          <Spin />
+        </Flex>
+      ) : (
+        <WidgetChat
+          tenantCode={tenantCode}
+          tenantName={tenantName}
+          initialMessages={initialMessages}
+          onClose={() => setOpen(false)}
+        />
+      )}
+    </WidgetLayout>
   );
 }
 
@@ -251,6 +253,8 @@ function WidgetChat({
   const bottomRef = useRef<HTMLDivElement | null>(null);
   /** 当前匿名会话的 token（null = 还没建会话） */
   const tokenRef = useRef<string | null>(null);
+  /** 正在确认 / 取消中的那次工具调用 */
+  const [approvingToolId, setApprovingToolId] = useState<string | null>(null);
 
   const ensureSession = useCallback(async (): Promise<string> => {
     if (tokenRef.current !== null) {
@@ -262,6 +266,56 @@ function WidgetChat({
     return created.token;
   }, [tenantCode]);
 
+  /**
+   * 确认 / 取消一次敏感工具调用（B3 HITL）。
+   *
+   * 挂件是匿名会话，但**会话本身是 token 认领来的**（ensureSession），
+   * 所以这里照样能确认 —— 之前挂件里 AI 说「请确认」，用户点不了任何按钮，
+   * 是个死路。
+   */
+  const onApproveTool = useCallback(
+    async (call: ToolCallRecord): Promise<void> => {
+      setApprovingToolId(call.tool_call_id);
+      try {
+        const token = await ensureSession();
+        await approveWidgetToolCall(tenantCode, token, call.tool_name, call.args);
+        void sendMessage({ text: '确认执行' });
+      } catch (err: unknown) {
+        message.error(widgetErrorMessage(err, '确认失败'));
+      } finally {
+        setApprovingToolId(null);
+      }
+    },
+    [ensureSession, tenantCode],
+  );
+
+  const onRejectTool = useCallback(
+    async (call: ToolCallRecord): Promise<void> => {
+      setApprovingToolId(call.tool_call_id);
+      try {
+        const token = await ensureSession();
+        await rejectWidgetToolCall(tenantCode, token, call.tool_name, call.args);
+        void sendMessage({ text: '取消这个操作，不用执行了' });
+      } catch (err: unknown) {
+        message.error(widgetErrorMessage(err, '取消失败'));
+      } finally {
+        setApprovingToolId(null);
+      }
+    },
+    [ensureSession, tenantCode],
+  );
+
+  // 「历史记录」抽屉（docs/04-a §2.3「用户头像菜单：登录 / 退出 / 历史记录」）
+  const [historyOpen, setHistoryOpen] = useState(false);
+
+  // 「思考模式」开关（docs/04-b §4.4）。用 ref 传进 transport ——
+  // transport 只建一次，直接把 state 塞进去会被冻在创建那一刻。
+  const [thinking, setThinking] = useState(false);
+  const thinkingRef = useRef(false);
+  useEffect(() => {
+    thinkingRef.current = thinking;
+  }, [thinking]);
+
   const transport = useMemo(
     () =>
       new DefaultChatTransport<ChatUIMessage>({
@@ -272,7 +326,8 @@ function WidgetChat({
           return {
             // ⚠️ 用了 prepareSendMessagesRequest 就得自己把 messages / id / trigger 带上
             //    （不接这个回调时 SDK 才自动补）
-            body: { ...body, id, messages, trigger, messageId },
+            // thinking：用户本轮要不要开「思考模式」（docs/04-b §4.4）
+            body: { ...body, id, messages, trigger, messageId, thinking: thinkingRef.current },
             headers: { 'x-widget-token': token },
           };
         },
@@ -301,6 +356,7 @@ function WidgetChat({
     });
 
   const busy = status === 'submitted' || status === 'streaming';
+  const lastUserText = useMemo(() => lastUserTextOf(messages), [messages]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
@@ -341,6 +397,38 @@ function WidgetChat({
         ? '正在组织回答…'
         : null;
 
+  /**
+   * 用户头像菜单（docs/04-a §2.3）—— 公开挂件没有登录态，这三项对应：
+   *   - 历史记录：把当前会话的完整记录摊开看（小弹窗里回看长对话比在主区里滚方便）
+   *   - 登录账号：跳到租户前台登录页（**新标签打开** —— 挂件通常嵌在 iframe 里，
+   *     直接跳会把整个 iframe 换成登录页，访客原来的对话就没了）
+   *   - 退出：忘掉这个浏览器的匿名记录，重新开始
+   */
+  const userMenuItems: MenuProps['items'] = [
+    {
+      key: 'history',
+      icon: <HistoryOutlined />,
+      label: '历史记录',
+      onClick: () => setHistoryOpen(true),
+    },
+    {
+      key: 'login',
+      icon: <UserOutlined />,
+      label: '登录账号',
+      onClick: () => {
+        const url = `/customer/login?tenant_code=${encodeURIComponent(tenantCode)}`;
+        window.open(url, '_blank', 'noopener,noreferrer');
+      },
+    },
+    { type: 'divider' },
+    {
+      key: 'logout',
+      icon: <LogoutOutlined />,
+      label: '退出（清掉本机记录）',
+      onClick: onNewConversation,
+    },
+  ];
+
   return (
     <>
       {/* ===== 页头（docs/04-b §4.1）==== */}
@@ -369,6 +457,11 @@ function WidgetChat({
             新对话
           </Button>
         </Tooltip>
+        <Dropdown menu={{ items: userMenuItems }} trigger={['click']}>
+          <Tooltip title="历史记录 / 登录 / 退出">
+            <Button type="text" size="small" icon={<UserOutlined />} />
+          </Tooltip>
+        </Dropdown>
         <Tooltip title="收起">
           <Button type="text" size="small" icon={<CloseOutlined />} onClick={onClose} />
         </Tooltip>
@@ -402,6 +495,9 @@ function WidgetChat({
                 message={m}
                 busy={busy}
                 onCopy={() => void onCopy(textOf(m))}
+                onApproveTool={(call) => void onApproveTool(call)}
+                onRejectTool={(call) => void onRejectTool(call)}
+                approvingToolId={approvingToolId}
                 onRegenerate={() => {
                   setNotice(null);
                   regenerate();
@@ -419,7 +515,7 @@ function WidgetChat({
           <Alert
             type="info"
             showIcon
-            message={notice}
+            title={notice}
             closable
             onClose={() => setNotice(null)}
             style={{ marginBottom: 8 }}
@@ -429,15 +525,23 @@ function WidgetChat({
           <Alert
             type="error"
             showIcon
-            message={widgetErrorMessage(error, '请求失败，请稍后重试')}
+            title={widgetErrorMessage(error, '请求失败，请稍后重试')}
+            action={
+              // 断流后的「重试」—— 不做自动重试（上游可能已经算过 token 了）
+              lastUserText !== null ? (
+                <Button size="small" onClick={() => void sendMessage({ text: lastUserText })}>
+                  重试
+                </Button>
+              ) : undefined
+            }
             style={{ marginBottom: 8 }}
           />
         )}
 
         <Flex gap={12} align="center" style={{ marginBottom: 8 }} wrap>
-          <Tooltip title="思考模式（本期未开放）">
-            <Checkbox disabled>思考模式</Checkbox>
-          </Tooltip>
+          <Checkbox checked={thinking} onChange={(e) => setThinking(e.target.checked)}>
+            思考模式
+          </Checkbox>
           <Tooltip title="联网搜索（本期未开放）">
             <Checkbox disabled>联网</Checkbox>
           </Tooltip>
@@ -486,6 +590,39 @@ function WidgetChat({
           </Text>
         )}
       </div>
+
+      {/* ===== 历史记录抽屉（docs/04-a §2.3）=====
+          小弹窗里回看长对话比在主消息区里往上滚方便 —— 抽屉是全高的。 */}
+      <Drawer
+        open={historyOpen}
+        onClose={() => setHistoryOpen(false)}
+        title="历史记录"
+        width={Math.min(420, typeof window === 'undefined' ? 420 : window.innerWidth - 40)}
+        styles={{ body: { padding: 16 } }}
+      >
+        {messages.length === 0 ? (
+          <Empty description="还没有对话记录" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+        ) : (
+          <Flex vertical gap={16}>
+            {messages.map((m) =>
+              m.role === 'user' ? (
+                <UserBubble key={m.id} message={m} />
+              ) : (
+                <AssistantBubble
+                  key={m.id}
+                  message={m}
+                  busy={false}
+                  onCopy={() => undefined}
+                  onRegenerate={() => undefined}
+                  onApproveTool={() => undefined}
+                  onRejectTool={() => undefined}
+                  approvingToolId={null}
+                />
+              ),
+            )}
+          </Flex>
+        )}
+      </Drawer>
     </>
   );
 }
@@ -531,17 +668,25 @@ function AssistantBubble({
   busy,
   onCopy,
   onRegenerate,
+  onApproveTool,
+  onRejectTool,
+  approvingToolId,
 }: {
   message: ChatUIMessage;
   busy: boolean;
   onCopy: () => void;
   onRegenerate: () => void;
+  onApproveTool?: ((call: ToolCallRecord) => void) | undefined;
+  onRejectTool?: ((call: ToolCallRecord) => void) | undefined;
+  approvingToolId?: string | null | undefined;
 }): ReactElement {
   const { token: uiToken } = theme.useToken();
   const text = textOf(msg);
   const thinking = thinkingOf(msg);
   const citations = citationsOf(msg);
   const moderation = moderationOf(msg);
+  const truncated = truncatedOf(msg);
+  const toolCalls = toolCallsOf(msg);
   const blocked = moderation !== null && moderation.blocked;
   const isStreaming = busy && text === '';
 
@@ -558,7 +703,7 @@ function AssistantBubble({
               style={{
                 whiteSpace: 'pre-wrap',
                 fontSize: 12,
-                color: 'rgba(0,0,0,0.65)',
+                color: uiToken.colorTextSecondary,
                 marginTop: 4,
                 maxHeight: 260,
                 overflowY: 'auto',
@@ -569,18 +714,33 @@ function AssistantBubble({
           </div>
         ) : (
           <details>
-            <summary style={{ cursor: 'pointer', fontSize: 12, color: 'rgba(0,0,0,0.45)' }}>
+            <summary style={{ cursor: 'pointer', fontSize: 12, color: uiToken.colorTextTertiary }}>
               💭 思考过程
             </summary>
             <Paragraph
-              style={{ whiteSpace: 'pre-wrap', fontSize: 12, color: 'rgba(0,0,0,0.65)', marginTop: 4 }}
+              style={{ whiteSpace: 'pre-wrap', fontSize: 12, color: uiToken.colorTextSecondary, marginTop: 4 }}
             >
               {thinking}
             </Paragraph>
           </details>
         ))}
 
+      {truncated !== null && (
+        <Alert type="info" showIcon title={truncated.message} style={{ fontSize: 12 }} />
+      )}
+
       {citations !== null && citations.length > 0 && <CitationList hits={citations} />}
+
+      {/* 工具调用卡片（B3）。挂件虽然是匿名会话，但会话是 token 认领来的，
+          所以敏感工具照样能确认 / 取消。 */}
+      {toolCalls.length > 0 && (
+        <ToolCallList
+          calls={toolCalls}
+          onApprove={onApproveTool}
+          onReject={onRejectTool}
+          approvingId={approvingToolId}
+        />
+      )}
 
       {isStreaming ? (
         <Space>
@@ -591,7 +751,7 @@ function AssistantBubble({
         <Alert
           type="warning"
           showIcon
-          message={moderation?.reason ?? '该回答未通过内容审核，已被拦截'}
+          title={moderation?.reason ?? '该回答未通过内容审核，已被拦截'}
           description="回答内容触发了安全策略，已被拦截且不会保存到对话记录。"
         />
       ) : (

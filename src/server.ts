@@ -12,6 +12,7 @@ import {
   devProbeRouter,
   systemTenantRouter,
   systemAuthRouter,
+  systemAuditRouter,
   adminUserRouter,
   adminAuthRouter,
   adminKnowledgeRouter,
@@ -20,6 +21,8 @@ import {
   adminEvaluationRouter,
   adminMemoryRouter,
   adminAuditRouter,
+  adminToolRouter,
+  adminToolLogRouter,
   customerAuthRouter,
   customerChatRouter,
   customerMemoryRouter,
@@ -63,6 +66,7 @@ async function bootstrap(): Promise<void> {
   // 业务路由（3 子系统各自独立，auth 自闭环）
   app.use(systemTenantRouter.routes()).use(systemTenantRouter.allowedMethods()); // system 租户管理
   app.use(systemAuthRouter.routes()).use(systemAuthRouter.allowedMethods()); // system login
+  app.use(systemAuditRouter.routes()).use(systemAuditRouter.allowedMethods()); // system 审计日志（跨租户）
   app.use(adminUserRouter.routes()).use(adminUserRouter.allowedMethods()); // admin 用户管理
   app.use(adminAuthRouter.routes()).use(adminAuthRouter.allowedMethods()); // admin login
   app.use(
@@ -81,6 +85,8 @@ async function bootstrap(): Promise<void> {
     adminMemoryRouter.routes(),
   ).use(adminMemoryRouter.allowedMethods()); // admin 用户记忆（B4）
   app.use(adminAuditRouter.routes()).use(adminAuditRouter.allowedMethods()); // admin 审计日志
+  app.use(adminToolRouter.routes()).use(adminToolRouter.allowedMethods()); // admin 工具注册表（C2）
+  app.use(adminToolLogRouter.routes()).use(adminToolLogRouter.allowedMethods()); // admin 工具调用记录
   app.use(customerAuthRouter.routes()).use(customerAuthRouter.allowedMethods()); // customer login
   app.use(customerChatRouter.routes()).use(customerChatRouter.allowedMethods()); // customer 对话（SSE）
   app.use(

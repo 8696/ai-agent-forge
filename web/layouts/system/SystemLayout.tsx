@@ -3,7 +3,13 @@ import { Outlet, useLocation } from 'react-router-dom';
 import { SharedShellLayout } from '../SharedShellLayout';
 import { RequireAuth } from '../../components/RequireAuth';
 import type { SidebarItem } from '../SharedShellLayout';
-import { DashboardOutlined, ShopOutlined } from '@ant-design/icons';
+import {
+  AuditOutlined,
+  DashboardOutlined,
+  KeyOutlined,
+  SettingOutlined,
+  ShopOutlined,
+} from '@ant-design/icons';
 
 /**
  * system 子系统 Layout（SaaS 平台方后台）
@@ -17,6 +23,26 @@ const SIDEBAR: SidebarItem[] = [
     icon: <ShopOutlined />,
     label: '租户',
     to: '/system/tenants',
+  },
+  {
+    key: '/system/audit',
+    icon: <AuditOutlined />,
+    label: '审计日志',
+    to: '/system/audit',
+  },
+  {
+    // docs/04-a §2.1：⚙ 系统 › 平台方账号（改密码）
+    key: 'group-system',
+    icon: <SettingOutlined />,
+    label: '系统',
+    children: [
+      {
+        key: '/system/change-password',
+        icon: <KeyOutlined />,
+        label: '平台方账号',
+        to: '/system/change-password',
+      },
+    ],
   },
 ];
 

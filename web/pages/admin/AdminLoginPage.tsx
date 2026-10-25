@@ -1,16 +1,19 @@
 import type { ReactElement } from 'react';
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Alert, Button, Form, Input, Tag } from 'antd';
+import { Alert, Button, Checkbox, Form, Input, Tag, theme } from 'antd';
 import { LockOutlined, MailOutlined, ShopOutlined } from '@ant-design/icons';
 import { adminApi } from '../../lib/adminApi';
 import { setToken } from '../../lib/apiFactory';
 import { AuthShell } from '../../components/shell/AuthShell';
+import { TENANT_CODE_PATTERN, TENANT_CODE_HINT } from '@shared/validation/tenant-code';
 
 interface FormValues {
   email: string;
   password: string;
   tenant_code: string;
+  /** 「记住我」—— 勾了 token 存 localStorage（跨浏览器重启保留），不勾存 sessionStorage */
+  remember: boolean;
 }
 
 /**
@@ -20,6 +23,10 @@ export function AdminLoginPage(): ReactElement {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(false);
   const [errMsg, setErrMsg] = useState<string | null>(null);
+  // 「记住我」勾没勾（docs/04-b §3.2）—— 决定 token 存 localStorage 还是 sessionStorage
+  const [remember, setRemember] = useState(true);
+  // 颜色走 antd token —— 写死浅色的话，深色模式下几乎看不见
+  const { token } = theme.useToken();
 
   const onFinish = async (values: FormValues): Promise<void> => {
     setLoading(true);
@@ -30,7 +37,7 @@ export function AdminLoginPage(): ReactElement {
         // ⚠️ 后端从 2026-10-25 起才真的返回这个字段 —— 之前前端在等、后端没给
         user?: { role: string; must_change_password?: boolean };
       }>('/login', values);
-      setToken(res.data.token);
+      setToken(res.data.token, remember);
       // 被平台方重置过密码 → 先去改密（服务端也会拦其它接口）
       if (res.data.user?.must_change_password === true) {
         navigate('/admin/change-password', { replace: true });
@@ -49,7 +56,7 @@ export function AdminLoginPage(): ReactElement {
     <AuthShell
       roleLabel="admin 子系统 · 租户后台"
       title="租户后台登录"
-      description="租户 admin 入口 · 需带租户号"
+      description="租户号由你的 SaaS 服务方提供"
       badge={
         <Tag color="red" style={{ margin: 0, fontWeight: 500 }}>
           <ShopOutlined style={{ marginRight: 4 }} />
@@ -61,7 +68,7 @@ export function AdminLoginPage(): ReactElement {
         <Alert
           type="error"
           showIcon
-          message={errMsg}
+          title={errMsg}
           style={{ marginBottom: 18 }}
         />
       )}
@@ -78,11 +85,11 @@ export function AdminLoginPage(): ReactElement {
           label="租户号"
           rules={[
             { required: true, message: '请输入租户号' },
-            { pattern: /^[a-z0-9-]{3,32}$/, message: '3-32 位，小写字母 / 数字 / 短横线' },
+            { pattern: TENANT_CODE_PATTERN, message: TENANT_CODE_HINT },
           ]}
         >
           <Input
-            prefix={<ShopOutlined style={{ color: 'rgba(0,0,0,0.45)' }} />}
+            prefix={<ShopOutlined style={{ color: token.colorTextTertiary }} />}
             placeholder="例：acme-corp"
             autoComplete="off"
           />
@@ -97,7 +104,7 @@ export function AdminLoginPage(): ReactElement {
           ]}
         >
           <Input
-            prefix={<MailOutlined style={{ color: 'rgba(0,0,0,0.45)' }} />}
+            prefix={<MailOutlined style={{ color: token.colorTextTertiary }} />}
             placeholder="你的邮箱"
             autoComplete="email"
           />
@@ -109,10 +116,16 @@ export function AdminLoginPage(): ReactElement {
           rules={[{ required: true, message: '请输入密码' }]}
         >
           <Input.Password
-            prefix={<LockOutlined style={{ color: 'rgba(0,0,0,0.45)' }} />}
+            prefix={<LockOutlined style={{ color: token.colorTextTertiary }} />}
             placeholder="密码"
             autoComplete="current-password"
           />
+        </Form.Item>
+
+        <Form.Item>
+          <Checkbox checked={remember} onChange={(e) => setRemember(e.target.checked)}>
+            记住我
+          </Checkbox>
         </Form.Item>
 
         <Form.Item style={{ marginBottom: 0 }}>
