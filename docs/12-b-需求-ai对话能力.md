@@ -76,10 +76,12 @@
   前台聊天页 + 挂件页输入区上方都有勾选框 → 请求体带 `thinking` →
   后端 `resolveThinkingBudget` 算预算（租户配了 > 0 一直生效；
   没配但用户勾了 → 1024 token 的兜底预算）。详见 [04-b](./04-b-ui-登录与聊天挂件.md) §4.4
-- **对话链路下发的 `data-*` part 共四种**：`data-citations`（引用片段）/
+- **对话链路下发的 `data-*` part 共五种**：`data-citations`（引用片段）/
   `data-truncated`（上下文被截断 / 已摘要）/ `data-status`（阶段状态）/
   **`data-moderation`（输出审核结果，详见 [12-d](./12-d-需求-运维稳定.md) §D4）** ——
-  前台聊天页和挂件页都渲染它（审核没过时前端换文案，浏览器里已经流出去的字节收不回来）
+  前台聊天页和挂件页都渲染它（审核没过时前端换文案，浏览器里已经流出去的字节收不回来）/
+  **`data-tool-call`（B3 的工具调用卡片）** —— 它**落库**（`messages.parts`），
+  所以刷新页面后卡片还在（原生 `tool-*` part 不落库，刷新就消失）
 - 跨租户防御：会话一律按 `(id, tenant_id, user_id)` 三元组查，别人的会话按 404 处理
 - 进程被 kill 会留下 `status='streaming'` 的僵尸消息；读历史时自动降级为 `failed`
 
@@ -238,6 +240,9 @@
   而短问题（「年假几天」）改写基本没收益。改写失败一律回落原查询，不影响检索。
   该开关登记在**租户通用配置页的「知识库」分类**下（见 [12-c](./12-c-需求-管理员可配置.md) §C4）。
   单测 `tests/unit/query-rewrite.test.ts`
+  - ✅ **2026-10-26**：线上对话和**评测（D1）**现在走同一个 `planRetrieval()`
+    （`src/rag/retrieval-plan.ts`）—— 改写和重排两个开关两边一致，
+    评测分数才代表线上表现（详见 [12-d](./12-d-需求-运维稳定.md) §D1）
 
 **重排序是怎么做的**（2026-10-25 落地，模块实现见
 [07-c](./07-c-模块-rag记忆状态协议.md) 模块 09）：
@@ -310,7 +315,8 @@
 **这一轮做的是什么**：
 
 - **实现放代码，注册放数据库**：
-  - 代码侧 `src/tools/builtin/registry.ts` —— 6 个内置工具（入参 schema + execute 函数）
+  - 代码侧 `src/tools/builtin/` —— **8 个**内置工具（入参 schema + execute 函数；
+    后两个「提交退款申请」「创建售后工单」是 2026-10-26 为 B5 工作流补的）
   - 数据库侧 `tools` 表 —— 租户的注册（调用名 + **描述** + 启停 + 敏感标记）
   - **描述是给模型看的**，租户能改 → 能「调教模型调不调它」。这是 C2 真正的价值
 - **对话链路接 AI SDK 的自动工具循环**（`streamText({ tools, stopWhen })`）——
@@ -335,13 +341,14 @@
 - 有租户问「能不能接我们的 ERP / 工单 / 预约系统」→ 做 `http` 类型
 - 销售或 demo 里被问「能不能**动**数据」（而不只是「读知识」）→ 做 `http` 类型
 - 挂件 / REST API 接入方要求「AI 能调我们自己的接口」→ 做 `http` / `mcp` 类型
-- 产品定位要从「文档问答」扩到「AI 客服 / Agent 平台」→ 做 B5 完整状态机 + B6 多代理
+- 产品定位要从「文档问答」扩到「AI 客服 / Agent 平台」→ 做**真出网的 `http` / `mcp` 工具**
+  （当前 `http` 只是本地 mock）；B5 完整状态机与 B6 多代理**已落地**
 
 **实现落在哪**：
 
 | 东西 | 位置 |
 |---|---|
-| 内置工具的实现（6 个） | `src/tools/builtin/`（`registry.ts` + 每个工具一个文件） |
+| 内置工具的实现（**8 个**） | `src/tools/builtin/`（`registry.ts` + 每个工具一个文件） |
 | 工具执行包装层（超时 / 降级 / span / 落库 part / HITL 闸门） | `src/tools/execute.ts` |
 | 「本租户启用的工具」→ AI SDK tool 集合 | `src/tools/resolve.ts` |
 | 工具注册表的 CRUD | `src/services/tools.ts` |
@@ -377,6 +384,12 @@
 | `query_coupon_info` | 查可用优惠 | `{ user_id? }` | 券名 / 类型 / 门槛 / 额度 / 有效期 / 状态 | mock |
 | `list_knowledge_documents` | 查知识库文档清单 | `{ keyword? }` | 本租户文档清单 | **真实查 `documents` 表** |
 | `submit_refund_request` | 提交退款申请 | `{ order_no, amount?, reason }` | 退款单号 / 预计到账天数 | mock · **敏感** |
+| `update_shipping_address` | 修改收货地址 | `{ order_no, address, receiver? }` | 是否修改成功 / 新地址 | mock · **敏感** |
+| `create_after_sale_ticket` | 创建售后工单 | `{ order_no, issue_type, description }` | 工单号 / 受理状态 | mock · **敏感** |
+
+> ⚠️ **后两个是 2026-10-26 为 B5 工作流补的** —— 它们分别是流程
+> `modify_address` / `after_sale_ticket` 的**触发节点**（见 [12-b §B5.1](#b51--三条流程)）。
+> 三个带「敏感」标记的工具走 HITL 闸门，**执行前必须用户点头**。
 
 mock 数据按 `hash(tenant_id + 业务键)` **确定性生成** —— 同一个租户同一个单号每次结果一样
 （随机数做不到这点，模型问两次得到两个不同答案，用户会以为系统不稳定），
@@ -532,8 +545,9 @@ POST /api/v1/customer/sessions/:id/tool-approvals  { tool_name, args }
 - **外部业务系统本身不在本项目范围**（[01](./01-需求与场景.md) §1.5 明确写了）：
   查订单 / 改地址 / 退款这些要另外起业务系统项目。本项目只提供
   「工具注册 + 调用」的能力，工具的 `execute` 里对接的是**别的系统**
-- **内置工具是 mock** —— 订单 / 商品 / 物流 / 优惠券 / 退款单都是按租户 + 编号确定性生成的假数据，
-  不会真的进任何业务系统。`list_knowledge_documents` 是唯一查真实数据的
+- **内置工具是 mock** —— 订单 / 商品 / 物流 / 优惠券 / 退款单 / 收货地址 / 售后工单
+  都是按租户 + 编号确定性生成的假数据，不会真的进任何业务系统。
+  `list_knowledge_documents` 是唯一查真实数据的
 - **工具的每一次外部往返都要计入超时**（5 秒，超时降级不重试），不然一条慢工具能把整轮对话拖死
 - **工具耗时计入 `llm.generate` span 和 trace 的 `duration_ms`** —— 即「用户感知延迟」
   会被工具耗时拉长。工具本身有 5 秒上限兜着
@@ -768,7 +782,7 @@ T1 是**成本闸门**：每轮都调一次抽取模型，一个租户一天要�
    模型调 submit_refund_request ──→ 节点 confirm_refund（⚠ 人工确认）
         │  mission: awaiting_confirmation ──用户确认──→ running
         ▼
-   执行退款 → 节点 end → mission: completed
+   执行退款 → 没有下一个节点 → mission: completed
 ```
 
 | 节点 | 工具 | 人工确认 | 前置条件 | 失败/异常去向 |
@@ -776,7 +790,9 @@ T1 是**成本闸门**：每轮都调一次抽取模型，一个租户一天要�
 | `lookup_order` | `query_order_status` | 否 | 无 | 订单不存在 → `cancelled` |
 | `lookup_coupon` | `query_coupon_info` | 否 | `lookup_order` 已完成 | 查不到券 → 跳过（可退=订单全额） |
 | `confirm_refund` | `submit_refund_request` | **是** | `lookup_order` + `lookup_coupon` 已完成 | 工具报错 → `failed` |
-| `end` | — | — | `confirm_refund` 已完成 | — |
+
+> ⚠️ **表里没有「终点」这一行 —— 终点是隐式的**（见下面 §B5.1.2）。
+> 三个节点的 `confirm_refund` 执行完 → 引擎找不到下一个节点 → mission 转 `completed`。
 
 **流程 2 · 收货地址修改 `modify_address`**
 
@@ -786,7 +802,7 @@ T1 是**成本闸门**：每轮都调一次抽取模型，一个租户一天要�
    模型调 update_shipping_address ──→ 节点 confirm_address（⚠ 人工确认）
         │  mission: awaiting_confirmation ──用户确认──→ running
         ▼
-   执行改地址 → end → completed
+   执行改地址 → 没有下一个节点 → completed
 ```
 
 | 节点 | 工具 | 人工确认 | 前置条件 |
@@ -804,7 +820,7 @@ T1 是**成本闸门**：每轮都调一次抽取模型，一个租户一天要�
    模型调 create_after_sale_ticket ──→ 节点 create_ticket（⚠ 人工确认）
         │  mission: awaiting_confirmation ──用户确认──→ running
         ▼
-   执行建单 → end → completed
+   执行建单 → 没有下一个节点 → completed
 ```
 
 | 节点 | 工具 | 人工确认 | 前置条件 |
@@ -815,8 +831,33 @@ T1 是**成本闸门**：每轮都调一次抽取模型，一个租户一天要�
 
 #### B5.1.2 · 引擎语义
 
-**节点类型**：只有三种 —— `tool`（执行一个内置工具）、`confirm`（执行一个敏感工具，但先要人点头）、
-`end`（流程终点）。
+**节点长什么样**：每个节点 = 「**要执行的工具** + **要不要人点头** + **前置条件**」。
+
+代码里节点**没有 `type` 字段**（`src/workflows/types.ts` 的 `WorkflowNode`）：
+`confirm: true` 就是「要先点头」，`confirm: false` 就是「自动执行」。
+
+| 节点字段 | 含义 |
+| -------- | ---- |
+| `id` | 节点名，写进 `missions.current_step` |
+| `tool` | 该节点执行的内置工具 key（对应 `src/tools/builtin/registry.ts`） |
+| `confirm` | `true` = 停在 `awaiting_confirmation` 等用户点头；`false` = 直接执行 |
+| `requires` | 前置节点 id —— 全部完成后本节点才能执行 |
+| `title` | 一句话说明（给模型看，也给日志看） |
+
+**⚠️ 流程终点没有专门的节点类型 —— 终点是隐式的。**
+
+引擎每完成一个节点就找「**下一个节点**」：
+前置全满足、且还没做的那个节点（`src/workflows/engine.ts`）。
+**找不到 → 认为流程结束**，mission 转 `completed`。
+
+> 🚫 **流程定义里不要写 `end` 节点。**
+> 引擎会把它当成「还没做的下一个节点」—— mission 置成 `running`、
+> `current_step='end'`，但 `end` 没有对应工具、模型永远不会去调它，
+> **任务会永久卡在 `running`，再也到不了 `completed`**。
+>
+> ⚠️ 2026-10-26 订正：本节以前写着「节点类型只有三种：`tool` / `confirm` / `end`」——
+> **代码里从来没有 `end` 这个类型**，终点一直是隐式的。文档写错会误导后续实现者
+> （照着加一个 `end` 节点就会踩上面那个坑）。
 
 **推进规则**（模型调用某个工具时，引擎按工具的 builtin key 找节点）：
 
@@ -824,8 +865,8 @@ T1 是**成本闸门**：每轮都调一次抽取模型，一个租户一天要�
 2. **找到了节点，但前置没满足** → **拦下**，回灌一条 tool result：
    「这个操作需要先查订单信息，请先调用 `query_order_status`」—— 模型看到就会去调。
    **不是报错**，是流程约束
-3. **前置满足，节点是 `tool` 类型** → 直接执行 → 结果写进 `mission.context` → 推进到下一个节点
-4. **前置满足，节点是 `confirm` 类型**：
+3. **前置满足，节点 `confirm=false`** → 直接执行 → 结果写进 `mission.context` → 推进到下一个节点
+4. **前置满足，节点 `confirm=true`**：
    - 没有 mission → 建一行（`state=awaiting_confirmation`）→ **拦下**，问用户「确认吗」
    - mission `awaiting_confirmation` → 用户还没点 → 拦下
    - mission `running` → 用户点过了 → **执行** → 推进
@@ -840,10 +881,10 @@ T1 是**成本闸门**：每轮都调一次抽取模型，一个租户一天要�
      ▼
   pending ──走到 confirm 节点──→ awaiting_confirmation
      │                              │      │
-     │ 走到 tool 节点              │用户确认│用户拒绝 / 超时
+     │ 走到自动节点                │用户确认│用户拒绝 / 超时
      ▼                              ▼      ▼
   running ─────────────────────→ running  cancelled
-     │ 走到 end
+     │ 找不到下一个节点
      ▼
   completed          节点执行失败 → failed
 ```
@@ -851,13 +892,13 @@ T1 是**成本闸门**：每轮都调一次抽取模型，一个租户一天要�
 | 从 | 到 | 触发条件 |
 | -- | -- | -------- |
 | — | `pending` | 首次调用流程入口的确认节点 |
-| `pending` | `awaiting_confirmation` | 推进到 `confirm` 类型节点 |
-| `pending` | `running` | 推进到 `tool` 类型节点 |
+| `pending` | `awaiting_confirmation` | 推进到 `confirm=true` 的节点 |
+| `pending` | `running` | 推进到 `confirm=false` 的节点 |
 | `awaiting_confirmation` | `running` | 用户点「确认执行」 |
 | `awaiting_confirmation` | `cancelled` | 用户点「取消」或**超时**（30 分钟） |
-| `running` | `running` | 又一个 `tool` 节点完成 |
-| `running` | `awaiting_confirmation` | 又到下一个 `confirm` 节点 |
-| `running` | `completed` | 走到 `end` |
+| `running` | `running` | 又一个自动节点完成 |
+| `running` | `awaiting_confirmation` | 又到下一个 `confirm=true` 的节点 |
+| `running` | `completed` | 找不到下一个节点（隐式终点） |
 | `running` | `failed` | 节点工具抛错且不可恢复 |
 
 **⚠️ 关键区别（跟 LangGraph 的语义差在这儿）**：
@@ -878,6 +919,7 @@ LangGraph 是**图驱动**的 —— 图自己会走到下一个节点，模型�
 
 - **流程定义写在代码里，不是租户可配的** —— 租户改不了流程图。
   要支持「租户在后台画流程」是另一个量级的需求（那才是 LangGraph 的主场）
+  —— 🚫 **不做**（手动标明），见 [12-e 裁定表](./12-e-需求-业务接入与平台运营.md) #17
 - **三条流程都是线性的 + 少量分支**，没有环路、没有回退
 - **模型不按顺序调工具时，闸门会反复提醒** —— 用户说「直接给我退款」，
   模型跳过查订单直接调提交，闸门会回「请先查订单」，模型再调 → 再调 → 才过。
@@ -900,7 +942,7 @@ LangGraph 是**图驱动**的 —— 图自己会走到下一个节点，模型�
 
 #### B5.1.4 · LangGraph 评估结论（2026-10-26 · 三条流程实现后定稿）
 
-> ⚠️ **本节是 B5 专项评估**。**需求池层面的完整判定**（24 条需求逐条过、
+> ⚠️ **本节是 B5 专项评估**。**需求池层面的完整判定**（25 条需求逐条过、
 > 成本分析、翻案信号）在 **[07-d 模块 13](./07-d-模块-框架与多代理.md) §13.2–13.6** ——
 > 那是本项目关于 LangGraph 的**唯一权威落点**，本节只讲「对 B5 意味着什么」。
 
@@ -911,7 +953,7 @@ LangGraph 是**图驱动**的 —— 图自己会走到下一个节点，模型�
 | 1 | 流程图出现**环路 / 回退**（退款被驳回 → 重新填材料 → 再提交） | ❌ 三条流程全线性（`tests/unit/workflow-definitions.test.ts` 守着「无环」） |
 | 2 | 需要**真正的断点恢复**（进程挂了，图自己从中断节点续跑） | ❌ 当前是**模型驱动** —— 恢复靠提示词 + 用户再说一句 |
 | 3 | 需要**并行 fan-out**（多个节点同时跑再汇总） | ⚠️ 流程 3 的两个 lookup 互不依赖，但**串行执行就够** |
-| 4 | 需要**多代理 handoff** | ❌ B6 明确不做（但 B6 是需求池里唯一真正的 LangGraph 场景 —— 见 07-d §13.5） |
+| 4 | 需要**多代理 handoff** | ❌ B6 已落地，但走的是**监督者模式**（委派工具 + 子代理），**没用 handoff** —— 这条判据仍不满足（见 07-d §13.5） |
 | 5 | **租户在后台自定义流程**（要图引擎 + 图编辑器） | ❌ 本期不做 |
 
 **结论：不上 LangGraph。**

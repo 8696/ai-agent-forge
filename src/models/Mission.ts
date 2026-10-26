@@ -93,7 +93,7 @@ export class Mission extends Model {
   @Column({ type: DataTypes.STRING(36), allowNull: true })
   declare user_id: string | null;
 
-  /** 流程类型 —— 对应 `src/workflows/definitions.ts` 的流程定义 */
+  /** 流程类型 —— 对应 `src/workflows/types.ts` 的 `WORKFLOWS` 流程定义 */
   @Column({ type: DataTypes.STRING(100), allowNull: false })
   declare type: string;
 

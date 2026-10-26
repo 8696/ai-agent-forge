@@ -22,7 +22,7 @@ export type { GateDecision } from './types';
  *
  * ## 这个引擎管什么
  *
- *  1. **识别**：模型调的某个工具属于哪条流程（`src/workflows/definitions.ts`）
+ *  1. **识别**：模型调的某个工具属于哪条流程（`src/workflows/types.ts` 的 `WORKFLOWS`）
  *  2. **拦**：前置节点没做完 → 拦下来，告诉模型「先做什么」
  *  3. **记**：任务状态落 `missions` 表（`pending` / `running` / `awaiting_confirmation` / …）
  *  4. **推进**：节点完成 → 记进度、推状态

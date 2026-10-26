@@ -3,15 +3,15 @@
 > **本文件是 `05-数据模型.md` 的 §5.1-§5.5 节**（原主文件已拆分为 05-a / 05-b 两份）。本份负责**MySQL 核心表的 DDL + 索引策略 + 数据量估算 + 备份 + 迁移管理**。
 > 向量库 Qdrant 部分见 `05-b-数据模型-qdrant.md`。
 >
-> **已落地 21 张表**（`src/models/` 下有对应 Sequelize 模型）：
+> **已落地 24 张表**（`src/models/` 下有对应 Sequelize 模型）：
 > `tenants` / `users` / `system_users` / `api_keys` / `documents` / `sessions` / `messages` /
 > `prompt_versions` / `tenant_models` / `tenant_settings` / `audit_logs` / `cost_logs` /
 > `traces` / `spans` / `evaluation_datasets` / `evaluation_items` / `evaluation_runs` /
 > `evaluation_results` / **`user_memories`**（2026-10-24 落地，B4 用户长期记忆，迁移 `017`）/
-> **`tools`** / **`tool_call_logs`**（2026-10-25 落地，B3 工具调用 + C2 工具管理）。
-> 另有 `missions` 一张是 **未做的规格**（任务状态机 / 工作流），本期未建表 ——
-> 定位见 [12-b §B5](./12-b-需求-ai对话能力.md)。它的 DDL 已在下方写好，
-> 下一轮做 B5 时直接建。
+> **`tools`** / **`tool_call_logs`**（2026-10-25 落地，B3 工具调用 + C2 工具管理）/
+> **`missions`**（2026-10-26 落地，B5 状态机工作流，迁移 `028`）/
+> **`agent_runs`** / **`agent_steps`**（2026-10-26 落地，B6 多代理共享状态，迁移 `032`）。
+> 各表 DDL 见下方 §5.1，定位见 [12-b](./12-b-需求-ai对话能力.md) §B3 / §B5 / §B6。
 
 MySQL 8.0，字符集 `utf8mb4_unicode_ci`。所有时间字段用 `DATETIME(6)`（微秒精度，便于 trace 分析），主键统一 `VARCHAR(36)`（UUID）。
 

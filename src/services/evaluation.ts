@@ -14,8 +14,9 @@ import { logger } from '../logger';
 import { withRetry } from '../lib/retry';
 import { config } from '../config';
 import { buildContextWindow } from './chat';
-import { hybridSearch } from '../rag/hybrid-search';
-import { resolveLlmSettings } from './llm-settings';
+import { hybridSearch, type HybridHit } from '../rag/hybrid-search';
+import { planRetrieval } from '../rag/retrieval-plan';
+import { resolveLlmSettings, type ResolvedLlmSettings } from './llm-settings';
 import { resolveTenantPrompt } from './prompt-registry';
 import { recordLlmUsage } from './cost-tracking';
 import { writeAuditLog } from '../lib/audit-log';
@@ -786,9 +787,67 @@ interface GeneratedAnswer {
 }
 
 /**
+ * 评测的检索 —— **跟线上对话同一套口径**
+ *
+ * 单独抽出来是为了两件事：
+ *  1. `generateAnswer` 只管「拼上下文 + 调模型」，检索这段单独看
+ *  2. **可单测** —— 断言它真的把租户的两个开关（查询改写 / 重排）传下去了
+ *
+ * ⚠️ **2026-10-26 修的一处口径偏差**：
+ * 以前这里直接调 `hybridSearch({query, tenantId, topK})`，既不传 `rerankEnabled`，
+ * 也没有查询改写步骤。租户一旦改了这两个开关，**评测跑的检索就不是线上那一套了**
+ * （docs/12-d §D1 的验收明写「同一套系统提示词 + 同一套检索 + 同一套模型」）。
+ * 现在跟线上一起走 `planRetrieval()`，口径由结构保证一致。
+ */
+export async function retrieveForEvaluation(input: {
+  tenantId: string;
+  question: string;
+  llm: ResolvedLlmSettings;
+}): Promise<{
+  hits: HybridHit[];
+  /** 检索整体失败时的降级文案；null = 检索成功（哪怕一条都没命中） */
+  retrievalError: string | null;
+  /** 实际用于检索的查询（改写后；没改写就是原问题）—— 落库用，方便排查 */
+  effectiveQuery: string;
+}> {
+  const { llm } = input;
+
+  // 改写 + 重排开关 —— 跟线上（chat.ts）共用同一个 plan 函数
+  const plan = await planRetrieval({
+    query: input.question,
+    queryRewriteEnabled: llm.queryRewriteEnabled,
+    rerankEnabled: llm.rerankEnabled,
+    apiKey: llm.apiKey,
+    baseUrl: llm.baseUrl,
+    model: llm.model,
+  });
+
+  try {
+    const hits = await hybridSearch({
+      query: plan.query,
+      tenantId: input.tenantId,
+      topK: llm.retrievalTopK,
+      // 租户可以在后台关掉自己的重排（docs/12-c §C4）—— 线上也是这样传的
+      rerankEnabled: plan.rerankEnabled,
+    });
+    return { hits, retrievalError: null, effectiveQuery: plan.query };
+  } catch (err: unknown) {
+    logger.warn(
+      { err: err instanceof Error ? err.message : String(err), tenantId: input.tenantId },
+      '评测时检索失败，降级为无资料回答',
+    );
+    return {
+      hits: [],
+      retrievalError: '知识库检索暂时不可用，本次回答没有使用参考资料。',
+      effectiveQuery: plan.query,
+    };
+  }
+}
+
+/**
  * 用租户当前的提示词 + 知识库回答一道题。
  *
- * 走的是**和线上一模一样的拼装逻辑**（buildContextWindow + hybridSearch），
+ * 走的是**和线上一模一样的拼装逻辑**（buildContextWindow + 同一套检索），
  * 所以「改坏提示词 → 分数下降」这条验收才成立。
  */
 async function generateAnswer(input: {
@@ -800,21 +859,11 @@ async function generateAnswer(input: {
 }): Promise<GeneratedAnswer> {
   const { llm } = input;
 
-  let rawHits: Awaited<ReturnType<typeof hybridSearch>> = [];
-  let retrievalError: string | null = null;
-  try {
-    rawHits = await hybridSearch({
-      query: input.question,
-      tenantId: input.tenantId,
-      topK: llm.retrievalTopK,
-    });
-  } catch (err: unknown) {
-    retrievalError = '知识库检索暂时不可用，本次回答没有使用参考资料。';
-    logger.warn(
-      { err: err instanceof Error ? err.message : String(err), tenantId: input.tenantId },
-      '评测时检索失败，降级为无资料回答',
-    );
-  }
+  const { hits: rawHits, retrievalError } = await retrieveForEvaluation({
+    tenantId: input.tenantId,
+    question: input.question,
+    llm,
+  });
 
   const window = buildContextWindow({
     tenantName: input.tenantName,

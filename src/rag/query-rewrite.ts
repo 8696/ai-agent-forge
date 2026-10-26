@@ -37,6 +37,15 @@ export const QUERY_REWRITE_SYSTEM_PROMPT = `你是一个检索查询改写器。
 输入：我入职三个月能休几天年假
 输出：年假 天数 入职时长 满1年不满10年`;
 
+/**
+ * 改写的超时上限（毫秒）—— 改写不能拖住用户请求。
+ *
+ * ⚠️ **线上对话（chat.ts）和评测（evaluation.ts）共用这一份**——
+ * 两边都经 `planRetrieval()` 走（src/rag/retrieval-plan.ts），
+ * 超时数只有一个来源，不会出现「改了线上忘了改评测」。
+ */
+export const QUERY_REWRITE_TIMEOUT_MS = 3000;
+
 /** 改写结果（连同原始查询，供调用方落 span / 调试） */
 export interface QueryRewriteResult {
   /** 实际用于检索的查询；改写失败时 == 原查询 */

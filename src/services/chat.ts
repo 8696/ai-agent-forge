@@ -37,10 +37,7 @@ import {
   type SessionSummaryState,
 } from './session-summary';
 import { hybridSearch, type HybridHit, type RecallSource } from '../rag/hybrid-search';
-import { rewriteQuery } from '../rag/query-rewrite';
-
-/** 查询改写的超时（毫秒）—— 改写不能拖住用户请求 */
-const QUERY_REWRITE_TIMEOUT_MS = 3000;
+import { planRetrieval } from '../rag/retrieval-plan';
 import type { TenantUserJwtPayload } from '../lib/jwt';
 import { withTimeout } from '../lib/async';
 import {
@@ -910,19 +907,19 @@ export function createChatStream(ctxData: StreamContext) {
       //
       // 「我入职三个月能休几天年假」→「年假 天数 入职时长 满1年不满10年」
       // 改写失败一律回落原查询（不让它拖住检索）。
-      let searchQuery = userText;
-      let rewritten: string | null = null;
-      if (llm.queryRewriteEnabled) {
-        const r = await rewriteQuery({
-          query: userText,
-          apiKey: llm.apiKey,
-          baseUrl: llm.baseUrl,
-          model: llm.model,
-          timeoutMs: QUERY_REWRITE_TIMEOUT_MS,
-        });
-        searchQuery = r.effectiveQuery;
-        rewritten = r.rewritten;
-      }
+      //
+      // ⚠️ 走 `planRetrieval()` —— **评测（evaluation.ts）也调同一个函数**，
+      // 两边的改写/重排口径必须是同一套（docs/12-d §D1「同一套检索」）。
+      const plan = await planRetrieval({
+        query: userText,
+        queryRewriteEnabled: llm.queryRewriteEnabled,
+        rerankEnabled: llm.rerankEnabled,
+        apiKey: llm.apiKey,
+        baseUrl: llm.baseUrl,
+        model: llm.model,
+      });
+      const searchQuery = plan.query;
+      const rewritten = plan.rewritten;
 
       const retrievalSpan = ctxData.trace?.span('retrieval.search', 'retrieval', {
         query_chars: userText.length,
@@ -937,7 +934,7 @@ export function createChatStream(ctxData: StreamContext) {
           tenantId: session.tenant_id,
           topK: llm.retrievalTopK,
           // 租户可以在后台关掉自己的重排（docs/12-c §C4）
-          rerankEnabled: llm.rerankEnabled,
+          rerankEnabled: plan.rerankEnabled,
           onRecallFailure: (source, err) => {
             failedSources.add(source);
             recallError ??= err;

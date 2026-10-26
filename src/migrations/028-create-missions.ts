@@ -19,7 +19,7 @@ import { tableExists } from './helpers/schema';
  * ## 列
  *
  *  - `type` —— 流程类型（`refund_request` / `modify_address` / `after_sale_ticket`），
- *    对应 `src/workflows/definitions.ts` 里的流程定义
+ *    对应 `src/workflows/types.ts` 里 `WORKFLOWS` 常量的流程定义
  *  - `state` —— 状态机，6 个取值（见下）
  *  - `current_step` —— 当前节点（流程定义的节点 id），断点恢复靠它知道从哪继续
  *  - `approval_key` —— 用户批准的那次工具调用（`工具名:入参指纹`），
