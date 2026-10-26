@@ -153,7 +153,7 @@ export function ObservabilityAlertsPage(): ReactElement {
       />
 
       {errMsg !== null && (
-        <Alert type="error" showIcon message={errMsg} style={{ marginBottom: 16 }} />
+        <Alert type="error" showIcon title={errMsg} style={{ marginBottom: 16 }} />
       )}
 
       <Spin spinning={loading}>
@@ -236,7 +236,7 @@ export function ObservabilityAlertsPage(): ReactElement {
                     key={a.id}
                     type={a.level === 'error' ? 'error' : 'warning'}
                     showIcon
-                    message={a.title}
+                    title={a.title}
                     description={
                       <>
                         <Paragraph style={{ marginBottom: 4 }}>{a.detail}</Paragraph>

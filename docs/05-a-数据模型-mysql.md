@@ -577,14 +577,16 @@ CREATE TABLE api_keys (
   name VARCHAR(100) NOT NULL COMMENT '租户自己起的名字（"生产环境 / 测试环境"）',
   key_prefix VARCHAR(10) NOT NULL COMMENT 'key 前 8 位（用于 UI 显示识别，不存完整 key）',
   key_hash VARCHAR(255) NOT NULL COMMENT '完整 key 的 bcrypt hash',
-  scope ENUM('read', 'write', 'admin') NOT NULL DEFAULT 'write' COMMENT '权限分级：read=只读（不能发起对话）/ write=可发起对话 / admin=预留',
+  key_sha256 CHAR(64) NULL COMMENT '完整 key 的 sha256（只用于索引定位；存量行为 NULL）',
+  scope ENUM('read', 'write', 'admin') NOT NULL DEFAULT 'write' COMMENT '权限分级：read=只读（不能发起对话）/ write=可发起对话 / admin=知识库管理（可上传 / 删除本租户文档）',
   last_used_at DATETIME(6) NULL COMMENT '最后使用时间',
   expires_at DATETIME(6) NULL COMMENT '过期时间；NULL = 不过期',
   revoked_at DATETIME(6) NULL COMMENT '撤销时间（软删除）',
   created_by VARCHAR(36) NOT NULL COMMENT '哪个 admin 创建的',
   created_at DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6) COMMENT '创建时间',
   INDEX idx_tenant (tenant_id, created_at),
-  INDEX idx_prefix (tenant_id, key_prefix)
+  INDEX idx_prefix (tenant_id, key_prefix),
+  UNIQUE INDEX idx_api_keys_sha256 (key_sha256)
 ) COMMENT '租户 API 密钥';
 ```
 
@@ -599,9 +601,17 @@ CREATE TABLE api_keys (
 > | ----- | -------- |
 > | `read` | 只能调 `GET /api/v1/public/search`（查知识库原文片段，**不调 LLM、不花钱、不留会话**） |
 > | `write` | 只读 + 发起对话（`POST /chat`、`/chat/stream`）—— **默认**，存量 key 全是这个 |
-> | `admin` | 预留：对外 API 目前没有 admin 专属端点 |
+> | `admin` | 写入 + **管理本租户的知识库**（`GET/POST/DELETE /api/v1/public/documents`）—— 2026-10-26 补上真端点 |
 >
 > 包含关系：`write ⊇ read`，`admin ⊇ write`。
+>
+> ⚠️ **admin 那一档能删文档** —— 拿到这把 key 的系统可以清空本租户的知识库。
+>
+> **`key_sha256` 列（迁移 `034-add-api-key-sha256.ts`，2026-10-26 补）**：
+> 以前鉴权只能按 8 位 `key_prefix` 粗筛，而 `idx_prefix` 是复合索引（`tenant_id, key_prefix`），
+> **单独按 prefix 查走不了索引 → 每次鉴权全表扫**。
+> 加一列 sha256(完整 key) + 唯一索引 → 索引点查定位到那一行，再用 bcrypt 验真。
+> 存量 key（sha256 为 NULL）走慢路径，第一次鉴权成功时**自动回填**（自愈）。
 
 ### 提示词版本表（prompt_versions · 提示词管理）
 

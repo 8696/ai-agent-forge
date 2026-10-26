@@ -30,6 +30,7 @@ import {
   customerKnowledgeRouter,
   publicWidgetRouter,
   publicApiRouter,
+  publicAdminApiRouter,
   publicApiKeyAdminRouter,
 } from './gateway';
 import { rebuildFromQdrant } from './rag/bm25';
@@ -103,6 +104,10 @@ async function bootstrap(): Promise<void> {
   // 公开挂件（免登录，匿名会话 token）+ 对外 REST API（API Key 鉴权）
   app.use(publicWidgetRouter.routes()).use(publicWidgetRouter.allowedMethods());
   app.use(publicApiRouter.routes()).use(publicApiRouter.allowedMethods());
+  // 对外 REST API 的 admin 档（知识库管理：文档列表 / 上传 / 删除）
+  // ⚠️ 排在 publicApiRouter 之后 —— 两个 router 共用 /api/v1/public 前缀，
+  //    但路径不重叠（/search /chat /chat/stream vs /documents）。
+  app.use(publicAdminApiRouter.routes()).use(publicAdminApiRouter.allowedMethods());
   // 租户后台管理自己的 API Key（admin JWT 鉴权；URL 属于 admin 命名空间）
   app.use(publicApiKeyAdminRouter.routes()).use(publicApiKeyAdminRouter.allowedMethods());
 

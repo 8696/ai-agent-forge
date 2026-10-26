@@ -21,7 +21,8 @@ import { User } from './User';
  *  - read  = 只读。只能调只读端点（知识库检索），**不能发起对话**
  *            （不花钱、不留会话记录）
  *  - write = 写入（默认）。只读 + 发起对话（POST /chat、/chat/stream）
- *  - admin = 管理员。预留：对外 API 目前没有 admin 专属端点
+ *  - admin = 管理员。= write 的全部能力 + **管理本租户的知识库**
+ *            （文档列表 / 上传 / 删除 —— 见 src/gateway/public/admin-api-routes.ts）
  *
  * 包含关系：write ⊇ read，admin ⊇ write。
  */
@@ -54,6 +55,18 @@ export class ApiKey extends Model {
 
   @Column({ type: DataType.STRING(255), allowNull: false })
   declare key_hash: string;
+
+  /**
+   * 完整 key 的 sha256（hex，迁移 034）—— **只用于定位，不是凭证**。
+   *
+   * 凭证判定仍然是 bcrypt（`key_hash`）；这一列是给「按 key 找到那一行」用的：
+   * `key_prefix` 只有 8 位且没有单列索引，单独查会全表扫；
+   * sha256 有唯一索引 → 精确命中，O(log n)。
+   *
+   * 存量 key 没有这一列的值（NULL），第一次鉴权成功时会自动回填（自愈）。
+   */
+  @Column({ type: DataType.STRING(64), allowNull: true })
+  declare key_sha256: string | null;
 
   /**
    * 权限分级（migration 020）——

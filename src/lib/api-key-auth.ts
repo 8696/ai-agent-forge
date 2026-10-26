@@ -15,18 +15,29 @@ import { logger } from '../logger';
  * 形态：  ak_<nanoid(32)>          （与 tests/helpers/fixtures.ts 的 seed 保持一致）
  * 落库：  key_prefix = 前 8 位      （"ak_" + 5 位随机；UI 上用来识别是哪把钥匙）
  *         key_hash   = bcrypt(raw, cost=12)  —— **只存 hash**，完整 key 仅创建时返回一次
+ *         key_sha256 = sha256(raw)           —— **只用来定位**，不是凭证（迁移 034）
  *
- * 为什么前缀只取 8 位还能定位到唯一一行：
- *   前缀里只有 5 位随机（nanoid 字母表 64 字符 → 约 30 bit），**不足以**单独定位一把钥匙。
- *   所以真正定位靠「prefix 粗筛 + bcrypt 逐个比对」：先用 prefix 查出一批候选行，
- *   再用 bcrypt.compare 逐个试，只有真 key 能比过。
- *   5 位随机在几百把钥匙的规模下撞车概率可以忽略；即使撞了也只是多比一次 bcrypt。
+ * ============================ 怎么找到「是哪一把钥匙」 ============================
+ * 两步：
+ *   1. **定位**（要快）：`key_sha256` 上有唯一索引 → 精确命中，O(log n)
+ *   2. **验真**（要慢但准）：对定位到的那一行跑 bcrypt.compare
+ *
+ * ⚠️ 为什么以前要「prefix 粗筛 + 逐个 bcrypt」：
+ *   以前**没有** sha256 这一列，只能拿 8 位前缀去捞候选 ——
+ *   而 api_keys 上只有复合索引 (tenant_id, key_prefix)，
+ *   **单独按 prefix 查走不了索引 → 每次鉴权都全表扫**（key 一多就慢）。
+ *   加了 sha256 之后，新建的 key 走索引点查，全表扫的问题消失。
+ *
+ * ⚠️ 存量 key（迁移之前建的，key_sha256 为 NULL）仍然走得通：
+ *   它们走「慢路径」——`key_sha256 IS NULL` + 前缀粗筛，
+ *   索引区间只扫**还没回填的存量行**，不是全表；
+ *   第一次鉴权成功时**自动回填** sha256，之后就都走快路径了（自愈）。
  *
  * ============================ 鉴权流程 ============================
  *   Authorization: Bearer ak_xxx     （首选）
  *   X-API-Key: ak_xxx                （备选，方便某些网关只透传自定义头）
- *   → 取出 raw → 查候选行 → bcrypt 比对 → 检查 revoked_at / expires_at
- *   → 成功后把 { apiKeyId, tenantId, name } 挂到 ctx.state.apiKey
+ *   → 取出 raw → sha256 定位 → bcrypt 比对 → 检查 revoked_at / expires_at
+ *   → 成功后把 { apiKeyId, tenantId, name, scope } 挂到 ctx.state.apiKey
  *
  * ============================ 为什么加一层内存缓存 ============================
  * bcrypt(cost=12) 单次比对要 200~300ms。对一个「每次外部调用都验一次」的公开 API 来说，
@@ -81,9 +92,145 @@ interface CacheEntry {
   cachedAt: number;
 }
 
-/** raw 的 sha256（hex）—— 只用来当缓存 key，进程内不留明文 key */
-function cacheKeyOf(raw: string): string {
+/** raw 的 sha256（hex）—— 进程内缓存 key + 数据库定位列共用同一个值 */
+export function sha256OfApiKey(raw: string): string {
   return createHash('sha256').update(raw, 'utf8').digest('hex');
+}
+
+// ============================================================
+// 迁移 034 没跑时的降级
+// ============================================================
+
+/**
+ * `api_keys.key_sha256` 列现在能不能用。
+ *
+ * ⚠️ **为什么要有这层兜底**：生产部署是「DBA 手动跑迁移 + 灰度」（docs/11），
+ *    **代码可能先于迁移上线**。没有兜底的话：
+ *      `SELECT ... WHERE key_sha256 = ?` 直接报 ER_BAD_FIELD_ERROR
+ *      → **每一次 API Key 鉴权都 500** → 对外 API 整个瘫掉。
+ *
+ *    降级 = **退回老行为**（前缀粗筛 + bcrypt 逐个比对）：只是慢一点（走全表扫），
+ *    不会挂。迁移补上、进程重启后自动走回快路径。
+ *
+ * 状态是**进程内**的：撞到一次「列不存在」就记住，之后不再重试那条快路径
+ *（免得每个请求都白跑一次报错）。
+ */
+let sha256Support: 'unknown' | 'available' | 'missing' = 'unknown';
+
+/**
+ * MySQL 的「未知列」错误。
+ *
+ * mysql2 抛的是 `ER_BAD_FIELD_ERROR` / errno 1054 / SQLSTATE 42S22；
+ * Sequelize 会把它包成 DatabaseError，原始错误挂在 `original`（有时也在 `parent`）。
+ */
+export function isMissingColumnError(err: unknown): boolean {
+  const candidates: unknown[] = [err];
+  if (err !== null && typeof err === 'object') {
+    candidates.push((err as { original?: unknown }).original);
+    candidates.push((err as { parent?: unknown }).parent);
+  }
+  for (const c of candidates) {
+    if (c === null || typeof c !== 'object') {
+      continue;
+    }
+    const e = c as { code?: string; errno?: number; sqlState?: string };
+    if (e.code === 'ER_BAD_FIELD_ERROR' || e.errno === 1054 || e.sqlState === '42S22') {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** sha256 列现在能不能用（false = 迁移 034 没跑，已降级） */
+export function isApiKeySha256Supported(): boolean {
+  return sha256Support !== 'missing';
+}
+
+/**
+ * 降级：**把 key_sha256 这一列从模型里摘掉**，之后所有对 ApiKey 的查询都走前缀粗筛。
+ *
+ * ⚠️ **为什么必须摘列**（不只是改 WHERE）：
+ *    Sequelize 的 SELECT 列清单来自**模型定义**，不是查询里写了什么。
+ *    列不存在时，**任何**对 ApiKey 的查询都会报
+ *    `Unknown column 'key_sha256' in 'field list'` ——
+ *    不光是鉴权那一条（后台的 key 列表 / 改权限 / 撤销同样会挂）。
+ *    `Model.removeAttribute()` 把这一列从 rawAttributes 里删掉并刷新列清单，
+ *    所有查询立刻就不再引用它。
+ */
+function degradeToPrefixLookup(reason: string): void {
+  sha256Support = 'missing';
+  try {
+    ApiKey.removeAttribute('key_sha256');
+  } catch (err: unknown) {
+    logger.debug(
+      { err: err instanceof Error ? err.message : String(err) },
+      '摘掉 ApiKey 的 key_sha256 属性失败',
+    );
+  }
+  logger.warn(
+    { reason },
+    'api_keys.key_sha256 列不存在（迁移 034 没跑？），已降级为前缀粗筛',
+  );
+}
+
+/**
+ * 启动时探一次：`api_keys.key_sha256` 列在不在（迁移 034 跑了没）。
+ *
+ * ⚠️ **为什么在启动时探，而不是每个请求里 try/catch**：
+ *    列不存在时每一次对 ApiKey 的查询都会报错（见 degradeToPrefixLookup 的说明），
+ *    与其让每个请求都撞一次 500，不如启动时探一次、把列摘掉，**一次性解决所有路径**。
+ *
+ * 探针本身只在 WHERE 里提到这一列（SELECT 列清单只取 id），
+ * 所以列不存在时它会报「Unknown column ... in 'where clause'」（同样是 errno 1054）。
+ *
+ * @returns 列在 = true（走索引快路径）；不在 = false（已降级）
+ */
+export async function probeApiKeySha256Column(): Promise<boolean> {
+  try {
+    await ApiKey.findOne({ where: { key_sha256: '__probe__' }, attributes: ['id'] });
+    sha256Support = 'available';
+    return true;
+  } catch (err: unknown) {
+    if (!isMissingColumnError(err)) {
+      // 探针失败（DB 抖了一下之类）≠ 列不存在 —— 不降级，留给请求路径自己撞一次
+      logger.warn(
+        { err: err instanceof Error ? err.message : String(err) },
+        '探测 api_keys.key_sha256 列失败（不降级，按存在处理）',
+      );
+      return sha256Support !== 'missing';
+    }
+    degradeToPrefixLookup(err instanceof Error ? err.message : String(err));
+    return false;
+  }
+}
+
+/**
+ * 给一把 key 落 sha256（**只用于定位**，凭证判定仍是 bcrypt）。
+ *
+ * ⚠️ **列不存在时静默跳过** —— 迁移 034 没跑的话，定位退回「前缀粗筛」，
+ *    只是慢一点，不该把「建 key」这个动作搞挂。
+ *
+ * 之所以单独 UPDATE 而不是建行时一起 INSERT：
+ * Sequelize 的 INSERT 只写**显式赋值过**的字段（`_.intersection(Object.keys(values), tableAttributes)`），
+ * 所以「不传 key_sha256」就不会在 SQL 里提到这一列 —— 列不存在也不会报错。
+ */
+export async function attachApiKeySha256(row: ApiKey, raw: string): Promise<void> {
+  if (sha256Support === 'missing') {
+    return;
+  }
+  try {
+    await row.update({ key_sha256: sha256OfApiKey(raw) });
+    sha256Support = 'available';
+  } catch (err: unknown) {
+    if (isMissingColumnError(err)) {
+      degradeToPrefixLookup(err instanceof Error ? err.message : String(err));
+      return;
+    }
+    logger.debug(
+      { err: err instanceof Error ? err.message : String(err), apiKeyId: row.id },
+      '写入 API Key 的 sha256 失败（不影响鉴权）',
+    );
+  }
 }
 
 /** 进程内缓存：sha256(raw) → 验过的 key */
@@ -177,11 +324,11 @@ export async function verifyApiKey(raw: string): Promise<ApiKeyPrincipal | null>
   }
 
   const now = Date.now();
-  const ck = cacheKeyOf(raw);
-  const hit = cache.get(ck);
+  const sha = sha256OfApiKey(raw);
+  const hit = cache.get(sha);
   if (hit !== undefined) {
     if (now - hit.cachedAt > CACHE_TTL_MS) {
-      cache.delete(ck);
+      cache.delete(sha);
     } else {
       // 过期 / 撤销用快照再判一次（快照是验的时候读的，不是无限期有效的）
       if (hit.revokedAt !== null) {
@@ -194,7 +341,44 @@ export async function verifyApiKey(raw: string): Promise<ApiKeyPrincipal | null>
     }
   }
 
-  // prefix 粗筛：只取 raw 的前 8 位去查。
+  // ===== 快路径：sha256 精确命中 =====
+  //
+  // key_sha256 上有唯一索引（迁移 034）→ 这是**索引点查**，不是全表扫。
+  // 命中了就只有一行要跑 bcrypt。
+  //
+  // ⚠️ 这一步**故意不带 tenant_id 过滤**：租户上下文是 verify 成功之后才设的
+  //    （runWithTenant 在 apiKeyAuth 里），此刻还不知道这把 key 属于哪个租户 ——
+  //    归属由「sha256 唯一」+「bcrypt 比对」双重确定。
+  let exact: ApiKey | null = null;
+  if (sha256Support !== 'missing') {
+    try {
+      exact = await ApiKey.findOne({ where: { key_sha256: sha } });
+      sha256Support = 'available';
+    } catch (err: unknown) {
+      if (!isMissingColumnError(err)) {
+        throw err;
+      }
+      // 迁移 034 还没跑 → 摘掉这一列，退回老行为（慢，但不会挂）
+      degradeToPrefixLookup(err instanceof Error ? err.message : String(err));
+      exact = null;
+    }
+  }
+  if (exact !== null) {
+    const matched = await verifyPassword(raw, exact.key_hash);
+    if (!matched) {
+      // sha256 对上了但 bcrypt 对不上 —— 数据不一致（不该发生），当成无效处理
+      logger.warn({ apiKeyId: exact.id }, 'API Key 的 sha256 与 bcrypt 哈希不一致，拒绝');
+      return null;
+    }
+    return await finishAuth(exact, now, sha);
+  }
+
+  // ===== 慢路径：存量 key（key_sha256 还是 NULL）=====
+  //
+  // 存量行没有 sha256，只能退回「前缀粗筛 + bcrypt 逐个比对」。
+  // 但加上 `key_sha256 IS NULL` 之后，索引区间只扫**还没回填的存量行**，
+  // 而不是全表 —— 存量 key 用过一次就会被回填掉，之后再也不进这条路径。
+  //
   // 用 LIKE 'ak_xxxxx%' 而不是等值，是为了让「前缀长度不是 8」的存量数据也能命中
   // （DDL 写的是 VARCHAR(10)，注释说 8 位；两边都兼容一下）。
   //
@@ -204,47 +388,83 @@ export async function verifyApiKey(raw: string): Promise<ApiKeyPrincipal | null>
   //    所以这里把 `_` / `%` / `\` 转义掉（MySQL LIKE 的默认转义符就是反斜杠）。
   const prefix = raw.slice(0, API_KEY_PREFIX_LEN);
   const likePattern = `${prefix.replace(/([%_\\])/g, '\\$1')}%`;
-  const candidates = await ApiKey.findAll({
-    where: { key_prefix: { [Op.like]: likePattern } },
-  });
+  // 列不存在时（迁移没跑）退回**不带** key_sha256 条件的老查询
+  const legacy =
+    sha256Support === 'missing'
+      ? await ApiKey.findAll({ where: { key_prefix: { [Op.like]: likePattern } } })
+      : await ApiKey.findAll({
+          where: { key_sha256: null, key_prefix: { [Op.like]: likePattern } },
+        });
 
-  for (const row of candidates) {
+  for (const row of legacy) {
     const matched = await verifyPassword(raw, row.key_hash);
     if (!matched) {
       continue;
     }
-    const revokedAt = row.revoked_at;
-    const expiresAt = row.expires_at;
-    if (revokedAt !== null) {
-      logger.info({ apiKeyId: row.id, tenantId: row.tenant_id }, 'API Key 已被撤销，拒绝');
-      return null;
-    }
-    if (expiresAt !== null && expiresAt.getTime() <= now) {
-      logger.info({ apiKeyId: row.id, tenantId: row.tenant_id }, 'API Key 已过期，拒绝');
-      return null;
-    }
-    const principal: ApiKeyPrincipal = {
-      keyId: row.id,
-      tenantId: row.tenant_id,
-      name: row.name,
-      scope: row.scope,
-    };
-    if (cache.size >= CACHE_MAX) {
-      sweepCache(now);
-      if (cache.size >= CACHE_MAX) {
-        cache.clear();
-        cacheByKeyId.clear();
-      }
-    }
-    cache.set(ck, { principal, revokedAt, expiresAt, cachedAt: now });
-    const keys = cacheByKeyId.get(row.id) ?? new Set<string>();
-    keys.add(ck);
-    cacheByKeyId.set(row.id, keys);
-    void touchLastUsedAt(row.id, now);
-    return principal;
+    // 回填 sha256（自愈）：这把 key 下次就走快路径了
+    await backfillSha256(row, sha);
+    return await finishAuth(row, now, sha);
   }
 
   return null;
+}
+
+/**
+ * 把存量 key 的 sha256 回填上去（自愈）。
+ *
+ * 回填失败不影响本次鉴权结果 —— 这一行只是为了下次能走快路径。
+ */
+async function backfillSha256(row: ApiKey, sha: string): Promise<void> {
+  if (sha256Support === 'missing') {
+    return;
+  }
+  try {
+    await ApiKey.update({ key_sha256: sha }, { where: { id: row.id, key_sha256: null } });
+  } catch (err: unknown) {
+    if (isMissingColumnError(err)) {
+      degradeToPrefixLookup(err instanceof Error ? err.message : String(err));
+      return;
+    }
+    logger.debug(
+      { err: err instanceof Error ? err.message : String(err), apiKeyId: row.id },
+      '回填 API Key 的 sha256 失败（不影响本次鉴权）',
+    );
+  }
+}
+
+/**
+ * bcrypt 已经比对通过之后的后半程：查撤销 / 过期 → 写缓存 → 返回身份。
+ */
+async function finishAuth(row: ApiKey, now: number, sha: string): Promise<ApiKeyPrincipal | null> {
+  const revokedAt = row.revoked_at;
+  const expiresAt = row.expires_at;
+  if (revokedAt !== null) {
+    logger.info({ apiKeyId: row.id, tenantId: row.tenant_id }, 'API Key 已被撤销，拒绝');
+    return null;
+  }
+  if (expiresAt !== null && expiresAt.getTime() <= now) {
+    logger.info({ apiKeyId: row.id, tenantId: row.tenant_id }, 'API Key 已过期，拒绝');
+    return null;
+  }
+  const principal: ApiKeyPrincipal = {
+    keyId: row.id,
+    tenantId: row.tenant_id,
+    name: row.name,
+    scope: row.scope,
+  };
+  if (cache.size >= CACHE_MAX) {
+    sweepCache(now);
+    if (cache.size >= CACHE_MAX) {
+      cache.clear();
+      cacheByKeyId.clear();
+    }
+  }
+  cache.set(sha, { principal, revokedAt, expiresAt, cachedAt: now });
+  const keys = cacheByKeyId.get(row.id) ?? new Set<string>();
+  keys.add(sha);
+  cacheByKeyId.set(row.id, keys);
+  void touchLastUsedAt(row.id, now);
+  return principal;
 }
 
 /**
@@ -274,7 +494,7 @@ async function touchLastUsedAt(keyId: string, now: number): Promise<void> {
  * 不调的话，撤销最多要等 CACHE_TTL_MS 才生效。
  */
 export function invalidateApiKeyCache(raw: string): void {
-  cache.delete(cacheKeyOf(raw));
+  cache.delete(sha256OfApiKey(raw));
 }
 
 /**

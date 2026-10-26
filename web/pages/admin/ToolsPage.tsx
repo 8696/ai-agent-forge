@@ -435,7 +435,7 @@ function ToolEditor({
               type="info"
               showIcon
               style={{ marginBottom: 16 }}
-              message="本地 mock 接口"
+              title="本地 mock 接口"
               description="平台不会真的向这个地址发请求 —— 它只用来展示和生成确定性模拟响应。真接外部系统是跨系统的事，本平台不做。"
             />
             <Form.Item

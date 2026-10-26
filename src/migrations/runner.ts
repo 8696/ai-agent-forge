@@ -35,6 +35,7 @@ import * as m030 from './030-add-tenant-model-fallback';
 import * as m031 from './031-add-session-favorite';
 import * as m032 from './032-create-agent-runs';
 import * as m033 from './033-evaluation-run-trigger';
+import * as m034 from './034-add-api-key-sha256';
 
 /**
  * umzug 迁移 runner（详见 docs/03-b-技术栈-后端栈.md §B.2）
@@ -219,6 +220,11 @@ export function buildMigrator(): Umzug<QueryInterface> {
         name: '033-evaluation-run-trigger',
         up: (params) => m033.up(params),
         down: (params) => m033.down(params),
+      },
+      {
+        name: '034-add-api-key-sha256',
+        up: (params) => m034.up(params),
+        down: (params) => m034.down(params),
       },
     ],
   });

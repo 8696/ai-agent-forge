@@ -85,12 +85,26 @@ const ALLOWED_NO_TENANT_FILTER: Array<{
   {
     file: 'src/lib/api-key-auth.ts',
     snippet: 'ApiKey.findAll({',
-    reason: 'prefix 粗筛故意跨租户：key_prefix 只有 8 位（前缀 + 5 位随机），不足以定位唯一一把钥匙，所以先捞候选再逐个 bcrypt 比对 —— 真正确定归属的是 bcrypt 比对结果',
+    reason:
+      '存量 key 的慢路径粗筛故意跨租户：key_prefix 只有 8 位（前缀 + 5 位随机），' +
+      '不足以定位唯一一把钥匙，所以先捞候选再逐个 bcrypt 比对 —— ' +
+      '真正确定归属的是 bcrypt 比对结果。' +
+      '（新 key 走的是上面那条 sha256 快路径，不经过这里）',
+  },
+  {
+    file: 'src/lib/api-key-auth.ts',
+    snippet: 'ApiKey.findOne({',
+    reason:
+      'sha256 精确命中 —— 这一步**故意跨租户**：租户上下文是 verify 成功之后才设的' +
+      '（runWithTenant 在 apiKeyAuth 里），此刻还不知道这把 key 属于哪个租户。' +
+      '归属由「sha256 唯一索引」+「bcrypt 比对」双重确定',
   },
   {
     file: 'src/lib/api-key-auth.ts',
     snippet: 'ApiKey.update(',
-    reason: '更新 last_used_at —— 这一行是刚用 prefix + bcrypt 比对命中的那把 key',
+    reason:
+      '两处：① 更新 last_used_at —— 那一行是刚比对命中的那把 key；' +
+      '② 回填存量 key 的 key_sha256 —— 同样只按 id 命中刚比对成功的那一行',
   },
   {
     file: 'src/services/chat.ts',

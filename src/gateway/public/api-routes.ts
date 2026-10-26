@@ -6,6 +6,7 @@ import { config } from '../../config';
 import { Session, Tenant } from '../../models';
 import { AppError, NotFoundError, ValidationError } from '../../lib/errors';
 import { apiKeyAuth, requireApiScope, type ApiKeyPrincipal } from '../../lib/api-key-auth';
+import { resolveTenant } from './tenant-guard';
 import { hybridSearch } from '../../rag/hybrid-search';
 import { getSettingValue } from '../../services/tenant-settings';
 import { runChatTurn } from '../customer';
@@ -28,7 +29,7 @@ import { runChatTurn } from '../customer';
  * 权限分级（docs/10-安全方案.md §10）：
  *   read  = 只调 GET /search
  *   write = 只读 + 发起对话（默认；存量 key 全是这个）
- *   admin = 预留（目前对外 API 没有 admin 专属端点）
+ *   admin = 知识库管理权 —— 端点在 admin-api-routes.ts（同属 /api/v1/public 前缀）
  *
  * 两条端点复用跟 customer 前台**完全相同**的 RAG + LLM 链路
  * （runChatTurn，见 src/gateway/customer/chat-routes.ts）：
@@ -63,22 +64,6 @@ const askBodySchema = z.object({
 /** 从 ctx.state 里取鉴权结果（apiKeyAuth 已经保证一定存在） */
 function currentApiKey(ctx: Context): ApiKeyPrincipal {
   return ctx.state.apiKey as ApiKeyPrincipal;
-}
-
-/** key 所属的租户 —— 外部系统能访问什么完全由它决定 */
-async function resolveTenant(ctx: Context, principal: ApiKeyPrincipal): Promise<Tenant> {
-  const tenant = await Tenant.findByPk(principal.tenantId);
-  if (tenant === null) {
-    throw new NotFoundError('租户');
-  }
-  const now = Date.now();
-  if (
-    tenant.status === 'disabled' ||
-    (tenant.expires_at !== null && tenant.expires_at.getTime() <= now)
-  ) {
-    throw new AppError('该租户的服务已暂停', 'TENANT_UNAVAILABLE', 403);
-  }
-  return tenant;
 }
 
 /**
@@ -236,7 +221,7 @@ const searchQuerySchema = z.object({
 publicApiRouter.get('/search', requireApiScope('read'), async (ctx) => {
   const principal = currentApiKey(ctx);
   const input = searchQuerySchema.parse(ctx.request.query);
-  const tenant = await resolveTenant(ctx, principal);
+  const tenant = await resolveTenant(principal);
 
   // 租户可以在后台关掉自己的重排（docs/12-c §C4）
   const rerankEnabled = await getSettingValue(tenant.id, 'rerank_enabled');
@@ -270,7 +255,7 @@ publicApiRouter.get('/search', requireApiScope('read'), async (ctx) => {
 publicApiRouter.post('/chat', requireApiScope('write'), async (ctx) => {
   const principal = currentApiKey(ctx);
   const input = askBodySchema.parse(ctx.request.body ?? {});
-  const tenant = await resolveTenant(ctx, principal);
+  const tenant = await resolveTenant(principal);
   const session = await resolveOrCreateSession(ctx, tenant, input.session_id);
 
   // 跑一轮对话（限流 / 预算 / 审核 / 落库 / 历史 / 提示词，全在开流之前）
@@ -310,7 +295,7 @@ publicApiRouter.post('/chat', requireApiScope('write'), async (ctx) => {
 publicApiRouter.post('/chat/stream', requireApiScope('write'), async (ctx) => {
   const principal = currentApiKey(ctx);
   const input = askBodySchema.parse(ctx.request.body ?? {});
-  const tenant = await resolveTenant(ctx, principal);
+  const tenant = await resolveTenant(principal);
   const session = await resolveOrCreateSession(ctx, tenant, input.session_id);
 
   const turn = await runChatTurn({

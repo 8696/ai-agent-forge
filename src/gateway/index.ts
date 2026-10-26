@@ -49,5 +49,6 @@ export {
 export {
   publicWidgetRouter,
   publicApiRouter,
+  publicAdminApiRouter,
   publicApiKeyAdminRouter,
 } from './public';

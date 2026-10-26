@@ -10,6 +10,10 @@
  *   publicApiRouter         /api/v1/public/*           对外 REST API
  *                           鉴权：API Key（Authorization: Bearer ak_xxx / X-API-Key）
  *
+ *   publicAdminApiRouter    /api/v1/public/*           对外 REST API 的 admin 档
+ *                           （知识库管理：文档列表 / 上传 / 删除）
+ *                           鉴权：同上，但**必须是 admin 档的 key**
+ *
  *   publicApiKeyAdminRouter /api/v1/admin/api-keys     租户后台管自己的 API Key
  *                           鉴权：admin 的 JWT（URL 前缀属于 admin 命名空间，
  *                           但代码物理上在本目录 —— 见 api-key-admin-routes.ts 的注释）
@@ -20,5 +24,6 @@
  */
 export { publicWidgetRouter, WIDGET_TOKEN_HEADER } from './widget-routes';
 export { publicApiRouter } from './api-routes';
+export { publicAdminApiRouter } from './admin-api-routes';
 export { publicApiKeyAdminRouter } from './api-key-admin-routes';
 export { signWidgetToken, verifyWidgetToken } from './widget-token';

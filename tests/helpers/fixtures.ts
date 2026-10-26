@@ -13,6 +13,7 @@ import { nanoid } from 'nanoid';
 import { getSequelize } from '../../src/db';
 import { ApiKey, Tenant, User, SystemUser } from '../../src/models';
 import { hashPassword } from '../../src/lib/password';
+import { attachApiKeySha256 } from '../../src/lib/api-key-auth';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import fixturesJson from '../fixtures/fixtures.json' with { type: 'json' };
 
@@ -103,13 +104,16 @@ async function rotateApiKey(
   await ApiKey.destroy({ where: { tenant_id: tenantId, name } });
   const raw = `ak_${nanoid(32)}`;
   const prefix = raw.slice(0, 8);
-  await ApiKey.create({
+  const row = await ApiKey.create({
     tenant_id: tenantId,
     name,
     key_prefix: prefix,
     key_hash: await bcrypt.hash(raw, 12),
     created_by: createdBy,
   });
+  // sha256 只用来定位（唯一索引）；凭证判定仍然是上面的 bcrypt。
+  // 迁移 034 没跑时列不存在 → 静默跳过（鉴权退回前缀粗筛）
+  await attachApiKeySha256(row, raw);
   return { raw, prefix };
 }
 

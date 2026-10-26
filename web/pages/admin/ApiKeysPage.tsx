@@ -53,12 +53,12 @@ const STATE_TAG: Record<KeyState, { color: string; label: string }> = {
  *
  * read  = 只读：只能查知识库（GET /search），发起对话会被挡（403）
  * write = 可发起对话（默认）
- * admin = 预留
+ * admin = 知识库管理：还能上传 / 删除本租户的文档
  */
 const SCOPE_LABEL: Record<ApiKeyScope, string> = {
   read: '只读',
   write: '可提问',
-  admin: '管理员',
+  admin: '知识库管理',
 };
 
 const SCOPE_COLOR: Record<ApiKeyScope, string> = {
@@ -70,7 +70,7 @@ const SCOPE_COLOR: Record<ApiKeyScope, string> = {
 const SCOPE_OPTIONS: Array<{ value: ApiKeyScope; label: string }> = [
   { value: 'read', label: '只读（只能查知识库，不能提问）' },
   { value: 'write', label: '可提问（默认）' },
-  { value: 'admin', label: '管理员（预留）' },
+  { value: 'admin', label: '知识库管理（可上传 / 删除本租户文档）' },
 ];
 
 /**
@@ -345,7 +345,19 @@ export function AdminApiKeysPage(): ReactElement {
             name="scope"
             label="权限"
             initialValue="write"
-            extra="对外的 key 是发到客户系统里的 —— 权限给小了才安全。只读级别只能查知识库，发起提问会被拒绝。"
+            extra={
+              <span>
+                对外的 key 是发到客户系统里的 —— 权限给小了才安全。
+                <br />
+                只读：只能查知识库，发起提问会被拒绝。可提问：默认档。
+                <br />
+                知识库管理：额外能上传 / 删除本租户文档 ——{' '}
+                <Text strong style={{ color: token.colorError }}>
+                  拿到这把 key 的系统可以清空知识库
+                </Text>
+                ，只发给确实需要同步文档的系统。
+              </span>
+            }
           >
             <Select options={SCOPE_OPTIONS} />
           </Form.Item>
@@ -361,7 +373,8 @@ export function AdminApiKeysPage(): ReactElement {
         onOk={() => setFresh(null)}
         onCancel={() => setFresh(null)}
         closable={false}
-        maskClosable={false}
+        // ⚠️ 用 `mask.closable` 不用 `maskClosable` —— antd v6 废弃了后者（会刷控制台警告）
+        mask={{ closable: false }}
       >
         <Alert
           type="warning"

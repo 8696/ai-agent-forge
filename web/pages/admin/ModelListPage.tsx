@@ -514,7 +514,7 @@ function ModelEditor({
           <Input placeholder="https://open.bigmodel.cn/api/anthropic" />
         </Form.Item>
 
-        <Space direction="vertical" style={{ width: '100%', marginBottom: 16 }}>
+        <Space orientation="vertical" style={{ width: '100%', marginBottom: 16 }}>
           <Button onClick={() => void onCheckEndpoint()} loading={checking}>
             测一下这个端点
           </Button>
@@ -522,7 +522,7 @@ function ModelEditor({
             <Alert
               type={checkResult.ok ? 'success' : 'error'}
               showIcon
-              message={checkResult.ok ? '端点看起来可用' : '端点不可用'}
+              title={checkResult.ok ? '端点看起来可用' : '端点不可用'}
               description={
                 checkResult.ok
                   ? '只做了静态校验（URL / 协议 / 私网拦截 / DNS 解析），没有真的调模型 —— 能不能真的对话要靠保存后「试连一次」。'

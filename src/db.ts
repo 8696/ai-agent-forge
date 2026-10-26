@@ -27,6 +27,7 @@ import { Mission } from './models/Mission';
 import { AgentRun } from './models/AgentRun';
 import { AgentStep } from './models/AgentStep';
 import { installTenantScopeHooks } from './lib/tenant-scope';
+import { probeApiKeySha256Column } from './lib/api-key-auth';
 
 /**
  * Sequelize 实例（单例）。
@@ -112,6 +113,13 @@ export async function initDatabase(): Promise<void> {
     logger.error({ err }, '数据库连接失败');
     throw err;
   }
+
+  // ⚠️ **迁移 034（api_keys.key_sha256）跑了没** —— 没跑的话要降级，
+  //    否则**每一次**对 api_keys 的查询都会报「Unknown column 'key_sha256'」：
+  //    Sequelize 的 SELECT 列清单来自模型定义，不是查询里写了什么。
+  //    探一次、把列摘掉，一次性解决所有路径（鉴权 + 后台的 key 列表 / 改权限 / 撤销）。
+  //    详见 src/lib/api-key-auth.ts 的 probeApiKeySha256Column。
+  await probeApiKeySha256Column();
 }
 
 // 重导出 DataTypes / Sequelize 类型，给后续 migration 用

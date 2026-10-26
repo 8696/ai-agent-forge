@@ -461,6 +461,36 @@
   - ✅ **加了守卫测试** `tests/unit/docs-consistency.test.ts`：机械核对
     「内置工具 key 集合」「registry 条数」「data part 类型集合」三处文档数字
     —— 改了代码忘了改文档，它就红（已做过扰动验证：把数字改回旧值确实会失败）
+- **E1 的两个已知缺口补齐**（2026-10-26 · 用户口头派活）：
+  - **`admin` scope 从「空档」变成真能力**（`src/gateway/public/admin-api-routes.ts`）：
+    `admin` 档 = 写入的全部能力 + **管理本租户的知识库**
+    （`GET /api/v1/public/documents`、POST 同路径上传、`DELETE /api/v1/public/documents/:id`）。
+    ⚠️ **之前这是个陷阱**：枚举里有 `admin`、后台下拉里能选，但对外 API **没有任何 admin 端点**
+    → 用户能建出一把「看着比 write 大、实际能力等价于 write」的钥匙。
+    按裁定表的判据（纯内部 · 没人标明不做 → 该做）选了**补端点**而不是从下拉里删掉
+  - **上传 / 索引 / 删除抽成共用服务**（`src/services/document-ingest.ts`）——
+    admin 后台和对外 API 走**同一套实现**，免得两条路长歪；
+    `src/gateway/admin/knowledge-routes.ts` 改成调它（删掉本地的三份实现）
+  - ⚠️ **admin 档能删文档** —— 这是新引入的边界，租户自己决定给不给外部系统这一档；
+    后台表单里明写了「拿到这把 key 的系统可以清空知识库」
+  - **鉴权不再全表扫**（迁移 `034-add-api-key-sha256.ts`）：
+    `api_keys.key_sha256` = sha256(完整 key) + 唯一索引 → **索引点查**定位到那一行，
+    再用 bcrypt 验真。以前只按 8 位 `key_prefix` 查（走不了索引 → 全表扫）。
+    存量 key（sha256 为 NULL）走慢路径，**第一次鉴权成功时自动回填**（自愈）
+  - ⚠️ **「代码先于迁移上线」不再是个坑**（同批次补的）：
+    生产是「DBA 手动跑迁移 + 灰度」（docs/11），**代码可能先上线**。
+    而 Sequelize 的 SELECT 列清单来自**模型定义** —— 列不存在时
+    **任何**对 `api_keys` 的查询都会报 `Unknown column 'key_sha256' in 'field list'`
+    （鉴权 + 后台的密钥列表 / 改权限 / 撤销**全挂**）。
+    修法：**启动时探一次**（`probeApiKeySha256Column`）→ 列不在就
+    `ApiKey.removeAttribute('key_sha256')` 把这一列从模型里摘掉
+    → 所有查询退回老行为（前缀粗筛 + bcrypt），只是慢一点，不会挂。
+    ⚠️ **摘列**是关键 —— 只改 WHERE 没用（列清单来自模型定义）。
+    验证工具：`node scripts/check-api-key-degradation.mjs`
+    （在 scratch 库里造出「代码新、schema 旧」的状态逐条验）
+  - 回归测试 `tests/integration/public-admin-api.test.ts`（权限分级 / 跨租户隔离 /
+    删除留审计 / sha256 回填）+
+    `tests/unit/api-key-sha256-degrade.test.ts`（降级判定）
 
 **已知限制**（不主动修，等你派活）：
 
@@ -519,11 +549,26 @@
     ⚠️ **有意没合并成一张表**：两者生命周期不同（令牌会过期，账本不会）
   - **闸门一旦注入就完全接管判断**：引擎内部的规则覆盖了 B3 敏感工具那套
     （`src/tools/execute.ts` 的 `runtime.gate` 有 `allow` / `await` / `blocked` / `reject` 四种结果）
-- ~~**antd v6 的废弃 API 警告刷屏**~~ —— ✅ **2026-10-26 全部迁完**：
-  `Alert message` → `title`（54 处）、`Space direction` → `orientation`（5 处）、
-  `Modal`/`Drawer destroyOnClose` → `destroyOnHidden`（14 处）、
-  `Drawer width` → `size`（6 处）；`List` → `Listy` 和 `Alert.paddingBlock/paddingInline`
-  之前就已经处理过了。**控制台不再刷警告**
+- ~~**antd v6 的废弃 API 警告刷屏**~~ —— ⚠️ **2026-10-26 补记：那批迁移其实漏了 8 处**，
+  「**控制台不再刷警告**」这句当时是**不成立的**：
+  - 大部分确实迁了（`Alert message` → `title` 54 处、`Space direction` → `orientation` 5 处、
+    `Modal`/`Drawer destroyOnClose` → `destroyOnHidden` 14 处、`Drawer width` → `size` 6 处）
+  - ⚠️ **漏的 8 处**（2026-10-26 数据库恢复连通后跑 e2e 时才发现）：
+    `Alert message`（`ObservabilityAlertsPage` 2 处 / `ModelListPage` 1 处 / `ToolsPage` 1 处）、
+    `Space direction`（`ModelListPage` 1 处）、
+    `Drawer width`（挂件页历史记录抽屉 1 处）、
+    `Modal maskClosable`（`ApiKeysPage` 1 处）
+    —— **全在后台页面和挂件抽屉里，之前的 e2e 只访问登录页 / 守卫 / 深色模式 / 挂件，
+    后台页面压根没被打开过，警告只在组件渲染时才打**
+  - ✅ **现在真的不再刷了**，而且加了两层守卫防止再漏：
+    - **静态**（`tests/unit/antd-deprecated-props.test.ts`）：扫源码，
+      **组件在不在页面上、抽屉开没开都算** ——
+      「藏在没打开的抽屉里的 Alert」这种运行时扫不到，静态能扫到；
+      清单是 antd v6.6.6 里**真会运行时告警**的属性（不是类型层的软废弃），
+      每个用例还会回 antd 源码确认「这个属性确实还在废弃列表里」
+    - **运行时**（`tests/e2e/antd-deprecation.spec.ts`）：真开浏览器，
+      把租户后台 17 个页面 + 平台方 3 个页面 + 挂件全访问一遍，
+      控制台里出现 `[antd: ` 开头的废弃警告就红
 - ~~**深色模式下写死浅色看不见**~~ —— ✅ **2026-10-26 清完**：
   34 处 `rgba(0,0,0,*)` 里的文字色 / 背景色 / 边框色全换成 antd token
   （`colorTextTertiary` / `colorTextSecondary` / `colorFillQuaternary` / `colorFillTertiary` /
@@ -580,11 +625,12 @@
 - **联网开关不做**（用户 2026-10-26 拍板 · 跨系统：要接外部搜索 API，
   平台方得买 key / 额度，且外部服务不可控）；
   **会话收藏已做**（迁移 `031` + `PATCH /sessions/:id/favorite` + 侧栏星标 +「只看收藏」筛选）
-- **E1 的三个已知边界**（详见 [12-e](./docs/12-e-需求-业务接入与平台运营.md) §E1）：
+- **E1 的已知边界**（详见 [12-e](./docs/12-e-需求-业务接入与平台运营.md) §E1）：
   - **挂件 / 对外 API 的会话没有清理机制** —— 匿名会话永远留在 `sessions` 表里
   - **匿名场景限流挡不住「一个人开十个浏览器」** —— 匿名没有身份可限
-  - **`api_keys.key_prefix` 只有 8 位且索引是复合索引** → 单独按 prefix 查走不了索引，
-    会全表扫，key 一多就慢。正解是加一列 sha256 确定性哈希（要改 migrations）
+  - ⚠️ **`admin` scope 能删文档**（2026-10-26 补的端点带来的新边界）——
+    拿到 admin 档 key 的外部系统可以清空本租户的知识库。
+    这是「管理员」这一档的定义，租户自己决定给不给；后台表单里写明了这条风险
 - **D1 评测的三个已知边界**（详见 [12-d](./docs/12-d-需求-运维稳定.md) §D1）：
   - **跑批是后台异步的**（接口返 202），不是同步跑完
   - **单次跑批最多 50 题**（`EVALUATION_MAX_ITEMS`）：一条题 = 2 次 LLM 调用（生成 + 裁判），
@@ -637,8 +683,24 @@
 - **页面级 e2e 层要单独装浏览器**：`yarn test:e2e` 用 Playwright，
   换机器第一次跑要先 `npx playwright install chromium`（约 100MB 下载）。
   它跟 vitest 用**同一个数据库**（.env 里那个），别拿生产库跑
-- **测试基建有个坑已修**：`vitest 5` 移除了 `poolOptions.forks.singleFork`（写了会被静默忽略），
-  导致测试文件并行跑、互相踩状态而随机失败 —— 现在改用 `test.fileParallelism: false`
+- ✅ **2026-10-26 全量测试跑通**（数据库恢复连通后）：
+  `yarn typecheck` ✅ · `yarn test`（unit + integration）**84 个文件 / 963 项通过**
+  （13 项跳过）· `yarn test:e2e` **23 项通过**。
+  ⚠️ **这之前集成层和 e2e 层在本机从没跑过** —— 那一大段「B5 / B6 / C3 靠集成测试兜底」
+  的说法当时是**没被验证过的**。现在验证过了
+- **测试基建的坑修了两次才真修好**（2026-10-26）：
+  `vitest 5` 把 `pool` / `maxWorkers` / **`fileParallelism`** 全挪到了**顶层**，
+  写在 `test:` 里**会被静默忽略**（不报错、不生效）——
+  解析代码读的是顶层 `options.fileParallelism`，拿不到就回落到默认值 `true`。
+  - 坑 ①：原来写的 `poolOptions.forks.singleFork` —— vitest 5 删了这个选项
+  - 坑 ②：换成 `test.fileParallelism: false` —— **在 vitest 5 上同样不生效**
+  - ✅ 现在的开关在 `vitest.config.ts` 的**顶层**（跟 `pool` 并排）
+  - **症状**：`tests/integration/admin-audit.test.ts` 的「翻页拿到不同的行」偶发失败 ——
+    另一个测试文件在两次翻页请求之间往 `audit_logs` 插了新行，
+    offset 分页整体错位 → 两页重叠一行。
+    （2026-10-26 全量回归时撞上；靠「看 audit_logs 的写入 id 顺序还交不交错」定位的）
+  - ⚠️ **以后改 vitest 配置先确认选项在哪一层**：顶层选项挪进 `test:` 不会报错，
+    只会悄悄不生效
 - **`yarn lint` 跑不起来**（既有环境问题，不是代码问题）：`typescript-eslint` 不支持
   TypeScript 7.0，eslint 在**加载配置阶段**就报错退出，还没开始扫文件。
   改 `yarn typecheck` 当静态检查（这个是好的）

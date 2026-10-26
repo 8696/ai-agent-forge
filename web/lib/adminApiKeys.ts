@@ -16,7 +16,12 @@ import { adminApi } from './adminApi';
  *  - read  = 只读：只能调 GET /api/v1/public/search（拿知识库原文片段），
  *            **不能发起对话**（发起对话要花钱、要留会话记录）
  *  - write = 可发起对话（默认；加 scope 之前的所有 key 都是这个）
- *  - admin = 预留：对外 API 目前没有 admin 专属端点
+ *  - admin = 知识库管理权：write 的全部能力 + 管理本租户的知识库
+ *            （GET /api/v1/public/documents、POST（同路径，上传）、
+ *            DELETE /api/v1/public/documents/:id）
+ *
+ * ⚠️ **admin 能删文档** —— 给外部系统这一档之前想清楚：
+ *    拿到这把 key 的系统可以清空本租户的知识库。
  */
 export type ApiKeyScope = 'read' | 'write' | 'admin';
 

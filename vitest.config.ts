@@ -37,10 +37,27 @@ export default defineConfig({
     //    ⚠️ vitest 5 **已经移除了 `poolOptions.forks.singleFork`**：
     //    写在那里会被静默忽略（不报错、也不生效），串扰就是这么来的。
     //    替代品是 `fileParallelism: false`（写在 test 里，实测只有这里生效）。
-    fileParallelism: false,
+    fileParallelism: false, // ⚠️ vitest 5 里这个选项在**顶层**，这里这份会被静默忽略 —— 真正的开关见文件底部
   },
-  // vitest 5 起 pool / poolOptions 提到顶层（之前嵌在 test 下，DEPRECATED 警告）
+  // vitest 5 起 pool / poolOptions / maxWorkers / fileParallelism 提到顶层
+  // （写在 test: 里会被静默忽略 —— 见上面那段注释）
   pool: 'forks',
+  /**
+   * 关掉「测试文件之间」的并行。
+   *
+   * ⚠️ **必须在顶层**：vitest 5 把它从 `test.*` 挪到了顶层，
+   *    写在 `test:` 里不报错也不生效（跟 `pool` 一个坑）。
+   *    置 false 会自动把 maxWorkers 压成 1。
+   *
+   * 这个坑踩过两次了：
+   *   ① `poolOptions.forks.singleFork` —— vitest 5 删了它（写了被静默忽略）
+   *   ② 换成 `test.fileParallelism: false` —— **在 vitest 5 上同样不生效**
+   *
+   * 症状实例：tests/integration/admin-audit.test.ts 的「翻页拿到不同的行」偶发失败 ——
+   * 另一个测试文件在两次翻页请求之间往 audit_logs 插了新行，
+   * offset 分页整体错位 → 两页重叠一行。
+   */
+  fileParallelism: false,
   // 路径别名要跟 tsconfig.json 的 paths 对齐 —— vite/vitest 不读 tsconfig 的 paths，
   // 不显式配的话 `@shared/xxx` 在测试里会解析失败（源码里 tsx 能解析，vitest 不能）
   resolve: {

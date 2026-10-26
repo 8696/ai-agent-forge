@@ -5,6 +5,7 @@ import { ApiKey, type ApiKeyScope } from '../../models';
 import { NotFoundError, ValidationError } from '../../lib/errors';
 import { writeAuditLog } from '../../lib/audit-log';
 import {
+  attachApiKeySha256,
   generateApiKey,
   hashApiKey,
   invalidateApiKeyById,
@@ -47,7 +48,8 @@ const createBodySchema = z.object({
    * 权限分级（docs/10-安全方案.md §10）：
    *  - read  = 只读：只能调 GET /search，**不能发起对话**
    *  - write = 可发起对话（默认）
-   *  - admin = 预留
+   *  - admin = 知识库管理：write 的全部能力 + 管理本租户文档
+   *            （/api/v1/public/documents 的增删查）
    * 不传 = write（跟加 scope 列之前的行为一致）。
    */
   scope: z.enum(['read', 'write', 'admin']).optional(),
@@ -77,7 +79,7 @@ publicApiKeyAdminRouter.get('/', async (ctx) => {
       id: row.id,
       name: row.name,
       key_prefix: row.key_prefix,
-      /** 权限分级：read=只读 / write=可发起对话 / admin=预留 */
+      /** 权限分级：read=只读 / write=可发起对话 / admin=知识库管理 */
       scope: row.scope,
       last_used_at: row.last_used_at?.toISOString() ?? null,
       expires_at: row.expires_at?.toISOString() ?? null,
@@ -104,6 +106,10 @@ publicApiKeyAdminRouter.post('/', async (ctx) => {
     revoked_at: null,
     created_by: admin.id,
   });
+  // sha256 只用来定位（唯一索引），凭证判定仍然是上面的 bcrypt。
+  // ⚠️ 单独 UPDATE 而不是建行时一起 INSERT：迁移 034 没跑时列不存在，
+  //    INSERT 里提到这一列会直接报错 —— 「建 key」不该被迁移顺序搞挂。
+  await attachApiKeySha256(row, raw);
 
   await writeAuditLog({
     tenant_id: admin.tenant_id,

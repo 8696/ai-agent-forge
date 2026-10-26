@@ -597,7 +597,10 @@ function WidgetChat({
         open={historyOpen}
         onClose={() => setHistoryOpen(false)}
         title="历史记录"
-        width={Math.min(420, typeof window === 'undefined' ? 420 : window.innerWidth - 40)}
+        // ⚠️ 用 `size` 不用 `width` —— antd v6 废弃了 `width`（控制台会刷警告）。
+        // v6 的 `size` 接受数字（`Drawer.js`：isNumber(size) → 当宽度用），
+        // 所以这里的动态窄屏适配能原样保留。
+        size={Math.min(420, typeof window === 'undefined' ? 420 : window.innerWidth - 40)}
         styles={{ body: { padding: 16 } }}
       >
         {messages.length === 0 ? (

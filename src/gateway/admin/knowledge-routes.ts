@@ -1,26 +1,26 @@
 import Router from '@koa/router';
 import { koaBody } from 'koa-body';
-import type { Context } from 'koa';
 import path from 'node:path';
 import { Op } from 'sequelize';
 import { z } from 'zod';
 import { config } from '../../config';
-import { Document, type DocumentFileType } from '../../models';
+import { Document } from '../../models';
 import { logger } from '../../logger';
 import { jwtAuth } from '../jwt-base';
 import { requireAdmin } from './middleware';
 import {
-  saveUpload,
-  removeUploadFile,
   removeUploadedTmpFiles,
   cleanupStaleTmpFiles,
 } from '../../services/document-upload';
-import { extractText } from '../../services/document-parse';
-import { ingestDocument } from '../../rag/ingest';
+import {
+  ingestUpload,
+  indexDocument,
+  removeDocument,
+} from '../../services/document-ingest';
 import { hybridSearch } from '../../rag/hybrid-search';
 import { getSettingValue } from '../../services/tenant-settings';
-import { bm25RemoveDoc, bm25ChunkCount } from '../../rag/bm25';
-import { deleteDocumentPoints, countPoints } from '../../rag/qdrant';
+import { bm25ChunkCount } from '../../rag/bm25';
+import { countPoints } from '../../rag/qdrant';
 import { writeAuditLog } from '../../lib/audit-log';
 import { NotFoundError, ValidationError } from '../../lib/errors';
 import type { TenantUserJwtPayload } from '../../lib/jwt';
@@ -38,6 +38,10 @@ import type { TenantUserJwtPayload } from '../../lib/jwt';
  *
  * 跨租户隔离：所有查询强制带 ctx.state.adminUser.tenant_id；Qdrant 侧的
  * tenant_id 过滤写在 src/rag/qdrant.ts:vectorSearch 内部，调用方绕不过去。
+ *
+ * ⚠️ **上传 / 索引 / 删除的实现抽在 src/services/document-ingest.ts** ——
+ *    对外 API 的 admin 档（src/gateway/public/admin-api-routes.ts）走同一套，
+ *    免得两条路长歪。
  */
 
 export const adminKnowledgeRouter = new Router({ prefix: '/api/v1/admin' });
@@ -133,77 +137,19 @@ adminKnowledgeRouter.post(
       if (file === undefined) {
         throw new ValidationError('未上传文件（表单字段名必须是 file）');
       }
-      await ingestUpload(ctx, u, file);
+      const outcome = await ingestUpload({
+        actor: { tenantId: u.tenant_id, uploadedBy: u.sub, via: 'admin' },
+        file,
+        ip: ctx.ip,
+      });
+      ctx.status = outcome.status;
+      ctx.body = outcome.body;
     } catch (err: unknown) {
       await removeUploadedTmpFiles(ctx.request.files);
       throw err;
     }
   },
 );
-
-/**
- * 上传 + 索引的主流程。校验 → 落盘 → 建行 → 同步索引。
- * 拆成独立函数是为了让调用方能统一在 catch 里清理 koa-body 的临时文件。
- */
-async function ingestUpload(
-  ctx: Context,
-  u: TenantUserJwtPayload,
-  file: { filepath: string; originalFilename?: string },
-): Promise<void> {
-  const originalFilename = file.originalFilename ?? '';
-  if (originalFilename.trim() === '') {
-    throw new ValidationError('缺少原始文件名');
-  }
-
-  let saved: Awaited<ReturnType<typeof saveUpload>>;
-  try {
-    saved = await saveUpload({
-      tmpPath: file.filepath,
-      originalFilename,
-      tenantId: u.tenant_id,
-    });
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err);
-    // 类型不支持是用户能自己解决的问题 → 400；磁盘写失败是服务端问题 → 原样抛
-    if (message.includes('不支持的文件类型') || message.includes('文件名无效')) {
-      throw new ValidationError(message);
-    }
-    throw err;
-  }
-
-  let doc: Document;
-  try {
-    doc = await Document.create({
-      tenant_id: u.tenant_id,
-      title: saved.title,
-      source: saved.source,
-      file_type: saved.fileType,
-      file_path: saved.absolutePath,
-      status: 'indexing',
-      uploaded_by: u.sub,
-      metadata: { bytes: saved.bytes },
-    });
-  } catch (err: unknown) {
-    // 文件已经从 tmp rename 到正式目录了，但 DB 里没有对应行 → 管理员在 UI 上
-    // 永远看不到也删不掉它。建行失败就把文件收回去，避免留下无主文件。
-    await removeUploadFile(saved.absolutePath).catch(() => {});
-    throw err;
-  }
-
-  await writeAuditLog({
-    tenant_id: u.tenant_id,
-    user_id: u.sub,
-    action: 'DOCUMENT_UPLOAD',
-    resource_type: 'document',
-    resource_id: doc.id,
-    details: { title: saved.title, file_type: saved.fileType, bytes: saved.bytes },
-    ip: ctx.ip,
-  });
-
-  const outcome = await indexDocument(doc, u, ctx.ip);
-  ctx.status = outcome.status;
-  ctx.body = outcome.body;
-}
 
 // ===== POST /knowledge/:id/reindex · 重新索引 =====
 
@@ -216,7 +162,11 @@ adminKnowledgeRouter.post('/knowledge/:id/reindex', async (ctx) => {
   }
 
   await doc.update({ status: 'indexing', error_message: null });
-  const outcome = await indexDocument(doc, u, ctx.ip);
+  const outcome = await indexDocument(
+    doc,
+    { tenantId: u.tenant_id, uploadedBy: u.sub, via: 'admin' },
+    ctx.ip,
+  );
   ctx.status = outcome.status;
   ctx.body = outcome.body;
 });
@@ -229,31 +179,7 @@ adminKnowledgeRouter.delete('/knowledge/:id', async (ctx) => {
 
   // 向量 / 索引先删，DB 行最后删：中途失败时 DB 里还留着记录，管理员能看到并重试，
   // 不会出现「DB 没记录但向量还在被检索命中」的幽灵数据。
-  const failures: string[] = [];
-
-  await deleteDocumentPoints(doc.id).catch((err: unknown) => {
-    const message = err instanceof Error ? err.message : String(err);
-    failures.push(`qdrant:${message}`);
-    logger.error({ docId: doc.id, err: message }, '删 Qdrant points 失败');
-  });
-
-  try {
-    bm25RemoveDoc(u.tenant_id, doc.id);
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err);
-    failures.push(`bm25:${message}`);
-    logger.error({ docId: doc.id, err: message }, '删 BM25 索引失败');
-  }
-
-  if (doc.file_path !== null) {
-    await removeUploadFile(doc.file_path).catch((err: unknown) => {
-      const message = err instanceof Error ? err.message : String(err);
-      failures.push(`file:${message}`);
-      logger.error({ docId: doc.id, err: message }, '删磁盘文件失败');
-    });
-  }
-
-  await doc.destroy();
+  const failures = await removeDocument(doc, u.tenant_id);
 
   await writeAuditLog({
     tenant_id: u.tenant_id,
@@ -315,84 +241,6 @@ adminKnowledgeRouter.post('/knowledge/search', async (ctx) => {
 });
 
 // ===== 内部辅助 =====
-
-/**
- * 解析 → 拆块 → 向量化 → 入库，并回填 documents 状态。
- *
- * 索引失败**不抛 5xx**：文件已经落地、DB 行已经建好，前端拿得到 id 去展示「失败」状态，
- * 管理员可以改完重试或直接删掉。抛 5xx 会让前端只能显示「上传失败」，反而丢掉了已创建的记录。
- */
-async function indexDocument(
-  doc: Document,
-  u: TenantUserJwtPayload,
-  ip: string | undefined,
-): Promise<{ status: number; body: Record<string, unknown> }> {
-  try {
-    const parsed = await extractText(
-      doc.file_path as string,
-      doc.file_type as DocumentFileType,
-    );
-    const result = await ingestDocument({
-      documentId: doc.id,
-      tenantId: u.tenant_id,
-      title: doc.title,
-      text: parsed.text,
-    });
-
-    await doc.update({
-      status: 'ready',
-      chunk_count: result.chunkCount,
-      error_message: null,
-      metadata: { ...(doc.metadata ?? {}), pages: parsed.pages },
-    });
-
-    return {
-      status: 201,
-      body: {
-        id: doc.id,
-        title: doc.title,
-        file_type: doc.file_type,
-        status: 'ready',
-        chunk_count: result.chunkCount,
-        pages: parsed.pages,
-      },
-    };
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err);
-    const brief = message.slice(0, 500);
-
-    await doc
-      .update({ status: 'failed', chunk_count: 0, error_message: brief })
-      .catch((updateErr: unknown) => {
-        logger.error(
-          { docId: doc.id, err: updateErr },
-          '回填索引失败状态出错',
-        );
-      });
-
-    await writeAuditLog({
-      tenant_id: u.tenant_id,
-      user_id: u.sub,
-      action: 'DOCUMENT_INDEX_FAILED',
-      resource_type: 'document',
-      resource_id: doc.id,
-      details: { title: doc.title, error: brief },
-      ip: ip ?? null,
-    });
-
-    return {
-      status: 200,
-      body: {
-        id: doc.id,
-        title: doc.title,
-        file_type: doc.file_type,
-        status: 'failed',
-        chunk_count: 0,
-        error: brief,
-      },
-    };
-  }
-}
 
 /** 查文档并校验归属；跨租户访问一律按「不存在」处理，不泄露别的租户有没有这个 id */
 async function findOwnedDocument(
