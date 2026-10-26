@@ -1,5 +1,5 @@
 /**
- * 预配置的 axios HTTP 客户端 —— docs/16-d §D6 测试基建契约
+ * 预配置的 axios HTTP 客户端 —— docs/12-d §D6 测试基建契约
  *
  * 用法：
  *   import { adminHttp, loginAdmin } from '../helpers';

@@ -46,6 +46,42 @@ describe('admin-users-routes', () => {
       await http.acmeAdmin.delete(`/users/${id}`);
     });
 
+    // A3 验收：「admin 创建 3 个 admin 角色用户（实际业务：不同 admin 共存）」
+    // 2026-10-26 补 —— 这条以前只测了 role='customer'，
+    // 「多 admin 共存」这个业务场景从未被端到端验证过。
+    it('201 + 建 admin 角色用户（多 admin 共存）', async () => {
+      const email = `test-admin-${Date.now()}@acme.test`;
+      const r = await http.acmeAdmin.post(
+        '/users',
+        { email, password: 'Pass-12345678', role: 'admin' },
+        { validateStatus: () => true },
+      );
+      expect(r.status).toBe(201);
+      const body = r.data as { id: string; email: string; role: string };
+      expect(body.email).toBe(email);
+      expect(body.role).toBe('admin');
+
+      // 新建的 admin 能用 admin 入口登录（同租户号 + 不同邮箱）
+      const login = await axios.post(
+        `${BASE}/api/v1/admin/login`,
+        { email, password: 'Pass-12345678', tenant_code: 'acme' },
+        { validateStatus: () => true },
+      );
+      expect(login.status).toBe(200);
+
+      // 清理：删掉
+      await http.acmeAdmin.delete(`/users/${body.id}`);
+    });
+
+    it('400 role=agent 被拒（历史 ENUM 留位，不开放）', async () => {
+      const r = await http.acmeAdmin.post(
+        '/users',
+        { email: `agent-${Date.now()}@acme.test`, password: 'Pass-12345678', role: 'agent' },
+        { validateStatus: () => true },
+      );
+      expect(r.status).toBe(400);
+    });
+
     it('400 邮箱已存在', async () => {
       const r = await http.acmeAdmin.post(
         '/users',

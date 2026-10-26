@@ -25,13 +25,14 @@
     "test:fixtures": "yarn seed && yarn e2e:login",
     "test:unit": "vitest run tests/unit",
     "test:integration": "vitest run --config vitest.config.ts tests/integration",
-    "test:e2e": "vitest run --config vitest.config.ts tests/e2e",
+    "test:e2e": "playwright test",
     "test": "vitest run --config vitest.config.ts",
     "lint": "eslint . --max-warnings 0",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write \"src/**/*.{ts,tsx,json,md}\" \"web/**/*.{ts,tsx,json,md}\" \"shared/**/*.{ts,tsx,json,md}\"",
     "format:check": "prettier --check \"src/**/*.{ts,tsx,json,md}\" \"web/**/*.{ts,tsx,json,md}\" \"shared/**/*.{ts,tsx,json,md}\"",
-    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.web.json"
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.web.json && tsc --noEmit -p tsconfig.e2e.json",
+    "e2e:server": "yarn migrate && tsx src/server.ts"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^4.0.79",
@@ -75,6 +76,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@playwright/test": "1.64.1",
     "@types/bcrypt": "^6.0.0",
     "@types/jsonwebtoken": "^9.0.10",
     "@types/koa": "^3.0.3",

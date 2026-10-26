@@ -8,7 +8,7 @@ import { jwtAuth } from '../jwt-base';
 import { requireAdmin } from './middleware';
 
 /**
- * admin 子系统：租户用户管理端点 —— 详见 docs/16-需求技术对照表 A3
+ * admin 子系统：租户用户管理端点 —— 详见 docs/12-a §A3
  *
  * 路由（全部要求 admin 角色）：
  *   GET    /api/admin/users

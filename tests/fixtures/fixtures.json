@@ -1,5 +1,5 @@
 {
-  "_comment": "测试 fixture 单源真相（docs/16-d §D6 测试基建契约）。scripts/seed.ts 和 web/e2e/login-all.mjs 都从这里读。修改这里 → 两个入口自动生效。生产环境千万别用这套凭据。",
+  "_comment": "测试 fixture 单源真相（docs/12-d §D6 测试基建契约）。tests/fixtures/seed.ts 和 tests/helpers/login-all.mjs 都从这里读。修改这里 → 两个入口自动生效。生产环境千万别用这套凭据。",
   "system": {
     "email": "platform-admin@local.test",
     "password": "PlatformAdmin-123!",

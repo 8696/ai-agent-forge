@@ -37,9 +37,11 @@
 | DELETE | `/sessions/:id`             | 删会话（messages 由 DB 级联删）                      |
 | GET    | `/sessions/:id/messages`    | 历史消息（`useChat` 可直接吃的形状）                 |
 | POST   | `/sessions/:id/messages`    | **流式发消息（SSE）**；末条是 assistant 时 = 重新生成 |
-| POST   | `/messages/:id/feedback`    | 👍 / 👎 反馈（`null` 清除）                           |
+| POST   | `/messages/:id/feedback`    | 👍 / 👎 反馈（`null` 清除，可附文字说明 `feedback_text`） |
 
-**页面**：`/customer` 与 `/customer/chat`（同一个 ChatPage），详见 `04-b` §4。
+**页面**：`/customer` 是**首页工作台**（`HomePage`），`/customer/chat` 才是**聊天页**
+（`ChatPage`）—— 两个不同的组件（B7 把原来「同一个组件」的状态拆开了），
+详见本文档 §B7 与 `04-b` §4。
 
 **验收**：
 
@@ -69,6 +71,10 @@
   前台聊天页 + 挂件页输入区上方都有勾选框 → 请求体带 `thinking` →
   后端 `resolveThinkingBudget` 算预算（租户配了 > 0 一直生效；
   没配但用户勾了 → 1024 token 的兜底预算）。详见 [04-b](./04-b-ui-登录与聊天挂件.md) §4.4
+- **对话链路下发的 `data-*` part 共四种**：`data-citations`（引用片段）/
+  `data-truncated`（上下文被截断 / 已摘要）/ `data-status`（阶段状态）/
+  **`data-moderation`（输出审核结果，详见 [12-d](./12-d-需求-运维稳定.md) §D4）** ——
+  前台聊天页和挂件页都渲染它（审核没过时前端换文案，浏览器里已经流出去的字节收不回来）
 - 跨租户防御：会话一律按 `(id, tenant_id, user_id)` 三元组查，别人的会话按 404 处理
 - 进程被 kill 会留下 `status='streaming'` 的僵尸消息；读历史时自动降级为 `failed`
 
@@ -177,6 +183,8 @@
 - ✅ 跨租户隔离：`loadSummaryState` / `writeSummaryState` 都带 `tenant_id` 过滤
 - ✅ 摘要写一条**独立**的 trace（`kind='summary'`，`name='session.summarize'`）——
   不挂在对话 trace 上，对话 trace 的 `duration_ms` 要保持「用户感知的耗时」
+  （这段 trace 只有 **2 段 span**：`llm.summarize` / `cost.record`；
+  B4 的记忆抽取 trace 才有 3 段，多一个 `storage.apply`）
 - ✅ 摘要模型可独立配置（`usage_scope='summary'`），回落链：摘要模型 → 对话模型 → 平台默认
 
 #### 已知边界
@@ -223,6 +231,7 @@
   ✅ **2026-10-25 已实现**：`src/rag/query-rewrite.ts`（租户级开关
   `query_rewrite_enabled`，**默认关闭** —— 每轮多一次模型调用，多 1~3 秒 + 一份花费，
   而短问题（「年假几天」）改写基本没收益。改写失败一律回落原查询，不影响检索。
+  该开关登记在**租户通用配置页的「知识库」分类**下（见 [12-c](./12-c-需求-管理员可配置.md) §C4）。
   单测 `tests/unit/query-rewrite.test.ts`
 
 **重排序是怎么做的**（2026-10-25 落地，模块实现见
@@ -255,7 +264,7 @@
   对话链路通过 `onRecallFailure` 回调识别到这种情况，在 `data-citations` 里带
   `retrieval_error`，并在提示词里改用「检索不可用」的措辞，
   **不会伪装成「知识库里没有」**
-- ✅ 重排会改写顺序：单元测试断言「RRF 第 1 名被重排降到第 4 名」；
+- ✅ 重排会改写顺序：单元测试断言「模型把第 5 名提到了第一」；
   「重排服务挂掉」时顺序原样退回 RRF（降级不抛错）
 - ✅ 租户关掉 `rerank_enabled` 后检索照常工作，只是不再重排
 
@@ -324,7 +333,7 @@
 
 | 东西 | 位置 |
 |---|---|
-| 内置工具的实现（5 个） | `src/tools/builtin/`（`registry.ts` + 每个工具一个文件） |
+| 内置工具的实现（6 个） | `src/tools/builtin/`（`registry.ts` + 每个工具一个文件） |
 | 工具执行包装层（超时 / 降级 / span / 落库 part / HITL 闸门） | `src/tools/execute.ts` |
 | 「本租户启用的工具」→ AI SDK tool 集合 | `src/tools/resolve.ts` |
 | 工具注册表的 CRUD | `src/services/tools.ts` |
@@ -433,6 +442,11 @@ POST /api/v1/customer/sessions/:id/tool-approvals  { tool_name, args }
 （`missions` 表 / 断点恢复 / 任务列表都没做），下一轮迁进 `missions`
 （键的格式不用变）。
 
+⚠️ **写批准记录必须整体复制 `sessions.metadata` 再改**（Sequelize 对 JSON 字段的
+**原地修改不会进 UPDATE** —— `set()` 看到「新值 === 旧值」就认为没变，那一列压根
+不写进 UPDATE，批准记录会**静默丢掉**：闸门永远看不到批准，工具一直卡在「待确认」）。
+代码里已经这么做了（`src/services/tool-approvals.ts`），**改这块代码时别「简化」成原地改**。
+
 **三种工具类型**（`tools.type` 枚举）：
 
 | type | 谁写的 | `execute` 里做什么 | 租户侧门槛 | 本轮状态 |
@@ -454,6 +468,7 @@ POST /api/v1/customer/sessions/:id/tool-approvals  { tool_name, args }
 | 方法   | 路径                        | 说明                                  |
 | ------ | --------------------------- | ------------------------------------- |
 | GET    | `/api/v1/admin/tools`       | 本租户工具列表                        |
+| GET    | `/api/v1/admin/tools/:id`   | 单条工具详情                          |
 | GET    | `/api/v1/admin/tools/builtins` | 平台内置工具清单（注册时的下拉框）   |
 | POST   | `/api/v1/admin/tools`       | 注册工具（本轮只允许 `builtin`）      |
 | PATCH  | `/api/v1/admin/tools/:id`   | 改描述 / 启停 / 敏感标记              |
@@ -462,9 +477,15 @@ POST /api/v1/customer/sessions/:id/tool-approvals  { tool_name, args }
 | POST   | `/api/v1/customer/sessions/:id/tool-approvals` | 用户确认一次敏感工具调用（HITL） |
 | POST   | `/api/v1/customer/sessions/:id/tool-approvals/reject` | 用户取消一次敏感工具调用 |
 | POST   | `/api/v1/public/widget/:tenantCode/tool-approvals` | 挂件（匿名）确认一次敏感工具调用 |
+| POST   | `/api/v1/public/widget/:tenantCode/tool-approvals/reject` | 挂件（匿名）取消一次敏感工具调用 |
 | GET    | `/api/v1/admin/tool-logs` | 工具调用流水（分页 + 工具 / 状态 / 时间 / 关键词筛选） |
 | GET    | `/api/v1/admin/tool-logs/names` | 本租户调用过的工具名（筛选下拉框） |
 | GET    | `/api/v1/admin/tool-logs/:id` | 单条调用详情 |
+
+> 挂件侧那两个 `tool-approvals` 端点在 **`public/` 命名空间**下（跟 system / admin /
+> customer 三个命名空间完全独立，JWT 打过来 401）——
+> 但**会话本身是匿名 token 认领来的**（`x-widget-token` → session id），
+> 所以挂件里的敏感工具照样能确认 / 取消。
 
 对话链路侧**不加新端点** —— `POST /api/v1/customer/sessions/:id/messages` 里的
 `streamText()` 多传一个 `tools` 字段即可；租户级隔离靠 `tools` 表的 `tenant_id`。
@@ -487,7 +508,7 @@ POST /api/v1/customer/sessions/:id/tool-approvals  { tool_name, args }
 
 **已知边界**：
 
-- **外部业务系统本身不在本项目范围**（[01](./01-需求与场景.md) §1.4 明确写了）：
+- **外部业务系统本身不在本项目范围**（[01](./01-需求与场景.md) §1.5 明确写了）：
   查订单 / 改地址 / 退款这些要另外起业务系统项目。本项目只提供
   「工具注册 + 调用」的能力，工具的 `execute` 里对接的是**别的系统**
 - **内置工具是 mock** —— 订单 / 商品 / 物流 / 优惠券 / 退款单都是按租户 + 编号确定性生成的假数据，
@@ -497,6 +518,9 @@ POST /api/v1/customer/sessions/:id/tool-approvals  { tool_name, args }
   会被工具耗时拉长。工具本身有 5 秒上限兜着
 - **成本口径变了**：工具循环会让一轮产生多次 LLM 调用，
   所以成本记账改用 `result.totalUsage`（整个循环的累计）而不是 `result.usage`（最后一步）
+- ⚠️ **闸门拦下和用户拒绝这两类调用也写 `tool.invoke` span** —— span 记的是
+  「这次调用被拦下了」，**不是**「执行结果」（这两个分支没有执行结果可记）；
+  **审批事件本身不进 trace**，只进 `tool_call_logs` 表（后台「工具调用流水」页可查）
 
 
 ---
@@ -568,17 +592,21 @@ T1 是**成本闸门**：每轮都调一次抽取模型，一个租户一天要�
 （资料更权威、位置更靠后；记忆段自己写明「冲突时以『可参考资料』为准」）。
 条数上限（`memory_top_k`，默认 8）和 token 预算（`memory_token_budget`，默认 600）双重裁剪。
 记忆块的 token 从「单轮上下文总预算」里扣，跟检索片段一样从历史预算里让位。
-⚠️ `memory_token_budget` **下限 200**：记忆段有一段固定的说明文字（约 150 token），
+⚠️ `memory_token_budget` **下限 200**：记忆段有一段固定的说明文字（实测 124 token），
 预算比它还小的话一条都装不下，记忆会**静默失效**。
 
 **接口**：
 
 - 用户自助（`/api/v1/customer/memories`，customer 角色）：
-  `GET` 列表 / `POST` 新增 / `PATCH` 编辑 / `DELETE` 归档 / `POST :id/restore` 恢复 /
-  `GET|PUT /settings` 总开关 / `DELETE` 清空全部（归档，可恢复）/
+  `GET` 列表 / `POST` 新增 / `PATCH :id` 编辑 / `DELETE :id` 归档 /
+  `POST :id/restore` 恢复 /
+  `GET|PUT /api/v1/customer/memories/settings` 总开关 /
+  `DELETE` 清空全部（归档，可恢复）/
   **`DELETE :id/permanent` 彻底删一条 / `DELETE /permanent` 彻底删全部（物理删，不可恢复）**
 - 租户后台（`/api/v1/admin/memories`，admin 角色）：
-  `GET` 分页列表 / `GET /owners` 哪些用户有记忆 / `POST` 给用户加一条（`source='admin'`）/
+  `GET` 分页列表 / `GET /api/v1/admin/memories/owners` 哪些用户有记忆 /
+  `GET /api/v1/admin/memories/:id` 单条记忆详情 /
+  `POST` 给用户加一条（`source='admin'`）/
   `PATCH :id` 改 / `DELETE :id` 归档 / `POST :id/restore` 恢复 /
   `DELETE :id/permanent` 物理删除（合规清理）
 
@@ -607,7 +635,7 @@ T1 是**成本闸门**：每轮都调一次抽取模型，一个租户一天要�
 
 **页面**：
 
-- 租户后台 `/admin/memories`（左用户右记忆双栏）—— 详见 [04-c](./04-c-ui-后台管理页面.md) §5.11
+- 租户后台 `/admin/memories`（左用户右记忆双栏）—— 详见 [04-c](./04-c-ui-后台管理页面.md) §5.12
 - 前台 `/customer/memories`（我的记忆）—— 详见 [04-b](./04-b-ui-登录与聊天挂件.md) §4.9
 
 **验收**：
@@ -629,6 +657,9 @@ T1 是**成本闸门**：每轮都调一次抽取模型，一个租户一天要�
 - 抽取要额外花一次 LLM 调用（实测约 2000 token）——
   **可以压**：租户单独配一条「记忆抽取」用途的便宜模型即可（见上）
 - 记忆没有遗忘机制：只增不减，靠单用户 50 条 `auto` 记忆封顶 + 冲突时归档收敛
+- **自动抽取只能改「最近 50 条」记忆**（`EXTRACT_CANDIDATE_LIMIT = 50`）——
+  模型能改写 / 归档的目标 id 取自喂给它的现有记忆快照（`updated_at DESC limit 50`），
+  **第 51 条之外的记忆模型碰不到**（改不动、也归档不掉）
 - 摘要压缩已落地，但摘要是**滞后一轮**的（本轮丢掉的轮次要到下一轮才进摘要）
 - 记忆注入是「按优先级取 top N」，**没有按当前问题做相关性排序**（没有做 embedding 召回）
 
@@ -688,7 +719,7 @@ B5 的前置是 B3（没有工具就没有要跟踪的副作用），而 **B3 �
 **需求**：单代理处理复杂任务时上下文太长、专业度不够，拆给多个专业代理协作。
 
 **当前状态**：⏳ **未实现**。本轮明确不做（用户 2026-10-25 拍板：B3 + C2 先做，多代理下一轮）。
-[01](./01-需求与场景.md) §1.7 把它列为「高级能力（按需加）」。
+[01](./01-需求与场景.md) §1.8 把它列为「高级能力（按需加）」。
 概念说明在 [07-d](./07-d-模块-框架与多代理.md) 模块 14。
 **单代理 + RAG + 长期记忆 + 工具已经能覆盖客服场景** —— 这是不做多代理的理由，不是技术做不到。
 
@@ -757,10 +788,15 @@ B3 现在通了（单代理已经能调工具），但 B5 的任务状态机还�
 `/customer/chat?q=<问题>` → 前端建一个新会话 → 把问题自动发出去 → 回答照样流式。
 URL 随即被换成 `/customer/chat?session=<id>`，**刷新页面不会把同一个问题再问一遍**。
 
+**知识库卡里的条目同样可点**：点一份文档 → 自动生成「关于《X》，有哪些重点？」
+→ 跟推荐问题走**同一条路径**（同一个 `ask()`：建新会话 → 自动发出去 → 跳聊天页）。
+所以「首页知识库那一栏」不只是只读清单，**每份资料都是一个提问的入口**。
+
 **验收**：
 
 - 登录后落到 `/customer`，看到欢迎语 + 推荐问题 + 最近会话 + 知识库 + 我的记忆四块
 - 点推荐问题 → 自动开新会话并发出该问题，答案带引用来源
+- 点知识库里的一个文档条目 → 自动问「关于《X》，有哪些重点？」（跟推荐问题同一条路径）
 - 点最近会话 → 直接打开那个会话（`?session=<id>`）
 - 后台 `/admin/settings` 改欢迎语 / 推荐问题 → **保存后立刻生效**，不用重启
 - 知识库为空 / 记忆为空 / 一个接口挂了 → 对应卡片降级显示，**其余卡片照常**

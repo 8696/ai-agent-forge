@@ -3,9 +3,10 @@
  * 对应 src/gateway/system/tenant-routes.ts（7 个端点）
  * 详见 docs/12-d-需求-运维稳定.md §D6
  */
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import axios from 'axios';
-import { apiBase,  allHttpFromTokensFile, type AllHttp } from '../helpers';
+import { apiBase, allHttpFromTokensFile, readTokensFile, type AllHttp } from '../helpers';
+import { AuditLog, Tenant } from '../../src/models';
 
 const BASE = apiBase();
 
@@ -35,6 +36,43 @@ describe('system-tenants-routes', () => {
         { validateStatus: () => true },
       );
       expect(r.status).toBe(400);
+    });
+
+    // A2 验收：「code 重复提交 → 返回 400「租户号已被使用」」
+    // 2026-10-26 补 —— 这条以前**一次都没被测过**（「租户号已被使用」这个字符串
+    // 全仓只出现在 src/gateway/system/tenant-routes.ts 里）。
+    it('400 code 已被使用 → 「租户号已被使用」', async () => {
+      const r = await http.system.post(
+        '/tenants',
+        {
+          code: 'acme', // 种子数据里已存在
+          name: '重复的租户号',
+          admin_email: 'dup@acme.test',
+          admin_password: 'Pass-12345678',
+        },
+        { validateStatus: () => true },
+      );
+      expect(r.status).toBe(400);
+      expect(JSON.stringify(r.data)).toContain('租户号已被使用');
+    });
+
+    // A2 验收：「跨子系统鉴权：用非 system 角色的 token 调用 → 401」
+    it('401 用 admin 的 token 建租户（跨子系统）', async () => {
+      // ⚠️ 必须用**裸 axios**：`http.acmeAdmin` 的 baseURL 锁死在 /api/v1/admin，
+      //    拿它打 /tenants 会打到 /api/v1/admin/tenants（那个路由不存在 → 404，
+      //    不是鉴权失败）。要打 system 的端点就得自己拼完整 URL。
+      const { acmeAdmin } = await readTokensFile();
+      const r = await axios.post(
+        `${BASE}/api/v1/system/tenants`,
+        {
+          code: 'cross-subsystem-probe',
+          name: '跨子系统探针',
+          admin_email: 'x@y.test',
+          admin_password: 'Pass-12345678',
+        },
+        { headers: { authorization: `Bearer ${acmeAdmin}` }, validateStatus: () => true },
+      );
+      expect(r.status).toBe(401);
     });
 
     it('401 无 token', async () => {
@@ -163,6 +201,87 @@ describe('system-tenants-routes', () => {
         { validateStatus: () => true },
       );
       expect(r.status).toBe(400);
+    });
+  });
+
+  /**
+   * 平台方写操作补审计（2026-10-26）
+   *
+   * ⚠️ 以前**只有** F2 的两个 PATCH（改到期 / 改启停）写审计，
+   *    建租户 / 改租户资料 / 重置租户 admin 密码这三条
+   *    「影响全局」的路径一条都没记 —— 而租户后台建用户反而记了。
+   *    这条测试锁住补上的三条。
+   */
+  describe('平台方写操作写审计', () => {
+    const code = `audit-probe-${Date.now()}`;
+    let tenantId = '';
+
+    afterAll(async () => {
+      if (tenantId !== '') {
+        // users.tenant_id 是 ON DELETE CASCADE —— 删租户连带删掉它的 admin
+        await Tenant.destroy({ where: { id: tenantId } });
+      }
+    });
+
+    it('建租户 → TENANT_CREATED（系统级日志，tenant_id 为 NULL）', async () => {
+      const r = await http.system.post(
+        '/tenants',
+        {
+          code,
+          name: '审计探针租户',
+          admin_email: `admin-${code}@probe.test`,
+          admin_password: 'Pass-12345678',
+        },
+        { validateStatus: () => true },
+      );
+      expect(r.status).toBe(201);
+      tenantId = (r.data as { tenant: { id: string } }).tenant.id;
+
+      const row = await AuditLog.findOne({
+        where: { action: 'TENANT_CREATED', resource_id: tenantId },
+        order: [['created_at', 'DESC']],
+      });
+      expect(row).not.toBeNull();
+      // 系统级日志：tenant_id 为空（平台方不属于任何租户）
+      expect(row?.tenant_id).toBeNull();
+      const details = JSON.stringify(row?.details ?? {});
+      // 记了租户信息，但**绝不记密码**
+      expect(details).toContain(code);
+      expect(details).not.toContain('Pass-12345678');
+    });
+
+    it('改租户 name/plan → TENANT_UPDATED', async () => {
+      const r = await http.system.patch(
+        `/tenants/${tenantId}`,
+        { name: '改名后的探针租户' },
+        { validateStatus: () => true },
+      );
+      expect(r.status).toBe(200);
+
+      const row = await AuditLog.findOne({
+        where: { action: 'TENANT_UPDATED', resource_id: tenantId },
+        order: [['created_at', 'DESC']],
+      });
+      expect(row).not.toBeNull();
+      const details = JSON.stringify(row?.details ?? {});
+      expect(details).toContain('改名后的探针租户');
+    });
+
+    it('重置租户 admin 密码 → TENANT_ADMIN_PASSWORD_RESET（密码不进 details）', async () => {
+      const r = await http.system.post(
+        `/tenants/${tenantId}/admin/reset-password`,
+        { new_password: 'Brand-New-Pass-999' },
+        { validateStatus: () => true },
+      );
+      expect(r.status).toBe(200);
+
+      const row = await AuditLog.findOne({
+        where: { action: 'TENANT_ADMIN_PASSWORD_RESET', resource_id: tenantId },
+        order: [['created_at', 'DESC']],
+      });
+      expect(row).not.toBeNull();
+      const details = JSON.stringify(row?.details ?? {});
+      expect(details).not.toContain('Brand-New-Pass-999');
     });
   });
 });

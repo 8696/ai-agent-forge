@@ -62,13 +62,20 @@ export class TenantModel extends Model {
   declare name: string;
 
   /**
-   * 用途：chat=对话模型 / memory=记忆抽取模型。
+   * 用途：chat=对话模型 / memory=记忆抽取模型 / summary=会话摘要模型。
    *
-   * 没配 memory 模型时，记忆抽取**回落到对话模型**（行为跟没加这个字段之前一样）。
+   * 没配 memory 模型时，记忆抽取**回落到对话模型**（行为跟没加这个字段之前一样）；
+   * summary 同理（回落链：摘要模型 → 对话模型 → 平台默认）。
+   *
+   * ⚠️ **这里的 ENUM 必须跟 TS 类型和真实 DB 列三者一致**（2026-10-26 修）：
+   *    以前写的是 `ENUM('chat', 'memory')`，漏了 `summary` ——
+   *    而 TS 类型（`ModelUsageScope`）和迁移 019 的真实列都已经是三值。
+   *    Sequelize 默认不开 `typeValidation`，所以这个不一致不会当场炸，
+   *    但一旦有人开了 typeValidation 或用 `sync({ alter })` 就会炸。
    */
   @Default('chat')
   @Column({
-    type: DataType.ENUM('chat', 'memory'),
+    type: DataType.ENUM('chat', 'memory', 'summary'),
     allowNull: false,
     defaultValue: 'chat',
   })

@@ -38,3 +38,47 @@ export async function listColumns(
   );
   return new Set(rows.map((r) => r.COLUMN_NAME));
 }
+
+/** 当前库里有哪些表（不含视图） */
+export async function listTables(queryInterface: QueryInterface): Promise<string[]> {
+  const rows = await queryInterface.sequelize.query<{ TABLE_NAME: string }>(
+    'SELECT TABLE_NAME FROM information_schema.TABLES ' +
+      'WHERE TABLE_SCHEMA = DATABASE() AND TABLE_TYPE = ?',
+    { replacements: ['BASE TABLE'], type: QueryTypes.SELECT },
+  );
+  return rows.map((r) => r.TABLE_NAME);
+}
+
+export interface TableCharset {
+  /** 表的排序规则（如 utf8mb4_unicode_ci） */
+  collation: string;
+  /** 存储引擎（如 InnoDB） */
+  engine: string;
+}
+
+/**
+ * 每张表当前用的字符集 / 引擎。
+ *
+ * 用于「已经是目标状态就跳过」这类幂等判断 —— 避免每次跑迁移都重建一遍表。
+ */
+export async function listTableCharsets(
+  queryInterface: QueryInterface,
+): Promise<Map<string, TableCharset>> {
+  const rows = await queryInterface.sequelize.query<{
+    TABLE_NAME: string;
+    TABLE_COLLATION: string | null;
+    ENGINE: string | null;
+  }>(
+    'SELECT TABLE_NAME, TABLE_COLLATION, ENGINE FROM information_schema.TABLES ' +
+      'WHERE TABLE_SCHEMA = DATABASE() AND TABLE_TYPE = ?',
+    { replacements: ['BASE TABLE'], type: QueryTypes.SELECT },
+  );
+  const out = new Map<string, TableCharset>();
+  for (const r of rows) {
+    out.set(r.TABLE_NAME, {
+      collation: r.TABLE_COLLATION ?? '',
+      engine: r.ENGINE ?? '',
+    });
+  }
+  return out;
+}

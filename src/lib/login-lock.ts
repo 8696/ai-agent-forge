@@ -2,7 +2,7 @@ import type { User, SystemUser } from '../models';
 import { AuthError } from './errors';
 
 /**
- * 登录失败锁定策略（docs/15 §Step 3 / docs/16 A4）
+ * 登录失败锁定策略（docs/12-a §A4）
  * - 连续 5 次失败 → 锁定 15 分钟
  * - 锁定期间返回统一 401 "邮箱或密码错误"（不暴露账号被锁）
  * - 任意一次成功 → 计数清零 + 锁定清空

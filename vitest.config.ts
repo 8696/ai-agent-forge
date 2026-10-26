@@ -2,7 +2,7 @@ import { defineConfig } from 'vitest/config';
 import path from 'node:path';
 
 /**
- * vitest 配置 —— docs/16-d §D6 测试基建契约
+ * vitest 配置 —— docs/12-d §D6 测试基建契约
  *
  * 设计意图（强制约定）：
  *  - 只跑 tests 目录下所有 .test.ts 文件（vitest 标准约定）

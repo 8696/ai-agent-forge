@@ -1,0 +1,11 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    // e2e 用例跑在**浏览器**里（Playwright），所以要 DOM 类型
+    "lib": ["DOM", "DOM.Iterable", "ES2023"],
+    "types": ["node"],
+    "noEmit": true
+  },
+  "include": ["tests/e2e/**/*", "playwright.config.ts"],
+  "exclude": ["node_modules/**", "dist/**"]
+}

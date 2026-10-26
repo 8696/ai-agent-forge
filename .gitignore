@@ -75,5 +75,10 @@ data/qdrant-snapshot/
 .uuremote_*
 
 # ─── 测试基建产物 ───────────────────────────────────
-# E2E 登录拿到的 JWT / API key 落盘（docs/16-d §D6 测试基建契约）
+# E2E 登录拿到的 JWT / API key 落盘（docs/12-d §D6 测试基建契约）
 .e2e-tokens.json
+# Playwright 的运行产物（trace / 截图 / html 报告）
+test-results/
+playwright-report/
+blob-report/
+.playwright/

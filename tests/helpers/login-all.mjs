@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * 前端测试登录脚本 —— docs/16-d §D6 测试基建契约
+ * 前端测试登录脚本 —— docs/12-d §D6 测试基建契约
  *
  * 用法：yarn e2e:login
  *
@@ -98,7 +98,7 @@ async function main() {
   console.log('【用法】');
   console.log('  后端集成测试：yarn test:integration                    # 跑 tests/integration/*.test.ts');
   console.log('  老 Step 验收：yarn tsx tests/integration/test-stepN.ts # 仍按需手动跑');
-  console.log('  前端测试（未来）：yarn test:e2e                        # Playwright，Step 13 UI 验收再加\n');
+  console.log('  页面级 e2e：yarn test:e2e                            # Playwright（自动起后端 3099 + 前端 5173）\n');
 }
 
 main().catch((e) => {

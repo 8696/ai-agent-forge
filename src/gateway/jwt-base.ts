@@ -3,7 +3,7 @@ import { verifyToken, type JwtPayload } from '../lib/jwt';
 import { AuthError } from '../lib/errors';
 
 /**
- * 公共 base JWT 验证 —— 详见 docs/16-需求技术对照表 A2 / A3
+ * 公共 base JWT 验证 —— 详见 docs/12-a §A2 / §A3
  *
  * 仅做：
  * - 解析 Authorization: Bearer <token>

@@ -4,7 +4,7 @@
  * 详见 docs/03-b-技术栈-后端栈.md §B.5
  *
  * - system/   SaaS 平台方子系统（/api/v1/system/*，role=system）
- * - admin/     租户后台子系统（/api/v1/admin/*，role ∈ {admin, agent}）
+ * - admin/     租户后台子系统（/api/v1/admin/*，role=admin）
  * - customer/  租户前台子系统（/api/v1/customer/*，role=customer）
  * - public/    对外接入子系统（E1：/api/v1/public/*，鉴权 = API Key / 匿名会话 token）
  *

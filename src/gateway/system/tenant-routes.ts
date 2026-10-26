@@ -19,7 +19,7 @@ import { requireSystemUser } from './middleware';
 import type { SystemJwtPayload } from '../../lib/jwt';
 
 /**
- * system 子系统：租户管理（docs/16 §F1 + §F2）
+ * system 子系统：租户管理（docs/12-e §F1 + §F2）
  * 路由前缀：/api/v1/system/tenants
  * 鉴权：requireSystemUser
  *
@@ -33,8 +33,15 @@ import type { SystemJwtPayload } from '../../lib/jwt';
  *   POST   /tenants/:id/admin/reset-password 重置该租户 admin 的密码（F1）
  *   GET    /stats                            平台方总览（跨租户 KPI + 趋势）
  *
- * F2 写审计：TENANT_STATUS_CHANGE / TENANT_EXPIRES_CHANGE → audit_logs
- *   tenant_id = NULL（系统级日志，操作人 = ctx.state.systemUser.id）
+ * 写审计（2026-10-26 补齐 —— 之前只有 F2 两个 PATCH 写，建租户 / 改资料 /
+ * 重置密码这三条「影响全局」的路径一条都没记）：
+ *   TENANT_CREATED            建租户 + 连带建第一个 admin
+ *   TENANT_UPDATED            改租户 name / plan
+ *   TENANT_ADMIN_PASSWORD_RESET  重置租户 admin 密码
+ *   TENANT_STATUS_CHANGE      F2：改 status
+ *   TENANT_EXPIRES_CHANGE     F2：改 expires_at
+ *   → audit_logs，tenant_id = NULL（系统级日志），操作人 = ctx.state.systemUser.id
+ *   ⚠️ **密码永远不进 details** —— 只记「重置过」这个事实。
  */
 export const systemTenantRouter = new Router({ prefix: '/api/v1/system' });
 
@@ -71,6 +78,24 @@ systemTenantRouter.post('/tenants', jwtAuth, requireSystemUser, async (ctx) => {
       { transaction: tx },
     );
     return { tenant, admin };
+  });
+
+  const sysUser = ctx.state.systemUser as SystemJwtPayload;
+  await writeAuditLog({
+    tenant_id: null,
+    user_id: sysUser.sub,
+    action: 'TENANT_CREATED',
+    resource_type: 'tenant',
+    resource_id: result.tenant.id,
+    details: {
+      code: result.tenant.code,
+      name: result.tenant.name,
+      plan: result.tenant.plan,
+      expires_at: result.tenant.expires_at,
+      // 只记 admin 账号的邮箱，**不记密码**（哪怕是明文传进来的）
+      admin_email: result.admin.email,
+    },
+    ip: ctx.ip,
   });
 
   ctx.status = 201;
@@ -237,9 +262,26 @@ systemTenantRouter.patch('/tenants/:id', jwtAuth, requireSystemUser, async (ctx)
   if (tenant === null) {
     throw new NotFoundError('租户');
   }
+  const prev = { name: tenant.name, plan: tenant.plan };
   if (input.name !== undefined) tenant.name = input.name;
   if (input.plan !== undefined) tenant.plan = input.plan;
   await tenant.save();
+
+  const sysUser = ctx.state.systemUser as SystemJwtPayload;
+  await writeAuditLog({
+    tenant_id: null,
+    user_id: sysUser.sub,
+    action: 'TENANT_UPDATED',
+    resource_type: 'tenant',
+    resource_id: tenant.id,
+    details: {
+      code: tenant.code,
+      prev,
+      next: { name: tenant.name, plan: tenant.plan },
+    },
+    ip: ctx.ip,
+  });
+
   ctx.body = {
     id: tenant.id,
     code: tenant.code,
@@ -349,6 +391,26 @@ systemTenantRouter.post(
     admin.password_hash = await hashPassword(input.new_password);
     admin.must_change_password = true;
     await admin.save();
+
+    const sysUser = ctx.state.systemUser as SystemJwtPayload;
+    await writeAuditLog({
+      tenant_id: null,
+      user_id: sysUser.sub,
+      action: 'TENANT_ADMIN_PASSWORD_RESET',
+      // ⚠️ **resource 指租户**（跟另外两条 TENANT_* 一致）——
+      //    被改的是「这个租户的 admin 密码」，租户才是主资源；
+      //    具体动了哪个账号放进 details。
+      resource_type: 'tenant',
+      resource_id: tenant.id,
+      details: {
+        tenant_code: tenant.code,
+        admin_id: admin.id,
+        admin_email: admin.email,
+        // **不记新密码**（哪怕它就是明文传进来的）—— 只记「重置过」这个事实
+        must_change_password: true,
+      },
+      ip: ctx.ip,
+    });
 
     ctx.body = {
       ok: true,

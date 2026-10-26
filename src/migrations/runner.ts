@@ -28,6 +28,7 @@ import * as m023 from './023-messages-parts-column';
 import * as m024 from './024-create-tool-call-logs';
 import * as m025 from './025-add-tool-call-rejected';
 import * as m026 from './026-add-tool-updated-by';
+import * as m027 from './027-normalize-charset';
 
 /**
  * umzug 迁移 runner（详见 docs/03-b-技术栈-后端栈.md §B.2）
@@ -177,6 +178,11 @@ export function buildMigrator(): Umzug<QueryInterface> {
         name: '026-add-tool-updated-by',
         up: (params) => m026.up(params),
         down: (params) => m026.down(params),
+      },
+      {
+        name: '027-normalize-charset',
+        up: (params) => m027.up(params),
+        down: (params) => m027.down(params),
       },
     ],
   });

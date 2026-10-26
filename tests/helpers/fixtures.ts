@@ -1,5 +1,5 @@
 /**
- * 测试 fixture 落库 —— docs/16-d §D6 测试基建契约
+ * 测试 fixture 落库 —— docs/12-d §D6 测试基建契约
  *
  * 提供：
  *   - seedFixtures()      一键幂等 seed：1 system user + 2 tenants + 各租户 1 admin + 1 customer + 1 API key

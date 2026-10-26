@@ -3,7 +3,7 @@ import { config } from '../config';
 import { AuthError } from './errors';
 
 /**
- * JWT 签发 / 校验 —— 详见 docs/16-需求技术对照表 A2（payload 字段名约定）
+ * JWT 签发 / 校验 —— 详见 docs/12-a §A2（payload 字段名约定）
  *
  * payload 三类：
  * - system user: { sub, role: 'system' } （system 子系统用）

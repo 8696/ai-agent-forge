@@ -26,6 +26,9 @@ import { Table, Column, Model, PrimaryKey, DataType, CreatedAt } from 'sequelize
  */
 export type AuditAction =
   // —— 平台方（system 子系统，tenant_id 为 NULL）——
+  | 'TENANT_CREATED'
+  | 'TENANT_UPDATED'
+  | 'TENANT_ADMIN_PASSWORD_RESET'
   | 'TENANT_STATUS_CHANGE'
   | 'TENANT_EXPIRES_CHANGE'
   // —— 租户后台：用户 ——

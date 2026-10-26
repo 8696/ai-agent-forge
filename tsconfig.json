@@ -30,6 +30,8 @@
   "exclude": [
     "node_modules/**",
     "dist/**",
-    "tests/**/*.test.tsx"
+    "tests/**/*.test.tsx",
+    "tests/e2e/**/*",
+    "playwright.config.ts"
   ]
 }

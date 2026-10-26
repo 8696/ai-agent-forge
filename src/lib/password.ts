@@ -1,7 +1,7 @@
 import bcrypt from 'bcrypt';
 
 /**
- * bcrypt 密码哈希 / 校验，cost=12（与 docs/16-需求技术对照表 A2 / A3 一致）
+ * bcrypt 密码哈希 / 校验，cost=12（与 docs/12-a §A2 / §A3 一致）
  * - hashPassword：明文 → hash
  * - verifyPassword：明文 vs hash
  */

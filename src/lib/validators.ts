@@ -6,10 +6,11 @@ import {
 } from '@shared/validation/tenant-code';
 
 /**
- * 通用 Zod schemas —— 与 docs/16-需求技术对照表 A2 / A3 关键代码段一致
+ * 通用 Zod schemas —— 与 docs/12-a §A2 / §A3 关键代码段一致
  *
- * 租户号规则（16 §A2）：[a-z0-9-]{3,32}，全小写、允许数字 + 连字符
- * 角色：3 个取值（admin / agent / customer）
+ * 租户号规则（12-a §A2）：[a-z0-9-]{3,32}，全小写、允许数字 + 连字符
+ * 角色：**2 个取值**（admin / customer）—— `agent` 是历史 ENUM 留位，本产品不开放
+ *   （数据库列还留着它，但 Zod 这层拒收，传 agent 直接 400）
  */
 
 export const tenantCodeSchema = z

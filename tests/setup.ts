@@ -1,5 +1,5 @@
 /**
- * vitest globalSetup —— docs/16-d §D6 测试基建契约
+ * vitest globalSetup —— docs/12-d §D6 测试基建契约
  *
  * 跑任何 vitest 测试前自动执行：
  *   1. seedFixtures()   幂等 seed 测试 fixture（system + 2 租户 + admin + customer + API key）

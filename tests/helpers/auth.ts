@@ -1,5 +1,5 @@
 /**
- * 测试 fixture JWT 登录 —— docs/16-d §D6 测试基建契约
+ * 测试 fixture JWT 登录 —— docs/12-d §D6 测试基建契约
  *
  * 提供 5 个登录入口（system / 2 租户的 admin / 2 租户的 customer），拿 JWT 字符串。
  * 同时提供 loginAll() 一键完成 5 个登录 + 写 .e2e-tokens.json 给后续测试复用。

@@ -93,8 +93,12 @@
 | ----------------------- | ---------------------------------- | ---------------------------------- |
 | `<RequireAuth>`         | 路由守卫，未登录跳登录             | `web/components/RequireAuth.tsx`   |
 | `<ErrorBoundary>`       | 错误兜底，白屏防护                 | `web/components/ErrorBoundary.tsx` |
-| `<ChatMessage>`         | 单条消息气泡（用户 / AI / 工具）   | `web/components/ChatMessage.tsx`   |
 | `<Markdown>`            | Markdown 渲染（带代码高亮 + 复制） | `web/components/Markdown.tsx`      |
+| `<Chart>`               | ECharts 图表封装                   | `web/components/Chart.tsx` ✅ 2026-10-26 抽出来了 |
+| `<TraceTimeline>`       | Trace 时间线                       | `web/components/TraceTimeline.tsx` ✅ 2026-10-26 抽出来了 |
+| `<ToolCallList>`        | 工具调用卡片（聊天气泡里的）       | `web/components/ToolCallList.tsx`  |
+| `<ActiveModelsFooter>`  | 页脚展示当前激活 LLM / Embedding   | `web/components/ActiveModelsFooter.tsx` |
+| `<Empty>` / `<Loading>` | 空状态 / 加载                      | AntD 自带                          |
 
 > ✅ **2026-10-25 补了 3 个**（之前 `RequireAuth` / `ErrorBoundary` / `Markdown`
 > 只在文档里写着，代码里没有）：
@@ -106,14 +110,13 @@
 >   链接新窗口打开（04-b §4.7）。**highlight.js 的配色跟着深色模式切**
 >   （用 Vite 的 `?inline` 拿 CSS 文本，按模式注入一份）。
 >   单测 `tests/unit/markdown-component.test.tsx`（8 个用例）
->
-> ⚠️ `<ChatMessage>` 仍然**没有单独抽出来** —— 两个聊天页（customer / widget）的
-> AI 气泡差异不小（customer 有 👍👎 反馈、widget 是匿名没有反馈），
+
+> ⚠️ **消息气泡（`<ChatMessage>`）没有抽公共组件** —— 之前这张表里列过
+> `web/components/ChatMessage.tsx`，但**该文件不存在**（写文档时凭空多写了一行）。
+> 实际情况：customer 聊天页（`web/pages/customer/ChatPage.tsx`）和挂件页
+> （`web/pages/widget/WidgetPage.tsx`）**各自内联**自己的气泡结构 ——
+> 两边差异不小（customer 有 👍👎 反馈 / 引用卡片 / 工具卡片，挂件是匿名极简紧凑版），
 > 强行合并的风险比收益大。两边的**用户气泡**已经统一了（时间戳 + 品牌色 token）。
-| `<Chart>`               | ECharts 照本封装                   | `web/components/Chart.tsx` ✅ 2026-10-26 抽出来了 |
-| `<TraceTimeline>`       | Trace 时间线                       | `web/components/TraceTimeline.tsx` ✅ 2026-10-26 抽出来了 |
-| `<ActiveModelsFooter>`  | 页脚展示当前激活 LLM / Embedding   | `web/components/ActiveModelsFooter.tsx` |
-| `<Empty>` / `<Loading>` | 空状态 / 加载                      | AntD 自带                          |
 
 > ✅ **2026-10-26 补齐了 `<Chart>` 和 `<TraceTimeline>`**：
 >   - `<Chart>`：以前 4 个页面各自 `import ReactECharts` 直接用，高度 / `notMerge` 各写各的。

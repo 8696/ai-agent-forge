@@ -60,6 +60,15 @@ export class User extends Model {
   @Column({ type: DataType.STRING(255), allowNull: true })
   declare password_hash: string | null;
 
+  /**
+   * 角色。
+   *
+   * ⚠️ **数据库列的 ENUM 里有三个值，但只有两个能用**：
+   * `agent` 是历史留位（早期设想的后台客服坐席），本产品**没有这个角色** ——
+   * `roleSchema`（`src/lib/validators.ts`）只收 `admin` / `customer`，
+   * 传 `agent` 直接 400，代码层面也拒收它登录任何子系统。
+   * 列里保留它是为了不动历史数据（见 12-a §A3）。
+   */
   @Column({ type: DataType.ENUM('admin', 'agent', 'customer'), allowNull: false })
   declare role: UserRole;
 

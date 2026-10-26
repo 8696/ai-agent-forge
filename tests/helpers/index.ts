@@ -1,5 +1,5 @@
 /**
- * 测试基建共享库 barrel —— docs/16-d §D6 测试基建契约
+ * 测试基建共享库 barrel —— docs/12-d §D6 测试基建契约
  */
 export { seedFixtures, destroyFixtures, getFixtures, type SeededFixture } from './fixtures';
 export {

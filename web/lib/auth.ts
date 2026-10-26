@@ -2,7 +2,7 @@ import { getToken, setToken } from './apiFactory';
 
 /**
  * 前端 JWT 解析 —— 仅做 payload 解析 + 角色归一化
- * 详见 docs/16-需求技术对照表 A2（payload 字段）
+ * 详见 docs/12-a §A2（payload 字段）
  */
 
 export type UserRole = 'system' | 'admin' | 'customer';

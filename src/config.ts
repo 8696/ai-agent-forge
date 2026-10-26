@@ -62,7 +62,7 @@ const envSchema = z.object({
   // === 知识库 / 文件上传（Step 4）===
   DATA_DIR: z.string().default('./data'),
   MAX_UPLOAD_BYTES: z.coerce.number().int().positive().default(50 * 1024 * 1024),
-  // 拆块参数（与 docs/05-b §5.6 + docs/15 §Step 4 一致：800 / 150）
+  // 拆块参数（与 docs/05-b §5.6 + docs/12-c §C1 一致：800 / 150）
   CHUNK_SIZE: z.coerce.number().int().positive().default(800),
   CHUNK_OVERLAP: z.coerce.number().int().positive().default(150),
 

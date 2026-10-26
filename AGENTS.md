@@ -296,10 +296,20 @@
     修法：`src/lib/sql-datetime.ts` 的 `utcWallClock()`，11 处原生查询全部改用它
     （`src/services/observability.ts` 8 处 + `src/services/system-stats.ts` 4 处）。
     ⚠️ **走模型查询的地方不受影响**（`Op.gte` 那条路径按 UTC 绑定参数，是对的）
+- **需求文档 ↔ 代码的全量对照审计**（2026-10-26）：把 `12-a`..`12-e` 五份需求文档
+  与代码**逐条对齐**了一遍，订正了文档里过期的路径 / 数字 / 措辞
+  （挂件端点漏了 `:tenantCode`、E2 的存储其实是 `tenant_settings` 三张表、
+  F2 的响应文案实际是「与密码错完全一致」而不是「租户不可用」、
+  `lru-cache` / `@anthropic-ai/sdk` 装了但零 import、24 模块汇总的数量算错，等等）；
+  同时补齐了代码侧的若干缺口：平台方写操作补审计（`TENANT_CREATED` /
+  `TENANT_UPDATED` / `TENANT_ADMIN_PASSWORD_RESET`）、HITL 两条路径补
+  `tool.invoke` span、模型 `usage_scope` 的 Sequelize ENUM 补 `summary`、
+  审计页补两个中文标签、新增迁移规范字符集与引擎、补齐 A2/A3/A4 缺的端到端用例。
+  逐条对照的落点在 `docs/12-a`..`12-e` 五份需求文档里（各自的「验收」小节）
 
 **已知限制**（不主动修，等你派活）：
 
-- **「转人工」已明确移出需求**（2026-10-25，理由见 [01 §1.4](./docs/01-需求与场景.md)）：
+- **「转人工」已明确移出需求**（2026-10-25，理由见 [01 §1.5](./docs/01-需求与场景.md)）：
   本系统**没有「客服坐席」这个角色**（`users.role` 的 `'agent'` 只是历史 ENUM 留位，
   代码层面拒收它登录任何子系统），也**没有「AI 答不上来」的判定机制**
   （没有置信度、没有「检索为空就拒答」的闸门）。没有坐席就没有转接对象 ——
@@ -358,8 +368,14 @@
   `colorFillSecondary`），图表配色也改成走 token；滚动条按 `html[data-theme]` 分深浅两套。
   **「页面里写死的浅色一律换成 token」这条现在真的做到了**
 - **上传格式只有 PDF / Markdown / TXT**：Word（.docx）解析 **2026-10-25 已移出需求**
-  （不是待办，见 [01 §1.4](./docs/01-需求与场景.md) §1.4）；库里的 `file_type` ENUM
+  （不是待办，见 [01 §1.5](./docs/01-需求与场景.md) §1.5）；库里的 `file_type` ENUM
   也去掉了 `'word'`（迁移 `021`）
+- **租户隔离的运行时强制可以被一个 env 开关整层关掉**：`TENANT_SCOPE_ENFORCE=false`
+  （`src/config.ts` / `src/lib/tenant-scope.ts`，默认 `true`）——
+  关掉就退回「全靠人记得加 `tenant_id` 过滤」。
+  ⚠️ 这个开关跟 D4 把脱敏开关摘掉的处理**不一致**（脱敏不给开关），
+  留着它是因为隔离关掉后还有约束测试 + 静态扫描挡着，是个止血阀。
+  详见 [12-a §A1](./docs/12-a-需求-多租户与登录.md)
 - BM25 索引是**进程内内存索引**，单实例有效；多实例部署时各实例关键词召回不一致
 - 上传走同步索引，大文件会占住 HTTP 连接
 - **摘要压缩的六个已知边界**（详见 [12-b](./docs/12-b-需求-ai对话能力.md) §B1.1）：
@@ -440,6 +456,9 @@
   - **熔断是进程内状态**（2026-10-25 补的，`src/lib/circuit-breaker.ts`）：
     多实例部署时每个实例各断各的 —— 熔断是尽力而为的降级，断错了顶多多拒一会儿，
     不影响数据正确性，跟限流同一个取舍
+- **页面级 e2e 层要单独装浏览器**：`yarn test:e2e` 用 Playwright，
+  换机器第一次跑要先 `npx playwright install chromium`（约 100MB 下载）。
+  它跟 vitest 用**同一个数据库**（.env 里那个），别拿生产库跑
 - **测试基建有个坑已修**：`vitest 5` 移除了 `poolOptions.forks.singleFork`（写了会被静默忽略），
   导致测试文件并行跑、互相踩状态而随机失败 —— 现在改用 `test.fileParallelism: false`
 - **`yarn lint` 跑不起来**（既有环境问题，不是代码问题）：`typescript-eslint` 不支持
@@ -454,7 +473,7 @@
 
 参考用，AI 工程师按需打开，不强制阅读顺序。
 
-> 当前 docs/ 下 **26 份主题文档**（编号 01–13，含子文档），加根目录 2 份入口（README / 本文件）。
+> 当前 docs/ 下 **28 份主题文档**（编号 01–13，含子文档），加根目录 2 份入口（README / 本文件）。
 
 | 编号     | 路径                                                                       | 用途                       |
 | -------- | -------------------------------------------------------------------------- | -------------------------- |
@@ -467,9 +486,9 @@
 | 03-c     | [03-c-技术栈-前端栈.md](./docs/03-c-技术栈-前端栈.md)                       | Vite / React / AntD / 路由 |
 | 04-a     | [04-a-ui-总则布局与菜单.md](./docs/04-a-ui-总则布局与菜单.md)               | 设计总则 / 整体布局 / 菜单  |
 | 04-b     | [04-b-ui-登录与聊天挂件.md](./docs/04-b-ui-登录与聊天挂件.md)               | 3 个登录页 + 聊天挂件       |
-| 04-c     | [04-c-ui-后台管理页面.md](./docs/04-c-ui-后台管理页面.md)                   | 租户后台 11 个管理页        |
+| 04-c     | [04-c-ui-后台管理页面.md](./docs/04-c-ui-后台管理页面.md)                   | 租户后台 17 个页面         |
 | 04-d     | [04-d-ui-系统级与公共组件.md](./docs/04-d-ui-系统级与公共组件.md)           | SaaS 平台方页面 / 公共组件 |
-| 05-a     | [05-a-数据模型-mysql.md](./docs/05-a-数据模型-mysql.md)                     | MySQL 12 张核心表 DDL      |
+| 05-a     | [05-a-数据模型-mysql.md](./docs/05-a-数据模型-mysql.md)                     | MySQL 核心表 DDL（已落地 21 张 + missions 预留） |
 | 05-b     | [05-b-数据模型-qdrant.md](./docs/05-b-数据模型-qdrant.md)                   | Qdrant Collection 设计     |
 | 06       | [06-大模型与Embedding.md](./docs/06-大模型与Embedding.md)                   | Vercel AI SDK / 模型 / 密钥 |
 | 07-a     | [07-a-模块-llm与prompt.md](./docs/07-a-模块-llm与prompt.md)                 | 24 模块 01-04              |

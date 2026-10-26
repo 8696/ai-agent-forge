@@ -31,6 +31,7 @@ import {
 import { PageHeader } from '../../components/shell';
 import {
   activateModel,
+  checkEndpoint,
   configErrorMessage,
   createModel,
   deleteModel,
@@ -342,6 +343,8 @@ function ModelEditor({
 }): ReactElement {
   const [form] = Form.useForm();
   const [saving, setSaving] = useState(false);
+  const [checking, setChecking] = useState(false);
+  const [checkResult, setCheckResult] = useState<{ ok: boolean; reason?: string } | null>(null);
   const isNew = target === 'new';
   const editing = target !== null && target !== 'new' ? target : null;
 
@@ -361,6 +364,30 @@ function ModelEditor({
       api_key: '',
     });
   }, [editing, form]);
+
+  /**
+   * 「测一下这个端点」—— 调 `POST /api/v1/admin/config/models/check-endpoint`。
+   *
+   * ⚠️ **这个端点只做静态校验**（URL 合法 / 协议 / SSRF 的私网判定 / DNS 解析），
+   *    **不真的调模型**（那要花钱）。所以它不能替代「保存后试连一次」。
+   */
+  const onCheckEndpoint = useCallback(async (): Promise<void> => {
+    const baseUrl = (form.getFieldValue('base_url') as string | undefined) ?? '';
+    if (baseUrl.trim() === '') {
+      message.warning('先填 Base URL');
+      return;
+    }
+    setChecking(true);
+    setCheckResult(null);
+    try {
+      const res = await checkEndpoint(baseUrl.trim());
+      setCheckResult(res);
+    } catch (err: unknown) {
+      setCheckResult({ ok: false, reason: configErrorMessage(err, '校验失败') });
+    } finally {
+      setChecking(false);
+    }
+  }, [form]);
 
   const onOk = useCallback(async (): Promise<void> => {
     const values = (await form.validateFields()) as Record<string, unknown>;
@@ -456,6 +483,24 @@ function ModelEditor({
         >
           <Input placeholder="https://open.bigmodel.cn/api/anthropic" />
         </Form.Item>
+
+        <Space direction="vertical" style={{ width: '100%', marginBottom: 16 }}>
+          <Button onClick={() => void onCheckEndpoint()} loading={checking}>
+            测一下这个端点
+          </Button>
+          {checkResult !== null && (
+            <Alert
+              type={checkResult.ok ? 'success' : 'error'}
+              showIcon
+              message={checkResult.ok ? '端点看起来可用' : '端点不可用'}
+              description={
+                checkResult.ok
+                  ? '只做了静态校验（URL / 协议 / 私网拦截 / DNS 解析），没有真的调模型 —— 能不能真的对话要靠保存后「试连一次」。'
+                  : checkResult.reason
+              }
+            />
+          )}
+        </Space>
 
         <Form.Item
           name="api_key"

@@ -21,6 +21,7 @@ import axios from 'axios';
 import { getSequelize } from '../../src/db';
 import { Tenant, User } from '../../src/models';
 import { hashPassword } from '../../src/lib/password';
+import { readTokensFile, type TokensFile } from '../helpers';
 
 const TEST_EMAIL = 'must-change-password@acme.test';
 const OLD_PASSWORD = 'OldPass-123!';
@@ -166,6 +167,54 @@ describe('A4 · /me 与 /change-password + 强制改密闸门', () => {
     const details = JSON.stringify(row?.details ?? {});
     expect(details).not.toContain(OLD_PASSWORD);
     expect(details).not.toContain(NEW_PASSWORD);
+  });
+
+  /**
+   * A4 验收里的 `/me` 四条子用例 —— 2026-10-26 补。
+   *
+   * ⚠️ 以前这四条只落地了 admin 一条：
+   *    customer 的 `/me`、system 调 admin 的 `/me`、admin 调 customer 的 `/me`
+   *    全仓**没有测试**（端点代码本身是对的，只是没被锁住）。
+   *    跨子系统这一条尤其重要 —— 它是「三套 auth 完全不共享」的证据。
+   */
+  describe('/me 的跨子系统隔离', () => {
+    let tokens: TokensFile;
+
+    beforeAll(async () => {
+      tokens = await readTokensFile();
+    });
+
+    /** 裸 axios —— 因为要跨 baseURL 打别的子系统（scoped client 的 baseURL 是死的） */
+    const rawGet = (token: string, path: string): Promise<{ status: number; data: unknown }> =>
+      axios
+        .get(`${apiBase()}${path}`, {
+          headers: { Authorization: `Bearer ${token}` },
+          validateStatus: () => true,
+        })
+        .then((r) => ({ status: r.status, data: r.data }));
+
+    it('customer 自己的 /me → 200（查到 customer 角色 + 租户号）', async () => {
+      const r = await rawGet(tokens.acmeCustomer, '/api/v1/customer/me');
+      expect(r.status).toBe(200);
+      const body = r.data as { user: { email: string; role: string; tenant_id: string } };
+      expect(body.user.role).toBe('customer');
+      expect(body.user.email).toContain('@acme.test');
+    });
+
+    it('system 的 token 调 admin 的 /me → 401', async () => {
+      const r = await rawGet(tokens.system, '/api/v1/admin/me');
+      expect(r.status).toBe(401);
+    });
+
+    it('admin 的 token 调 customer 的 /me → 401', async () => {
+      const r = await rawGet(tokens.acmeAdmin, '/api/v1/customer/me');
+      expect(r.status).toBe(401);
+    });
+
+    it('customer 的 token 调 admin 的 /me → 401', async () => {
+      const r = await rawGet(tokens.acmeCustomer, '/api/v1/admin/me');
+      expect(r.status).toBe(401);
+    });
   });
 
   it('清理：把测试账号从库里带走', async () => {

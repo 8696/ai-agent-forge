@@ -223,7 +223,7 @@ AntD Table + 抽屉表单。列：名称（带「用途」+「启用中」标记
   - 描述：**给模型看的**，写清楚「什么时候该调它」—— 这是租户唯一能「调教模型」的手柄
   - 启用 / 需要用户确认（敏感工具 → AI 调用前先问用户）
 - 每行操作：启用·禁用 / 试连（用内置实现的样例入参真跑一遍）/ 编辑 / 删除
-- 「工具调用记录」独立页 → [§5.12](#512-工具调用记录-admintool-logs)（✅ 已落地）
+- 「工具调用记录」独立页 → [§5.11](#511-工具调用记录-admintool-logs)（✅ 已落地）
 
 ### 5.6 评测 ✅ 已落地 2026-10-24
 
@@ -343,36 +343,56 @@ AntD Table + 抽屉表单。列：名称（带「用途」+「启用中」标记
 - **清空输入框再保存 = 清除覆盖、回落平台默认**
 - 非法值（超范围 / 类型不对 / key 不在注册表里）后端直接 400 拒掉
 
-当前 16 项（`.env` 里**适合租户级**的全部搬进来了 + B4 记忆 + B1 摘要 + B2 重排 + B7 首页）：
+当前 **21 项**（20 项可见 + 1 项隐藏）：`.env` 里**适合租户级**的全部搬进来了 + B4 记忆 + B1 摘要 + B2 重排 / 改写 + B7 首页 + 告警阈值。
 
-| 分组 | 配置项 | 对应 `.env` | 说明 |
-| ---- | ------ | ----------- | ---- |
-| 知识库 | 检索召回条数 | `CHAT_RETRIEVAL_TOP_K` | 语料少时调到 8~10 |
-| 知识库 | 最多记多少轮历史 | `CHAT_MAX_HISTORY_TURNS` | AI 忘事就调大 |
-| 知识库 | 检索片段 token 上限 | `CHAT_RETRIEVAL_TOKEN_BUDGET` | 调小 = 只喂最相关的 |
-| 知识库 | 开启重排序 | —（`tenant_settings` 独有） | 关掉后走纯 RRF 排序（平台没配重排服务时这项无效） |
-| 成本 | 单轮上下文总预算 | `CHAT_CONTEXT_TOKEN_BUDGET` | **单次请求的成本闸门**，调大更贵更慢 |
-| 成本 | 单条消息字数上限 | `CHAT_MAX_INPUT_CHARS` | 超了直接 400 拒 |
-| 成本 | 月度 token 预算 | —（`tenant_settings` 独有） | 超了写告警，要不要拦由服务端 `.env` 决定 |
-| 模型 | 思考模式预算 | `CHAT_THINKING_BUDGET_TOKENS` | 0 = 关 |
-| 安全 | 每分钟请求上限 | `RATE_LIMIT_MAX_REQUESTS` | 0 = 用平台默认 |
-| 记忆 | 开启用户记忆 | —（`tenant_settings` 独有） | 关掉后既不抽取也不注入 |
-| 记忆 | 每轮注入几条记忆 | —（`tenant_settings` 独有） | 0 = 不注入 |
-| 记忆 | 记忆 token 上限 | —（`tenant_settings` 独有） | 整段预算（含固定说明） |
-| 记忆 | 开启会话摘要 | —（`tenant_settings` 独有） | 关掉后长对话只剩「丢更早的轮次」 |
-| 记忆 | 摘要 token 上限 | —（`tenant_settings` 独有） | 整段预算（含固定说明） |
-| 首页 | 首页欢迎语 | —（`tenant_settings` 独有） | 留空按租户名兜底 |
-| 首页 | 首页推荐问题 | —（`tenant_settings` 独有） | 一行一个，最多 8 条；留空不显示这一块 |
+> ⚠️ **下面两列是真实 key**（`tenant_settings.config_key` 里存的就是它们），
+> 不是中文名 —— 前端页面按 `category` 分区渲染，值也按 key 存。
+> 元信息在代码里：`src/services/tenant-settings.ts` 的 `SETTINGS_REGISTRY`。
 
-> **记忆 / 摘要这 5 项没有对应的 `.env`** —— 它们的默认值直接写在
-> `SETTINGS_REGISTRY` 里（`memory_*` 是 B4 加的，`summary_*` 是 B1 摘要压缩加的）。
+| 分组 | key（真实配置项） | 名称 | 类型 | 默认值 | 说明 |
+| ---- | ------------------ | ---- | ---- | ------ | ---- |
+| 知识库 | `retrieval_top_k` | 检索召回条数 | number | 5 | 语料少时调到 8~10 往往立竿见影 |
+| 知识库 | `max_history_turns` | 最多记多少轮历史 | number | 10 | AI 忘事就调大 |
+| 知识库 | `retrieval_token_budget` | 检索片段 token 上限 | number | 2500 | 调小 = 只喂最相关的几条；调大 = 召回更全但更贵 |
+| 知识库 | `rerank_enabled` | 开启重排序 | boolean | true | 关掉后退回纯 RRF 排序（平台没配重排服务时这项无效） |
+| 知识库 | `query_rewrite_enabled` | 开启查询改写 | boolean | false | **默认关闭** —— 每轮多一次模型调用（多 1~3 秒 + 一份花费），短问题改写基本没收益 |
+| 成本 | `context_token_budget` | 单轮上下文总预算 | number | 8000 | **单次请求的成本闸门**，调大更贵更慢 |
+| 成本 | `max_input_chars` | 单条消息字数上限 | number | 2000 | 超了直接 400 拒 |
+| 成本 | `monthly_token_budget` | 月度 token 预算 | number | 0 | 0 = 不限；超了写告警，要不要拦由服务端 `.env` 的 `COST_BUDGET_BLOCK` 决定 |
+| 成本 | `alert_p95_latency_ms` | p95 延迟告警阈值 | number | 5000 | 今天的 p95 延迟超过这个毫秒数就告警；0 = 不看这一项 |
+| 成本 | `alert_error_rate` | 错误率告警阈值 | number | 0.05 | 今天的错误率超过这个比例就告警（客户端断开不算错误）；0 = 不看这一项 |
+| 成本 | `alert_single_cost_usd` | 单条对话成本告警阈值 | number | 0.5 | 单条对话花费（美元，估算值）超过这个数就告警；0 = 不看这一项 |
+| 模型 | `thinking_budget_tokens` | 思考模式预算 | number | 0 | 推理 token 预算，**0 = 关闭** |
+| 安全 | `rate_limit_per_minute` | 每分钟请求上限 | number | 0 | 0 = 用平台默认（`.env` 的 `RATE_LIMIT_MAX_REQUESTS`）；超了返回 429 |
+| 记忆 | `memory_enabled` | 开启用户记忆 | boolean | true | 关掉后既不抽取也不注入（用户自写的那部分也停止使用） |
+| 记忆 | `memory_top_k` | 每轮注入几条记忆 | number | 8 | **0 = 不注入**（记忆仍被记录和展示，只是不参与回答） |
+| 记忆 | `memory_token_budget` | 记忆 token 上限 | number | 600 | 整段预算（含固定说明实测 124 token），下限 200 —— 再小记忆会**静默失效** |
+| 记忆 | `summary_enabled` | 开启会话摘要 | boolean | true | 关掉后长对话只剩「丢更早的轮次」；开启会多一次 LLM 调用 |
+| 记忆 | `summary_token_budget` | 摘要 token 上限 | number | 600 | 整段预算（含固定说明约 **190 token**，实测值），下限 200 —— 再小摘要会**静默失效** |
+| 首页 | `home_welcome_message` | 首页欢迎语 | string | 空 | 留空按租户名兜底；上限 200 字 |
+| 首页 | `home_suggested_questions` | 首页推荐问题 | string（多行） | 空 | 一行一个，最多 8 条 / 每条 100 字；留空不显示这一块 |
+| **提示词（隐藏）** | `prompt_version` | 当前生效的提示词版本 | string | 空 | **`hidden: true`** —— 通用配置页**不露出**它，由「提示词配置」页发布 / 回滚时自动改写 |
+
+> **隐藏项 `prompt_version` 说明**：它**仍然存在 `tenant_settings` 表里**（跟其它 20 项一样），
+> 只是通用配置页不渲染输入框 —— 填错版本号会让提示词静默回落成内置默认，很难排查。
+> 发布 / 回滚提示词时由后端在**同一个事务**里改写这个 key（2026-10-25 修的「半成功」洞）。
+> 它**不是** MCP 之类的配置项，也**不**给租户开放。
+
+> **平台默认值从哪来**：`retrieval_top_k` / `max_history_turns` / `retrieval_token_budget` /
+> `context_token_budget` / `max_input_chars` / `thinking_budget_tokens` / `summary_*` 这几项
+> 的平台默认值与 `.env` 的 `CHAT_*` 对齐；其余项（`memory_*` / `home_*` / `alert_*` /
+> `monthly_token_budget` / `query_rewrite_enabled` / `rate_limit_per_minute`）的默认值
+> **直接写在 `SETTINGS_REGISTRY` 里**，没有对应的 `.env`。
+> 平台级还有硬边界：`RERANK_ENABLED` 关掉时租户配的 `rerank_enabled=true` 也无效。
 
 > **刻意不搬进来的**：加密密钥、SSRF 开关（安全边界）；
 > `CHAT_TEMPERATURE` / `CHAT_MAX_OUTPUT_TOKENS`（已在模型条目里，避免两处各存一份）；
 > `CHAT_KEEPALIVE_MS` / `CHAT_BUDGET_SAFETY_RATIO` / `CHAT_SYSTEM_TOKEN_BUDGET`（传输层 / 内部估算参数）。
 
-> 刻意**不放**在这里的：加密密钥、SSRF 开关、上下文总预算、SSE 心跳 ——
-> 那是安全边界和平台成本边界，留在服务端 `.env`（`docs/12-c` §C4 有分界表）。
+> 刻意**不放**在这里的：加密密钥、SSRF 开关、SSE 心跳 ——
+> 那是安全边界和平台传输层边界，留在服务端 `.env`（`docs/12-c` §C4 有分界表）。
+> ⚠️ 「上下文总预算」**已经在**里面了（`context_token_budget`，成本分类）——
+> 租户调它就是调自己单轮的成本闸门，平台级的总闸门仍是 `.env` 那一套。
 
 #### 5.9.1 基础配置
 
@@ -430,7 +450,7 @@ AntD Table + 抽屉表单。列：名称（带「用途」+「启用中」标记
 > 系统级日志（平台方改租户启停 / 到期时间那类，`tenant_id` 为空）
 > 租户 admin 看不到 —— 设计如此，不是 bug。
 
-### 5.12 工具调用记录 `/admin/tool-logs` ✅ 已落地 2026-10-25
+### 5.11 工具调用记录 `/admin/tool-logs` ✅ 已落地 2026-10-25
 
 > B3 工具调用的**流水视图**。联调时最常问的问题就是
 > 「AI 到底调没调这个工具、调了什么参数、返回了什么」—— 这个页就是回答它的。
@@ -450,7 +470,7 @@ AntD Table + 抽屉表单。列：名称（带「用途」+「启用中」标记
 > 工具调用记录同时也在 `messages.parts` 的 `data-tool-call` part 里（聊天气泡上那张卡片），
 > 但那是 JSON 列没法筛选，所以另建了这张表。
 
-### 5.11 用户记忆 `/admin/memories` ✅ 已落地 2026-10-24
+### 5.12 用户记忆 `/admin/memories` ✅ 已落地 2026-10-24
 
 租户 admin 看本租户**每个用户**的长期记忆（AI 记住的关于用户的信息）。对应 B4，
 接口见 [12-b](./12-b-需求-ai对话能力.md) §B4。

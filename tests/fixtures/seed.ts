@@ -1,6 +1,6 @@
 #!/usr/bin/env tsx
 /**
- * 一键幂等 seed 测试 fixture —— docs/16-d §D6 测试基建契约
+ * 一键幂等 seed 测试 fixture —— docs/12-d §D6 测试基建契约
  *
  * 用法：yarn seed
  *

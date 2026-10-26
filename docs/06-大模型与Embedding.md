@@ -122,4 +122,4 @@ streamText({ model, system: { role: 'system', content: prompt }, messages: histo
 > 给提示词开 Prompt Caching。**智谱上这个参数实测不生效**（它把提示词映射到
 > `instructions`，而 `cache_control` 只对 messages 里的 content block 有意义），
 > 所以 `cache_read_tokens` 仍是 0；原生 Anthropic 端点上应该可用（未实测）。
-> 换 provider 前建议先跑一轮 `POST /api/v1/admin/config/llm/test` 再开这个开关。
+> 换 provider 前建议先跑一轮 `POST /api/v1/admin/config/models/:id/test`（试连该租户模型条目）再开这个开关。

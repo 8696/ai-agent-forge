@@ -13,9 +13,14 @@ import type { ResolvedTool } from './resolve';
  *  | 验收口径                  | 这里的做法                                        |
  *  |---------------------------|---------------------------------------------------|
  *  | 工具调不通不中断整轮      | 异常 → 转成 tool result 字符串回灌                 |
- *  | 每次工具调用写一条 span    | `tool.invoke` span（kind='step'）                  |
+ *  | 每次工具调用写一条 span    | `tool.invoke` span（kind='step'）——**覆盖全部路径** |
  *  | 每次外部往返都要有超时    | `TOOL_TIMEOUT_MS`（超时也降级，不重试）            |
  *  | 敏感操作要先人工确认      | 闸门拦下 → 返回 `awaiting_confirmation`            |
+ *
+ * ⚠️ **span 在 HITL 闸门之前开**（2026-10-26 补）：被闸门拦下（awaiting_confirmation）
+ *    和用户拒绝（rejected）这两条路径原先没有 span，与「每次工具调用写一条 span」
+ *    的验收口径对不上。现在这五条路径都有：
+ *    正常执行 / 超时 / 抛错 / 被闸门拦下 / 用户拒绝。
  */
 
 /** 单次工具调用的超时（毫秒）。跟重排一样：超时降级，不重试 */
@@ -153,6 +158,18 @@ export function buildToolSet(resolved: ResolvedTool[], runtime: ToolRuntime): To
       execute: async (input: unknown, options: { toolCallId: string }): Promise<unknown> => {
         const started = Date.now();
         const args = input;
+        // ---- span：每次工具调用一条 ----
+        //
+        // ⚠️ **span 必须在 HITL 闸门之前开**（2026-10-26 补）——
+        // 「敏感工具被拦下」和「用户已拒绝」这两条路径原先在建立 span 之前就
+        // return 了，导致它们只有 `data-tool-call` part、没有 `tool.invoke` span，
+        // 与 12-b §B3 的验收口径「每次工具调用写一条 span」对不上。
+        // 现在这条 span 覆盖**全部**路径：正常执行 / 超时 / 抛错 / 被闸门拦下 / 用户拒绝。
+        const span = runtime.span('tool.invoke', 'step', {
+          tool_name: name,
+          builtin: impl.key,
+          args,
+        });
         // ---- HITL 闸门：敏感工具先要用户确认 ----
         //
         // 命中时不执行，把「需要确认」当成工具结果回灌 ——
@@ -172,6 +189,8 @@ export function buildToolSet(resolved: ResolvedTool[], runtime: ToolRuntime): To
               error: null,
               duration_ms: Date.now() - started,
             };
+            // 被闸门拦下不算「工具失败」—— 闸门正常工作，span 正常结束
+            span?.end({ status: 'rejected', duration_ms: record.duration_ms });
             await reportCall(runtime, record);
             return {
               status: 'rejected',
@@ -198,6 +217,7 @@ export function buildToolSet(resolved: ResolvedTool[], runtime: ToolRuntime): To
                 ? `「${impl.name}」需要用用户已确认的参数执行（当前参数与确认的不一致）。`
                 : `「${impl.name}」会真实产生一条单据，需要用户确认后才能执行。`,
             };
+            span?.end({ status: 'awaiting_confirmation', duration_ms: record.duration_ms });
             await reportCall(runtime, record);
             return {
               status: 'awaiting_confirmation',
@@ -213,11 +233,6 @@ export function buildToolSet(resolved: ResolvedTool[], runtime: ToolRuntime): To
         }
 
         // ---- 执行 ----
-        const span = runtime.span('tool.invoke', 'step', {
-          tool_name: name,
-          builtin: impl.key,
-          args,
-        });
         const ctx: BuiltinToolContext = {
           tenantId: runtime.tenantId,
           sessionId: runtime.sessionId,

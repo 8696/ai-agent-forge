@@ -3,17 +3,23 @@
 > **本文件是 `05-数据模型.md` 的 §5.1-§5.5 节**（原主文件已拆分为 05-a / 05-b 两份）。本份负责**MySQL 核心表的 DDL + 索引策略 + 数据量估算 + 备份 + 迁移管理**。
 > 向量库 Qdrant 部分见 `05-b-数据模型-qdrant.md`。
 >
-> **已落地 20 张表**（`src/models/` 下有对应 Sequelize 模型）：
+> **已落地 21 张表**（`src/models/` 下有对应 Sequelize 模型）：
 > `tenants` / `users` / `system_users` / `api_keys` / `documents` / `sessions` / `messages` /
 > `prompt_versions` / `tenant_models` / `tenant_settings` / `audit_logs` / `cost_logs` /
 > `traces` / `spans` / `evaluation_datasets` / `evaluation_items` / `evaluation_runs` /
-> `evaluation_results` / **`tools`** / **`tool_call_logs`**
-> （2026-10-25 落地，B3 工具调用 + C2 工具管理）。
+> `evaluation_results` / **`user_memories`**（2026-10-24 落地，B4 用户长期记忆，迁移 `017`）/
+> **`tools`** / **`tool_call_logs`**（2026-10-25 落地，B3 工具调用 + C2 工具管理）。
 > 另有 `missions` 一张是 **未做的规格**（任务状态机 / 工作流），本期未建表 ——
 > 定位见 [12-b §B5](./12-b-需求-ai对话能力.md)。它的 DDL 已在下方写好，
 > 下一轮做 B5 时直接建。
 
 MySQL 8.0，字符集 `utf8mb4_unicode_ci`。所有时间字段用 `DATETIME(6)`（微秒精度，便于 trace 分析），主键统一 `VARCHAR(36)`（UUID）。
+
+> **字符集 / 存储引擎由迁移 `027-normalize-charset` 显式规范**（把数据库和所有表统一成
+> `utf8mb4_unicode_ci` + `InnoDB`）—— **不再依赖 MySQL 服务器的默认配置**。
+> 以前建表走 umzug 迁移、迁移本身不指定 charset / engine，实际继承的是
+> 服务器（或数据库）的默认值；换台机器、换个 `my.cnf` 就可能建出 `utf8mb3` 的表，
+> 中文排序规则也跟着变。现在这一层由迁移自己钉死。
 
 ## 5.1 核心表
 
@@ -172,7 +178,7 @@ CREATE TABLE documents (
 > 收敛迁移 `down()` 不删列（删列丢数据且无法从旧脚本可靠重建），回滚走 `yarn migrate:undo` + 备份恢复。
 >
 > **`file_type` 没有 `'word'`**：2026-10-25 把 **DOCX 解析整个从需求里删掉**
-> （上传格式只剩 PDF / Markdown / TXT，见 [01](./01-需求与场景.md) §1.1），
+> （上传格式只剩 PDF / Markdown / TXT，见 [01](./01-需求与场景.md) §1.5「不做 / Out of Scope」），
 > 迁移 `021-alter-documents-file-type.ts` 把库里的列收窄成
 > `ENUM('pdf','markdown','txt')`。上传白名单（`src/services/document-upload.ts`）
 > 只放行这三种扩展名，传 `.docx` 返 400。
@@ -286,7 +292,15 @@ CREATE TABLE tool_call_logs (
 > `awaiting_confirmation` 这一档是 HITL 闸门拦下的调用 —— 工具**没有真正执行**，
 > 所以 `output` 是空的。
 
-### 任务表（missions，工作流主表）
+### 任务表（missions，工作流主表）⏳ 未建表（本期未做 · DDL 预留 · 迁移没建）
+
+> ⚠️ **下面这段 DDL 还没有对应的迁移** —— `src/migrations/` 里**没有**建 `missions` 的文件，
+> 库里也没有这张表。本期未做（跟 [12-b §B5](./12-b-需求-ai对话能力.md) 的口径一致：
+> B5 的完整状态机等 `http` 类工具开放、租户接入真实业务系统时一起做）。
+> HITL 的最小实现已经在 B3 的 `tools/` 里做了（批准记录寄在 `sessions.metadata`）。
+>
+> 下面写的是**下一轮做 B5 时直接照着建的 DDL** —— 建表前记得先补一个迁移
+> （`027` 号已被字符集规范化那条占了，从 `028` 往后编号）。
 
 ```sql
 CREATE TABLE missions (
@@ -535,7 +549,7 @@ CREATE TABLE system_users (
 
 ### 租户 API 密钥表（api_keys · 外部系统接入）
 
-> **E1 配套**。租户 admin 在后台「API 密钥」页生成 API Key，外部系统拿这个 Key 调 `/api/v1/chat` 等端点。
+> **E1 配套**。租户 admin 在后台「API 密钥」页生成 API Key，外部系统拿这个 Key 调 `/api/v1/public/chat`、`/api/v1/public/chat/stream`、`/api/v1/public/search` 等端点（**不是** `/api/v1/chat` —— 对外端点全在 `public` 命名空间下）。
 
 ```sql
 CREATE TABLE api_keys (

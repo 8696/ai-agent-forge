@@ -87,7 +87,7 @@ function renderExpiresAt(iso: string | null): ReactElement {
 
 /**
  * /system/tenants —— system 端租户列表
- * 详见 docs/16-e §F1 + §F2
+ * 详见 docs/12-e §F1 + §F2
  */
 export function SystemTenantsPage(): ReactElement {
   const navigate = useNavigate();
