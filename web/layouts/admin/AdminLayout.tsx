@@ -18,6 +18,7 @@ import { DashboardOutlined, FileSearchOutlined, TeamOutlined, UploadOutlined, Sl
   KeyOutlined,
   ToolOutlined,
   AlertOutlined,
+  SwapOutlined,
 } from '@ant-design/icons';
 
 /**
@@ -106,6 +107,12 @@ const SIDEBAR: SidebarItem[] = [
         icon: <TrophyOutlined />,
         label: '评测结果',
         to: '/admin/evaluation/runs',
+      },
+      {
+        key: '/admin/evaluation/compare',
+        icon: <SwapOutlined />,
+        label: '版本对比',
+        to: '/admin/evaluation/compare',
       },
     ],
   },

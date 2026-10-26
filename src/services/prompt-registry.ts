@@ -76,6 +76,54 @@ export async function resolveTenantPrompt(
   };
 }
 
+/**
+ * 这个提示词版本**能不能拿来跑** —— 版本不存在时返回 false，**不抛错**。
+ *
+ * @param version null/undefined/'' = 内置默认（合法）；DEFAULT_PROMPT_VERSION 也是内置默认
+ */
+export async function promptVersionExists(
+  tenantId: string,
+  version: string | null | undefined,
+): Promise<boolean> {
+  if (version === null || version === undefined || version === '') {
+    return true;
+  }
+  if (version === DEFAULT_PROMPT_VERSION) {
+    return true;
+  }
+  const row = await PromptVersion.findOne({
+    where: { tenant_id: tenantId, version },
+    attributes: ['id'],
+  });
+  return row !== null;
+}
+
+/**
+ * 校验一个提示词版本「能不能拿来跑」—— **不存在就抛错，不回落**。
+ *
+ * 跟 `resolveTenantPrompt` 的区别是**故意**的：
+ *
+ *   - `resolveTenantPrompt` 是**对话链路**用的 —— 版本找不到了就回落内置默认 + 一行 warn
+ *     （对终端用户来说「用默认提示词答错了」远好过「整轮对话 500」）
+ *   - 这个是**后台主动指定**用的 —— 用户明明白白点了「用 v2 跑一次」，
+ *     跑批却悄悄用了默认提示词，那对比出来的报告会**骗人** → 直接报错
+ *
+ * A/B 对比（docs/12-e 裁定表 表 4）就靠这条把「指定版本跑」变成可依赖的前提。
+ *
+ * @param version null/undefined/'' = 内置默认（合法）；DEFAULT_PROMPT_VERSION 也是内置默认
+ */
+export async function assertPromptVersionUsable(
+  tenantId: string,
+  version: string | null | undefined,
+): Promise<void> {
+  if (await promptVersionExists(tenantId, version)) {
+    return;
+  }
+  throw new ValidationError(
+    `提示词版本「${version}」不存在（可能是别的租户的，或已经被删掉了）`,
+  );
+}
+
 // ============================================================
 // 版本管理（后台 /admin/model/prompt 用）
 // ============================================================

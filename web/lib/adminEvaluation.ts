@@ -153,21 +153,83 @@ export async function fetchRunDetail(
   return data;
 }
 
-/** 触发跑批 —— 后台异步跑，接口立刻返回 run（status='running'） */
-export async function startRun(datasetId: string): Promise<{
+/**
+ * 触发跑批 —— 后台异步跑，接口立刻返回 run（status='running'）
+ *
+ * @param promptVersion 指定用哪个提示词版本跑（A/B 对比的前提）
+ *   - `undefined` = 不传这个字段 → 跟随租户当前生效的提示词
+ *   - `null`      = 显式用内置默认提示词
+ *   - 具体版本号  = 用那个版本（不存在 → 后端 400）
+ */
+export async function startRun(
+  datasetId: string,
+  promptVersion?: string | null,
+): Promise<{
   id: string;
   status: string;
   total_items: number;
   completed_items: number;
   started_at: string;
 }> {
+  const payload: { dataset_id: string; prompt_version?: string | null } = {
+    dataset_id: datasetId,
+  };
+  // ⚠️ undefined 和 null 语义不同 —— 不传 = 跟随生效版本，显式 null = 内置默认
+  if (promptVersion !== undefined) {
+    payload.prompt_version = promptVersion;
+  }
   const { data } = await adminApi.post<{
     id: string;
     status: string;
     total_items: number;
     completed_items: number;
     started_at: string;
-  }>('/evaluation/runs', { dataset_id: datasetId });
+  }>('/evaluation/runs', payload);
+  return data;
+}
+
+// ===== A/B 对比 =====
+
+export interface RunComparisonDimension {
+  key: 'accuracy' | 'completeness' | 'style' | 'safety' | 'total_score';
+  label: string;
+  a: number | null;
+  b: number | null;
+  /** b - a；任一边没分数时是 null */
+  delta: number | null;
+}
+
+export type ComparisonVerdict = 'better' | 'worse' | 'same' | 'only_a' | 'only_b';
+
+export interface RunComparisonItem {
+  key: string;
+  question: string;
+  a: { scores: EvaluationScores; judge_reason: string | null; answer: string } | null;
+  b: { scores: EvaluationScores; judge_reason: string | null; answer: string } | null;
+  delta: number | null;
+  verdict: ComparisonVerdict;
+}
+
+export interface RunComparison {
+  a: EvaluationRun;
+  b: EvaluationRun;
+  /** 对比前要提醒用户的事 —— 不是错误，是「这个对比要这么读」 */
+  warnings: string[];
+  dimensions: RunComparisonDimension[];
+  metrics: {
+    total_tokens: { a: number; b: number; delta: number };
+    total_cost: { a: number; b: number; delta: number };
+    items: { a: number; b: number; matched: number };
+  };
+  item_stats: { better: number; worse: number; same: number; only_a: number; only_b: number };
+  items: RunComparisonItem[];
+}
+
+/** 对比两次跑批 —— 换提示词版本的效果对比 */
+export async function fetchRunComparison(runIdA: string, runIdB: string): Promise<RunComparison> {
+  const { data } = await adminApi.get<RunComparison>('/evaluation/compare', {
+    params: { run_id_a: runIdA, run_id_b: runIdB },
+  });
   return data;
 }
 

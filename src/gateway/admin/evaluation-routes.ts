@@ -6,6 +6,7 @@ import { NotFoundError, ValidationError } from '../../lib/errors';
 import { writeAuditLog } from '../../lib/audit-log';
 import type { TenantUserJwtPayload } from '../../lib/jwt';
 import {
+  compareRuns,
   createDataset,
   deleteDataset,
   getDataset,
@@ -29,7 +30,10 @@ import {
  *   DELETE /evaluation/datasets/:id    删评测集
  *   GET    /evaluation/runs            跑批列表
  *   POST   /evaluation/runs            触发跑批（后台异步，立刻返回 run id）
+ *                                         可选 prompt_version：指定用哪个提示词版本跑
  *   GET    /evaluation/runs/:id        跑批详情（含打分明细）
+ *   GET    /evaluation/compare          对比两次跑批（A/B 对比）
+ *                                         ?run_id_a=xxx&run_id_b=yyy
  *
  * 跨租户隔离：tenant_id 一律从 JWT 取，查询里强制带上。
  */
@@ -164,13 +168,23 @@ adminEvaluationRouter.get('/evaluation/runs', async (ctx) => {
 
 const startRunSchema = z.object({
   dataset_id: z.string().trim().min(1, 'dataset_id 不能为空').max(64),
+  /**
+   * 指定用哪个提示词版本跑这一批 —— A/B 对比的前提。
+   *
+   * - 不传（undefined）= 跟随租户当前生效的提示词（原有行为）
+   * - `null` / `''`     = 显式用内置默认提示词
+   * - 具体版本号        = 用那个版本；不存在 → 400（**不回落**，回落会让对比结果骗人）
+   */
+  prompt_version: z.string().trim().max(64).nullish(),
 });
 
 adminEvaluationRouter.post('/evaluation/runs', async (ctx) => {
   const u = currentUser(ctx);
   const input = startRunSchema.parse(ctx.request.body ?? {});
 
-  const run = await startEvaluationRun(u.tenant_id, u.sub, input.dataset_id);
+  const run = await startEvaluationRun(u.tenant_id, u.sub, input.dataset_id, {
+    promptVersion: input.prompt_version,
+  });
 
   await writeAuditLog({
     tenant_id: u.tenant_id,
@@ -178,7 +192,14 @@ adminEvaluationRouter.post('/evaluation/runs', async (ctx) => {
     action: 'EVALUATION_RUN_STARTED',
     resource_type: 'evaluation_run',
     resource_id: run.id,
-    details: { dataset_id: input.dataset_id, dataset_name: run.dataset_name },
+    details: {
+      dataset_id: input.dataset_id,
+      dataset_name: run.dataset_name,
+      // 指定了版本才记 —— 「跟随生效版本」是默认行为，记下来全是噪音
+      ...(input.prompt_version !== undefined && input.prompt_version !== null
+        ? { prompt_version: input.prompt_version }
+        : {}),
+    },
   });
 
   ctx.status = 202;
@@ -189,6 +210,23 @@ adminEvaluationRouter.post('/evaluation/runs', async (ctx) => {
     completed_items: run.completed_items,
     started_at: run.started_at.toISOString(),
   };
+});
+
+/**
+ * 对比两次跑批 —— A/B 对比（docs/12-e 裁定表 表 4）
+ *
+ * ⚠️ 路径是 `/evaluation/compare` 而不是 `/evaluation/runs/compare` ——
+ *    后者会被 `/evaluation/runs/:id` 那个动态路由抢先匹配掉。
+ */
+const compareQuerySchema = z.object({
+  run_id_a: z.string().trim().min(1, 'run_id_a 不能为空').max(64),
+  run_id_b: z.string().trim().min(1, 'run_id_b 不能为空').max(64),
+});
+
+adminEvaluationRouter.get('/evaluation/compare', async (ctx) => {
+  const u = currentUser(ctx);
+  const input = compareQuerySchema.parse(ctx.query);
+  ctx.body = await compareRuns(u.tenant_id, input.run_id_a, input.run_id_b);
 });
 
 adminEvaluationRouter.get('/evaluation/runs/:id', async (ctx) => {

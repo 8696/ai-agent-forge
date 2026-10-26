@@ -22,5 +22,6 @@ export { ObservabilityTraceListPage } from './ObservabilityTraceListPage';
 export { ObservabilityTraceDetailPage } from './ObservabilityTraceDetailPage';
 export { ObservabilityCostPage } from './ObservabilityCostPage';
 export { ObservabilityAlertsPage } from './ObservabilityAlertsPage';
+export { EvaluationComparePage } from './EvaluationComparePage';
 export { EvaluationDatasetsPage } from './EvaluationDatasetsPage';
 export { EvaluationRunsPage } from './EvaluationRunsPage';

@@ -54,6 +54,7 @@ const ADMIN_PAGES = [
   '/admin/observability/alerts',
   '/admin/evaluation/datasets',
   '/admin/evaluation/runs',
+  '/admin/evaluation/compare',
   '/admin/audit',
   '/admin/api-keys',
   '/admin/tools',

@@ -1,6 +1,7 @@
 import { config } from '../config';
 import { logger } from '../logger';
 import { listDatasets, startEvaluationRun } from './evaluation';
+import { promptVersionExists } from './prompt-registry';
 
 /**
  * 提示词发布 → 自动跑一次小规模回归
@@ -26,8 +27,15 @@ import { listDatasets, startEvaluationRun } from './evaluation';
  *    不是「不发就不能发」。
  *
  *    要做成门禁（先跑草稿、分数达标才允许发布）得让评测支持
- *    「用指定版本的提示词跑」（现在跑批用的是**生效中的**提示词），
- *    那是另一个改动。
+ *    「用指定版本的提示词跑」—— **2026-10-26 已经支持了**
+ *    （`startEvaluationRun({ promptVersion })`），但门禁本身还没做：
+ *    发布流程要等跑批结果（几十秒到几分钟），那是另一个改动。
+ *
+ * ## 它跑的是哪个版本
+ *
+ * **显式传刚发布的那个版本号**，不靠「当前生效指针」——
+ * 发布和回归之间隔着一次 HTTP 请求，中间租户可能又发了一版。
+ * 显式指定才不会跑偏（版本不存在会直接跳过，不会静默用默认提示词）。
  *
  * ## 它永远不会让发布失败
  *
@@ -69,6 +77,15 @@ export async function triggerPromptRegression(params: {
     return { triggered: false, reason: '评测集是空的' };
   }
 
+  // 指定的版本不存在 → 不触发（**不抛错**）
+  //
+  // ⚠️ 回归现在**显式用刚发布的那个版本**跑，所以版本必须真的存在。
+  //    万一它被并发删了，宁可不回归，也**不能悄悄用默认提示词跑** ——
+  //    那份分数会被当成「这一版的分数」看，结论就是错的。
+  if (!(await promptVersionExists(params.tenantId, params.promptVersion))) {
+    return { triggered: false, reason: `提示词版本「${params.promptVersion}」不存在` };
+  }
+
   const run = await startEvaluationRun(
     params.tenantId,
     params.userId,
@@ -76,6 +93,8 @@ export async function triggerPromptRegression(params: {
     {
       limit: PROMPT_REGRESSION_MAX_ITEMS,
       trigger: 'prompt_regression',
+      // 显式用刚发布的这个版本 —— 不依赖「当前生效指针」
+      promptVersion: params.promptVersion,
     },
   );
 

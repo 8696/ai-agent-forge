@@ -2,7 +2,8 @@ import type { ReactElement } from 'react';
 import { useEffect, useMemo, useState } from 'react';
 import { Alert, Button, Card, Drawer, Empty, Progress, Space, Table, Tag, Tooltip, Typography, message, theme } from 'antd';
 import type { TableColumnsType } from 'antd';
-import { ReloadOutlined } from '@ant-design/icons';
+import { ReloadOutlined, SwapOutlined } from '@ant-design/icons';
+import { useNavigate } from 'react-router-dom';
 import { PageHeader } from '../../components/shell/PageHeader';
 import { Chart } from '../../components/Chart';
 import {
@@ -46,6 +47,10 @@ export function EvaluationRunsPage(): ReactElement {
   const [pagination, setPagination] = useState<Pagination | null>(null);
   const [errMsg, setErrMsg] = useState<string | null>(null);
   const [page, setPage] = useState(1);
+
+  // 勾选两次跑批 → 「对比」按钮跳到 A/B 对比页
+  const [selected, setSelected] = useState<string[]>([]);
+  const navigate = useNavigate();
 
   const [detail, setDetail] = useState<{
     run: EvaluationRun;
@@ -229,9 +234,24 @@ export function EvaluationRunsPage(): ReactElement {
         subtitle="每次跑批的四维分数与趋势。分数掉了先看折线图定位是哪一维，再点进去看裁判理由。"
         breadcrumb={[{ title: '首页' }, { title: '评测' }, { title: '评测结果' }]}
         extra={
-          <Button icon={<ReloadOutlined />} onClick={() => void load()}>
-            刷新
-          </Button>
+          <Space>
+            <Button
+              icon={<SwapOutlined />}
+              disabled={selected.length !== 2}
+              onClick={() => {
+                const a = selected[0] ?? '';
+                const b = selected[1] ?? '';
+                navigate(
+                  `/admin/evaluation/compare?a=${encodeURIComponent(a)}&b=${encodeURIComponent(b)}`,
+                );
+              }}
+            >
+              对比选中的两次
+            </Button>
+            <Button icon={<ReloadOutlined />} onClick={() => void load()}>
+              刷新
+            </Button>
+          </Space>
         }
       />
 
@@ -263,6 +283,18 @@ export function EvaluationRunsPage(): ReactElement {
           dataSource={rows ?? []}
           loading={rows === null}
           tableLayout="fixed"
+          rowSelection={{
+            type: 'checkbox',
+            selectedRowKeys: selected,
+            onSelect: (record: EvaluationRun, checked: boolean) => {
+              setSelected((prev) =>
+                checked
+                  ? // 最多选两次 —— 多了就把最早选的那个挤掉
+                    [...prev, record.id].slice(-2)
+                  : prev.filter((id) => id !== record.id),
+              );
+            },
+          }}
           onRow={(row) => ({
             onClick: () => {
               void openDetail(row);

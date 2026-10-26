@@ -6,7 +6,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { allHttpFromTokensFile, type AllHttp } from '../helpers';
 import { getSequelize } from '../../src/db';
-import { EvaluationRun, Tenant } from '../../src/models';
+import { EvaluationRun, PromptVersion, Tenant } from '../../src/models';
 import {
   PROMPT_REGRESSION_MAX_ITEMS,
   triggerPromptRegression,
@@ -25,6 +25,7 @@ describe('D1 · 提示词发布自动回归', () => {
   let acmeId = '';
   let globexId = '';
   let datasetId = '';
+  let promptVersionId = '';
 
   beforeAll(async () => {
     getSequelize();
@@ -33,12 +34,27 @@ describe('D1 · 提示词发布自动回归', () => {
     const globex = await Tenant.findOne({ where: { code: 'globex' } });
     acmeId = acme?.id ?? '';
     globexId = globex?.id ?? '';
+
+    // ⚠️ 回归现在**显式用刚发布的那个版本**跑 —— 版本必须真的存在。
+    //    所以这里要造一个真的版本行（2026-10-26 之前不用，版本号只是个日志字段）。
+    const pv = await PromptVersion.create({
+      tenant_id: acmeId,
+      version: 'v-test',
+      status: 'draft',
+      content: '你是「{{tenantName}}」的客服助手。\n这是回归测试用的提示词。',
+      description: '回归测试用',
+      created_by: 'test',
+    });
+    promptVersionId = pv.id;
   });
 
   afterAll(async () => {
     if (datasetId !== '') {
       await EvaluationRun.destroy({ where: { dataset_id: datasetId } });
       await http.acmeAdmin.delete(`/evaluation/datasets/${datasetId}`, { validateStatus: () => true });
+    }
+    if (promptVersionId !== '') {
+      await PromptVersion.destroy({ where: { id: promptVersionId } });
     }
   });
 
@@ -92,6 +108,16 @@ describe('D1 · 提示词发布自动回归', () => {
     expect(run?.run_trigger).toBe('manual');
     expect(run?.item_limit).toBeNull();
     await EvaluationRun.destroy({ where: { id: res.data.id } });
+  });
+
+  it('指定的提示词版本不存在 → 不触发（不抛错，也不悄悄用默认提示词跑）', async () => {
+    const outcome = await triggerPromptRegression({
+      tenantId: acmeId,
+      userId: null,
+      promptVersion: 'no-such-version-at-all',
+    });
+    expect(outcome.triggered).toBe(false);
+    expect(outcome.reason).toContain('不存在');
   });
 
   it('Safe 版本：出错也吞掉（发布流程不受影响）', async () => {

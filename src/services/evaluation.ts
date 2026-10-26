@@ -17,11 +17,11 @@ import { buildContextWindow } from './chat';
 import { hybridSearch, type HybridHit } from '../rag/hybrid-search';
 import { planRetrieval } from '../rag/retrieval-plan';
 import { resolveLlmSettings, type ResolvedLlmSettings } from './llm-settings';
-import { resolveTenantPrompt } from './prompt-registry';
+import { assertPromptVersionUsable, resolveTenantPrompt } from './prompt-registry';
 import { recordLlmUsage } from './cost-tracking';
 import { writeAuditLog } from '../lib/audit-log';
 import { JUDGE_SYSTEM_PROMPT, renderJudgeInput } from '../prompts/evaluation';
-import { ValidationError } from '../lib/errors';
+import { NotFoundError, ValidationError } from '../lib/errors';
 
 /**
  * 评测服务 —— D1（docs/12-d-需求-运维稳定.md §D1）
@@ -587,12 +587,27 @@ function toFinite(v: unknown): number {
  *
  * @param options.limit 只跑前 N 题（小规模回归用；不传 = 跑全集）
  * @param options.trigger 触发方式（`manual` / `prompt_regression`）
+ * @param options.promptVersion **指定用哪个提示词版本跑这一批**（A/B 对比的前提）
  */
 export async function startEvaluationRun(
   tenantId: string,
   userId: string | null,
   datasetId: string,
-  options?: { limit?: number | undefined; trigger?: EvaluationRunTrigger | undefined },
+  options?: {
+    limit?: number | undefined;
+    trigger?: EvaluationRunTrigger | undefined;
+    /**
+     * 指定用哪个提示词版本跑 —— A/B 对比的前提（docs/12-e 裁定表 表 4）。
+     *
+     * - `undefined`（不传）= 跟随租户**当前生效**的提示词（原有行为）
+     * - `null` / `''`     = 显式用**内置默认**提示词
+     * - 具体版本号        = 用那个版本；**不存在直接 400**（不回落）
+     *
+     * ⚠️ 「不存在就报错」是刻意的：用户点了「用 v2 跑」，
+     *    跑批却悄悄用了默认提示词，那对比出来的报告会骗人。
+     */
+    promptVersion?: string | null | undefined;
+  },
 ): Promise<EvaluationRun> {
   const dataset = await EvaluationDataset.findOne({
     where: { id: datasetId, tenant_id: tenantId },
@@ -602,6 +617,12 @@ export async function startEvaluationRun(
   }
   if (!config.EVALUATION.ENABLED) {
     throw new ValidationError('评测功能未开启');
+  }
+
+  // 指定了版本就先校验它存在 —— 要**同步 400**，
+  // 不能等到后台跑批时才失败（那时用户已经拿到 202 了）
+  if (options?.promptVersion !== undefined) {
+    await assertPromptVersionUsable(tenantId, options.promptVersion);
   }
 
   // 小规模回归：只跑前 N 题
@@ -617,11 +638,13 @@ export async function startEvaluationRun(
     completed_items: 0,
     run_trigger: options?.trigger ?? 'manual',
     item_limit: limit ?? null,
+    // 先记下「请求用哪个版本」，跑完后 executeRun 会写成**实际生效**的版本
+    prompt_version: options?.promptVersion || null,
     started_at: new Date(),
   });
 
   // 后台跑，不 await —— 错误在 executeRun 内部兜住并写进 run 行
-  void executeRun(run.id, tenantId, datasetId, limit);
+  void executeRun(run.id, tenantId, datasetId, limit, options?.promptVersion);
 
   return run;
 }
@@ -630,12 +653,14 @@ export async function startEvaluationRun(
  * 跑批的主循环 —— 每条题：生成 → 裁判 → 落明细
  *
  * @param itemLimit 只跑前 N 题（不传 = 跑全集）
+ * @param promptVersion 指定用哪个提示词版本（不传 = 跟随租户当前生效的）
  */
 async function executeRun(
   runId: string,
   tenantId: string,
   datasetId: string,
   itemLimit?: number | undefined,
+  promptVersion?: string | null | undefined,
 ): Promise<void> {
   let totalTokens = 0;
   let totalCost = 0;
@@ -648,9 +673,12 @@ async function executeRun(
 
     const tenant = await Tenant.findByPk(tenantId);
     const tenantName = tenant?.name ?? '本公司';
+    // 指定了版本就用指定的；没指定才跟随租户当前生效的那个
+    const effectivePromptVersion =
+      promptVersion === undefined ? llm.promptVersion : promptVersion;
     const resolvedPrompt = await resolveTenantPrompt(
       tenantId,
-      llm.promptVersion,
+      effectivePromptVersion,
       tenantName,
     );
 
@@ -1069,4 +1097,345 @@ export async function checkScoreDrop(
       threshold: SCORE_DROP_THRESHOLD,
     },
   });
+}
+
+// ============================================================
+// A/B 对比 —— 两个跑批放在一起看
+// ============================================================
+
+/**
+ * 逐题对比最多拉多少条明细。
+ *
+ * 一次跑批最多 `EVALUATION_MAX_ITEMS` 题，两次就是两倍。
+ * 这个上限是**保护** —— 免得拿两个超大评测集把响应撑爆。
+ * 超出会在 warnings 里说明「明细被截断」。
+ */
+export const COMPARISON_ITEM_LIMIT = 2000;
+
+/** 对比页带的回答长度上限 —— 完整回答在「跑批详情」抽屉里看 */
+const COMPARISON_ANSWER_LIMIT = 1500;
+
+/** 对比结果里的一条明细（跑批明细的精简版） */
+export interface ComparisonResultRow {
+  item_id: string | null;
+  question: string;
+  answer: string;
+  scores: EvaluationScores;
+  judge_reason: string | null;
+}
+
+/**
+ * 逐题对比的结论：
+ * - `better` / `worse` —— B 比 A 好 / 差（按四维平均的总分）
+ * - `same` —— 基本持平
+ * - `only_a` / `only_b` —— 只有一次跑批里有这道题
+ */
+export type ComparisonVerdict = 'better' | 'worse' | 'same' | 'only_a' | 'only_b';
+
+export interface RunComparisonItem {
+  /** 匹配键（item_id 或题目文本）—— 前端做 React key 用 */
+  key: string;
+  question: string;
+  a: { scores: EvaluationScores; judge_reason: string | null; answer: string } | null;
+  b: { scores: EvaluationScores; judge_reason: string | null; answer: string } | null;
+  /** b - a（按四维平均的总分）；只有一边有结果时是 null */
+  delta: number | null;
+  verdict: ComparisonVerdict;
+}
+
+export interface RunComparisonDimension {
+  key: 'accuracy' | 'completeness' | 'style' | 'safety' | 'total_score';
+  label: string;
+  a: number | null;
+  b: number | null;
+  /** b - a；任一边没分数时是 null */
+  delta: number | null;
+}
+
+export interface RunComparison {
+  a: RunListRow;
+  b: RunListRow;
+  /** 对比前要提醒用户的事 —— 不是错误，是「这个对比要这么读」 */
+  warnings: string[];
+  dimensions: RunComparisonDimension[];
+  metrics: {
+    total_tokens: { a: number; b: number; delta: number };
+    total_cost: { a: number; b: number; delta: number };
+    items: { a: number; b: number; matched: number };
+  };
+  item_stats: { better: number; worse: number; same: number; only_a: number; only_b: number };
+  items: RunComparisonItem[];
+}
+
+/** 逐题对比的「持平」阈值 —— 0.01 分以内算持平（裁判打的是整数分，平均后噪声很小） */
+const COMPARISON_SAME_THRESHOLD = 0.01;
+
+/** 把库里的分数补齐成四维（缺哪维按 3 算，跟裁判的默认一致） */
+function normalizeScores(raw: unknown): EvaluationScores {
+  const s = (raw ?? {}) as Partial<Record<JudgeDimension, number>>;
+  const num = (v: unknown): number =>
+    typeof v === 'number' && Number.isFinite(v) ? v : 3;
+  return {
+    accuracy: num(s.accuracy),
+    completeness: num(s.completeness),
+    style: num(s.style),
+    safety: num(s.safety),
+  };
+}
+
+interface ComparisonBucket {
+  rows: ComparisonResultRow[];
+  cursor: number;
+}
+
+/** 按某个键把 B 侧的明细分桶 —— 同键多行时靠 cursor 一对一消费 */
+function buildBucket(
+  rows: ComparisonResultRow[],
+  keyOf: (row: ComparisonResultRow) => string | null,
+): Map<string, ComparisonBucket> {
+  const map = new Map<string, ComparisonBucket>();
+  for (const row of rows) {
+    const key = keyOf(row);
+    if (key === null || key === '') continue;
+    let bucket = map.get(key);
+    if (bucket === undefined) {
+      bucket = { rows: [], cursor: 0 };
+      map.set(key, bucket);
+    }
+    bucket.rows.push(row);
+  }
+  return map;
+}
+
+/** 从桶里取一条还没被用过的（`used` 保证同一条明细不会被两个键各领一次） */
+function takeFromBucket(
+  map: Map<string, ComparisonBucket>,
+  key: string | null,
+  used: Set<ComparisonResultRow>,
+): ComparisonResultRow | null {
+  if (key === null || key === '') return null;
+  const bucket = map.get(key);
+  if (bucket === undefined) return null;
+  while (bucket.cursor < bucket.rows.length) {
+    const row = bucket.rows[bucket.cursor] as ComparisonResultRow;
+    bucket.cursor += 1;
+    if (used.has(row)) continue;
+    used.add(row);
+    return row;
+  }
+  return null;
+}
+
+/**
+ * 生成一个**在本次对比里唯一**的匹配键。
+ *
+ * ⚠️ 题目文本可能重复（同一道题在评测集里出现两次），
+ *    而 `item_id` 为 null 时只能拿题目文本当键 —— 不去重的话前端 Table 的 key 会撞。
+ */
+function uniqueKey(seen: Set<string>, base: string): string {
+  let key = base;
+  let n = 1;
+  while (seen.has(key)) {
+    key = `${base}#${n}`;
+    n += 1;
+  }
+  seen.add(key);
+  return key;
+}
+
+/**
+ * 把两次跑批的明细**一对一**配对 —— 纯函数，单测直接喂两组行。
+ *
+ * 配对顺序：
+ *   1. 同一个评测集 → 按 `item_id` 配（精确，同一道题在两次跑批里的行 id 相同）
+ *   2. 配不上 → 按**题目文本**配（兜底：换了评测集 / item_id 缺失时也能配上）
+ *
+ * ⚠️ 一对一：B 侧每条明细最多被领走一次 —— 同一道题出现两次时不会两边都配上。
+ */
+export function matchComparisonItems(
+  rowsA: ComparisonResultRow[],
+  rowsB: ComparisonResultRow[],
+  sameDataset: boolean,
+): RunComparisonItem[] {
+  const bByItemId = buildBucket(rowsB, (r) => (sameDataset ? r.item_id : null));
+  const bByQuestion = buildBucket(rowsB, (r) => r.question.trim());
+  const used = new Set<ComparisonResultRow>();
+
+  const items: RunComparisonItem[] = [];
+  const seenKeys = new Set<string>();
+
+  for (const a of rowsA) {
+    let b: ComparisonResultRow | null = null;
+    if (sameDataset && a.item_id !== null) {
+      b = takeFromBucket(bByItemId, a.item_id, used);
+    }
+    if (b === null) {
+      b = takeFromBucket(bByQuestion, a.question.trim(), used);
+    }
+
+    const scoreA = normalizeScores(a.scores);
+    const sideB =
+      b === null
+        ? null
+        : { scores: normalizeScores(b.scores), judge_reason: b.judge_reason, answer: b.answer };
+    const scoreB = sideB === null ? null : sideB.scores;
+    const delta =
+      scoreB === null ? null : Number((averageScore(scoreB) - averageScore(scoreA)).toFixed(3));
+
+    items.push({
+      key: uniqueKey(seenKeys, a.item_id ?? `q:${a.question.slice(0, 40)}`),
+      question: a.question,
+      a: { scores: scoreA, judge_reason: a.judge_reason, answer: a.answer },
+      b: sideB,
+      delta,
+      verdict: verdictOf(delta, b === null),
+    });
+  }
+
+  // B 侧剩下的 = 只有 B 有这道题
+  for (const b of rowsB) {
+    if (used.has(b)) continue;
+    const scoreB = normalizeScores(b.scores);
+    items.push({
+      key: uniqueKey(seenKeys, `only_b:${b.item_id ?? b.question.slice(0, 40)}`),
+      question: b.question,
+      a: null,
+      b: { scores: scoreB, judge_reason: b.judge_reason, answer: b.answer },
+      delta: null,
+      verdict: 'only_b',
+    });
+  }
+
+  return items;
+}
+
+function verdictOf(delta: number | null, missingB: boolean): ComparisonVerdict {
+  if (delta === null) return missingB ? 'only_a' : 'same';
+  if (delta > COMPARISON_SAME_THRESHOLD) return 'better';
+  if (delta < -COMPARISON_SAME_THRESHOLD) return 'worse';
+  return 'same';
+}
+
+async function loadComparisonResults(
+  tenantId: string,
+  runId: string,
+): Promise<ComparisonResultRow[]> {
+  const rows = await EvaluationResult.findAll({
+    where: { run_id: runId, tenant_id: tenantId },
+    order: [['created_at', 'ASC']],
+    limit: COMPARISON_ITEM_LIMIT,
+    attributes: ['item_id', 'question', 'answer', 'scores', 'judge_reason'],
+  });
+  return rows.map((r) => ({
+    item_id: r.item_id,
+    question: r.question,
+    answer:
+      r.answer.length > COMPARISON_ANSWER_LIMIT
+        ? `${r.answer.slice(0, COMPARISON_ANSWER_LIMIT)}…`
+        : r.answer,
+    scores: normalizeScores(r.scores),
+    judge_reason: r.judge_reason,
+  }));
+}
+
+const COMPARISON_DIMENSION_LABELS: Record<RunComparisonDimension['key'], string> = {
+  accuracy: '准确性',
+  completeness: '完整性',
+  style: '风格',
+  safety: '安全性',
+  total_score: '总分',
+};
+
+/**
+ * 对比两次跑批 —— A/B 对比的后端（docs/12-e 裁定表 表 4）。
+ *
+ * 返回**汇总 + 逐题**两层：
+ *   - 汇总：四维 + 总分的 A / B / 差值，外加 token / 成本 / 题数
+ *   - 逐题：每道题两边各打了多少分、差多少、谁更好
+ *
+ * ⚠️ **跨租户**：两次 run 都按 tenant_id 查 —— 别的租户的 run id 一律 404。
+ */
+export async function compareRuns(
+  tenantId: string,
+  runIdA: string,
+  runIdB: string,
+): Promise<RunComparison> {
+  const [a, b] = await Promise.all([getRun(tenantId, runIdA), getRun(tenantId, runIdB)]);
+  if (a === null) {
+    throw new NotFoundError('评测跑批');
+  }
+  if (b === null) {
+    throw new NotFoundError('评测跑批');
+  }
+
+  const warnings: string[] = [];
+  if (a.status !== 'completed' || b.status !== 'completed') {
+    warnings.push('有跑批还没跑完，分数可能还会变 —— 建议等两次都完成后再对比');
+  }
+  const sameDataset = a.dataset_id === b.dataset_id;
+  if (!sameDataset) {
+    warnings.push('两次跑批不是同一个评测集，逐题只能按题目文本配对');
+  }
+  if (a.prompt_version === b.prompt_version) {
+    warnings.push('两次跑批用的是同一个提示词版本 —— 分数差异不来自提示词');
+  }
+  if (a.model !== b.model) {
+    warnings.push('两次跑批用的模型不同 —— 分数差异可能来自模型而不是提示词');
+  }
+
+  const [rowsA, rowsB] = await Promise.all([
+    loadComparisonResults(tenantId, runIdA),
+    loadComparisonResults(tenantId, runIdB),
+  ]);
+  if (rowsA.length >= COMPARISON_ITEM_LIMIT || rowsB.length >= COMPARISON_ITEM_LIMIT) {
+    warnings.push(`明细超过 ${COMPARISON_ITEM_LIMIT} 条，逐题明细已被截断`);
+  }
+
+  const items = matchComparisonItems(rowsA, rowsB, sameDataset);
+
+  const item_stats = { better: 0, worse: 0, same: 0, only_a: 0, only_b: 0 };
+  for (const item of items) {
+    if (item.verdict === 'better') item_stats.better += 1;
+    else if (item.verdict === 'worse') item_stats.worse += 1;
+    else if (item.verdict === 'same') item_stats.same += 1;
+    else if (item.verdict === 'only_a') item_stats.only_a += 1;
+    else item_stats.only_b += 1;
+  }
+  const matched = item_stats.better + item_stats.worse + item_stats.same;
+
+  const dimensions: RunComparisonDimension[] = (
+    ['accuracy', 'completeness', 'style', 'safety', 'total_score'] as const
+  ).map((key) => {
+    const va = a[key];
+    const vb = b[key];
+    return {
+      key,
+      label: COMPARISON_DIMENSION_LABELS[key],
+      a: va,
+      b: vb,
+      delta: va === null || vb === null ? null : Number((vb - va).toFixed(3)),
+    };
+  });
+
+  return {
+    a,
+    b,
+    warnings,
+    dimensions,
+    metrics: {
+      total_tokens: {
+        a: a.total_tokens,
+        b: b.total_tokens,
+        delta: b.total_tokens - a.total_tokens,
+      },
+      total_cost: {
+        a: a.total_cost,
+        b: b.total_cost,
+        delta: Number((b.total_cost - a.total_cost).toFixed(6)),
+      },
+      items: { a: rowsA.length, b: rowsB.length, matched },
+    },
+    item_stats,
+    items,
+  };
 }

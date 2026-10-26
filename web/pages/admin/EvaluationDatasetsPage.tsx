@@ -9,6 +9,7 @@ import {
   Input,
   Modal,
   Popconfirm,
+  Select,
   Space,
   Table,
   Tag,
@@ -25,6 +26,7 @@ import {
   UploadOutlined,
 } from '@ant-design/icons';
 import { PageHeader } from '../../components/shell/PageHeader';
+import { fetchPromptVersions, type PromptVersionItem } from '../../lib/adminConfig';
 import {
   createDataset,
   deleteDataset,
@@ -67,6 +69,18 @@ export function EvaluationDatasetsPage(): ReactElement {
   const [detail, setDetail] = useState<{ dataset: EvaluationDataset; items: EvaluationDatasetItem[] } | null>(
     null,
   );
+
+  // ===== 跑评测（可选指定提示词版本）=====
+  const [runTarget, setRunTarget] = useState<EvaluationDataset | null>(null);
+  /**
+   * 跑批用哪个提示词版本：
+   * - `__active__`  = 跟随租户当前生效的版本（默认，跟以前一样）
+   * - `__builtin__` = 显式用内置默认提示词
+   * - 具体版本号     = 用那个版本
+   */
+  const [runVersionKey, setRunVersionKey] = useState<string>('__active__');
+  const [promptVersions, setPromptVersions] = useState<PromptVersionItem[]>([]);
+  const [runSubmitting, setRunSubmitting] = useState(false);
 
   const load = async (): Promise<void> => {
     setErrMsg(null);
@@ -118,10 +132,35 @@ export function EvaluationDatasetsPage(): ReactElement {
 
   const runNow = async (row: EvaluationDataset): Promise<void> => {
     try {
-      const run = await startRun(row.id);
-      message.success(`已开始评测（${run.total_items} 题），跑完后去「评测结果」页看分数`);
+      // ⚠️ undefined（不传）= 跟随当前生效版本；null = 显式内置默认；字符串 = 指定版本
+      const promptVersion =
+        runVersionKey === '__active__'
+          ? undefined
+          : runVersionKey === '__builtin__'
+            ? null
+            : runVersionKey;
+      const run = await startRun(row.id, promptVersion);
+      setRunTarget(null);
+      message.success(
+        `已开始评测（${run.total_items} 题），跑完后去「评测结果」页看分数`,
+      );
     } catch (err: unknown) {
       message.error(evaluationErrorMessage(err, '触发评测失败'));
+    } finally {
+      setRunSubmitting(false);
+    }
+  };
+
+  /** 打开「跑评测」弹窗 —— 同时把可选的提示词版本拉出来 */
+  const openRun = async (row: EvaluationDataset): Promise<void> => {
+    setRunTarget(row);
+    setRunVersionKey('__active__');
+    setRunSubmitting(false);
+    try {
+      setPromptVersions(await fetchPromptVersions());
+    } catch (err: unknown) {
+      setPromptVersions([]);
+      message.error(evaluationErrorMessage(err, '加载提示词版本失败'));
     }
   };
 
@@ -189,7 +228,7 @@ export function EvaluationDatasetsPage(): ReactElement {
             type="link"
             size="small"
             icon={<PlayCircleOutlined />}
-            onClick={() => void runNow(row)}
+            onClick={() => void openRun(row)}
           >
             跑评测
           </Button>
@@ -253,6 +292,48 @@ export function EvaluationDatasetsPage(): ReactElement {
           locale={{ emptyText: rows === null ? '加载中…' : '还没有评测集' }}
         />
       </Card>
+
+      {/* 跑评测 —— 可选指定提示词版本（A/B 对比的前提） */}
+      <Modal
+        open={runTarget !== null}
+        title={`跑评测 · ${runTarget?.name ?? ''}`}
+        width={560}
+        okText="开始评测"
+        cancelText="取消"
+        confirmLoading={runSubmitting}
+        onOk={() => {
+          if (runTarget === null) return;
+          setRunSubmitting(true);
+          void runNow(runTarget);
+        }}
+        onCancel={() => setRunTarget(null)}
+        destroyOnHidden
+      >
+        <Paragraph type="secondary" style={{ fontSize: 13 }}>
+          默认用租户<strong>当前生效</strong>的提示词跑。想比较两个版本的效果，
+          就用同一个评测集分别跑两次（各选一个版本），再去「评测 → 版本对比」页看差异。
+        </Paragraph>
+        <div style={{ marginBottom: 8 }}>
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            提示词版本
+          </Text>
+        </div>
+        <Select
+          style={{ width: '100%' }}
+          value={runVersionKey}
+          onChange={(v: string) => setRunVersionKey(v)}
+          options={[
+            { value: '__active__', label: '跟随当前生效的版本' },
+            { value: '__builtin__', label: '内置默认提示词' },
+            ...promptVersions.map((p) => ({
+              value: p.version,
+              label: `${p.version}${p.status === 'production' ? '（生效中）' : ''}${
+                p.status === 'draft' ? '（草稿）' : ''
+              }`,
+            })),
+          ]}
+        />
+      </Modal>
 
       {/* 新建 */}
       <Modal
