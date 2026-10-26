@@ -342,10 +342,12 @@ export async function runChatTurn(options: ChatTurnOptions): Promise<ChatTurnRes
     // 8.5) 用户长期记忆（B4）。同样在开流之前查好 ——
     //      查库失败要能返 500，而不是变成流内 error。
     //      匿名会话（挂件 / 对外 API）没有 user_id → 没有个人记忆，直接跳过。
+    //      ⚠️ 传的是**安全处理后**的文本（safeUserText）——
+    //         脱敏后的内容才是真正送进模型的东西，用它算相关性才对得上。
     const memoryText =
       session.user_id === null
         ? ''
-        : await buildMemoryTextForChat(session.tenant_id, session.user_id);
+        : await buildMemoryTextForChat(session.tenant_id, session.user_id, safeUserText);
 
     // 8.6) 会话摘要（B1 摘要压缩）。同样在开流之前查好 ——
     //      查库失败要能返 500，而不是变成流内 error。

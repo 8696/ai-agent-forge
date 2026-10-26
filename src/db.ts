@@ -28,6 +28,7 @@ import { AgentRun } from './models/AgentRun';
 import { AgentStep } from './models/AgentStep';
 import { installTenantScopeHooks } from './lib/tenant-scope';
 import { probeApiKeySha256Column } from './lib/api-key-auth';
+import { probeUserMemoryEmbeddingColumns } from './services/memory-relevance';
 
 /**
  * Sequelize 实例（单例）。
@@ -120,6 +121,13 @@ export async function initDatabase(): Promise<void> {
   //    探一次、把列摘掉，一次性解决所有路径（鉴权 + 后台的 key 列表 / 改权限 / 撤销）。
   //    详见 src/lib/api-key-auth.ts 的 probeApiKeySha256Column。
   await probeApiKeySha256Column();
+
+  // ⚠️ **迁移 035（user_memories.embedding）跑了没** —— 同理：
+  //    列不存在时每一次对 user_memories 的查询都会报「Unknown column 'embedding'」
+  //    （记忆列表 / 计数 / 归档 全挂）。
+  //    探一次、把两列摘掉，记忆退回固定顺序的注入排序，功能少一半但不影响使用。
+  //    详见 src/services/memory-relevance.ts 的 probeUserMemoryEmbeddingColumns。
+  await probeUserMemoryEmbeddingColumns();
 }
 
 // 重导出 DataTypes / Sequelize 类型，给后续 migration 用

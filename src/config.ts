@@ -255,6 +255,14 @@ const envSchema = z.object({
   // ⚠️ 别设太小：推理型模型（glm-5.3 等）光是「想」就要 10 秒以上，
   // 8 秒会把每一次抽取都掐掉。抽取是 fire-and-forget 的，超时调大不影响用户体感。
   MEMORY_EXTRACT_TIMEOUT_MS: z.coerce.number().int().positive().default(30000),
+  // 记忆的**相关性排序**总开关（平台级）。
+  // 关掉 = 注入顺序退回固定的那个（用户写的 > 管理员写的 > 自动抽的），
+  // 也就是本特性上线之前的行为。租户级还有一项 memory_relevance_enabled，
+  // 两层都开才生效（跟重排的「平台 ∧ 租户」一个路子）。
+  MEMORY_RELEVANCE_ENABLED: z.preprocess(toBool, z.boolean().default(true)),
+  // 算问题向量的超时（毫秒）—— 超了就退回固定顺序排序，不拖住用户这一轮。
+  // embedding 服务是外部依赖，挂着的时候不能把对话一起挂住。
+  MEMORY_RELEVANCE_TIMEOUT_MS: z.coerce.number().int().positive().default(3000),
 
   // === 日志 ===
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
@@ -583,6 +591,10 @@ export const config = Object.freeze({
     MAX_ACTIVE_PER_USER: env.MEMORY_MAX_ACTIVE_PER_USER,
     MIN_CONFIDENCE: env.MEMORY_MIN_CONFIDENCE,
     EXTRACT_TIMEOUT_MS: env.MEMORY_EXTRACT_TIMEOUT_MS,
+    /** 记忆按相关性排序的平台级总开关 */
+    RELEVANCE_ENABLED: env.MEMORY_RELEVANCE_ENABLED,
+    /** 算问题向量的超时（毫秒） */
+    RELEVANCE_TIMEOUT_MS: env.MEMORY_RELEVANCE_TIMEOUT_MS,
   }),
 
   // 重排序（B2 · docs/07-c 模块 09）

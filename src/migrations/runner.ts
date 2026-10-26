@@ -36,6 +36,7 @@ import * as m031 from './031-add-session-favorite';
 import * as m032 from './032-create-agent-runs';
 import * as m033 from './033-evaluation-run-trigger';
 import * as m034 from './034-add-api-key-sha256';
+import * as m035 from './035-user-memory-embedding';
 
 /**
  * umzug 迁移 runner（详见 docs/03-b-技术栈-后端栈.md §B.2）
@@ -225,6 +226,11 @@ export function buildMigrator(): Umzug<QueryInterface> {
         name: '034-add-api-key-sha256',
         up: (params) => m034.up(params),
         down: (params) => m034.down(params),
+      },
+      {
+        name: '035-user-memory-embedding',
+        up: (params) => m035.up(params),
+        down: (params) => m035.down(params),
       },
     ],
   });

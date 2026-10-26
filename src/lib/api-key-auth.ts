@@ -5,6 +5,7 @@ import type { Context, Next } from 'koa';
 import { ApiKey, type ApiKeyScope } from '../models';
 import { AuthError, ForbiddenError } from './errors';
 import { hashPassword, verifyPassword } from './password';
+import { isMissingColumnError } from './sql-errors';
 import { runWithTenant } from './tenant-context';
 import { logger } from '../logger';
 
@@ -117,29 +118,9 @@ export function sha256OfApiKey(raw: string): string {
  */
 let sha256Support: 'unknown' | 'available' | 'missing' = 'unknown';
 
-/**
- * MySQL 的「未知列」错误。
- *
- * mysql2 抛的是 `ER_BAD_FIELD_ERROR` / errno 1054 / SQLSTATE 42S22；
- * Sequelize 会把它包成 DatabaseError，原始错误挂在 `original`（有时也在 `parent`）。
- */
-export function isMissingColumnError(err: unknown): boolean {
-  const candidates: unknown[] = [err];
-  if (err !== null && typeof err === 'object') {
-    candidates.push((err as { original?: unknown }).original);
-    candidates.push((err as { parent?: unknown }).parent);
-  }
-  for (const c of candidates) {
-    if (c === null || typeof c !== 'object') {
-      continue;
-    }
-    const e = c as { code?: string; errno?: number; sqlState?: string };
-    if (e.code === 'ER_BAD_FIELD_ERROR' || e.errno === 1054 || e.sqlState === '42S22') {
-      return true;
-    }
-  }
-  return false;
-}
+// 「未知列」错误的识别在 src/lib/sql-errors.ts（记忆向量那边也要用同一份）。
+// 这里再导出一次，是为了让既有调用点（和它们的测试）不用改 import。
+export { isMissingColumnError };
 
 /** sha256 列现在能不能用（false = 迁移 034 没跑，已降级） */
 export function isApiKeySha256Supported(): boolean {

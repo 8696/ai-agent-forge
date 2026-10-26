@@ -110,6 +110,30 @@ export class UserMemory extends Model {
   @Column({ type: DataType.STRING(36), allowNull: true })
   declare source_message_id: string | null;
 
+  /**
+   * 记忆正文的向量（embedding）—— B4 的「记忆检索」那一项
+   * （docs/12-b-需求-ai对话能力.md §B4 · 迁移 035）
+   *
+   * 用途：每轮对话拿当前问题跟每条记忆算余弦相似度，**按相关不按新旧**挑注入哪几条。
+   * 没有这一列时注入顺序是固定的（用户写的 > 管理员写的 > 自动抽的），
+   * 用户攒多了以后真正相关的那条会被挤在 topK 之外。
+   *
+   * ⚠️ **存归一化后的向量**（写库前已除以模长）→ 余弦相似度 = 点积。
+   * ⚠️ **NULL = 还没算向量**（刚写的 / 补算失败 / 换过 embedding 模型）。
+   *    这种记忆照样能注入，只是相关按 0 算。
+   */
+  @Column({ type: DataType.JSON, allowNull: true })
+  declare embedding: number[] | null;
+
+  /**
+   * 生成上面那个向量的 embedding 模型名。
+   *
+   * 换 embedding 模型后旧向量作废（两套模型的向量混在一起算相似度没有意义）——
+   * 读的时候模型名对不上就当没有向量，重新算。
+   */
+  @Column({ type: DataType.STRING(64), allowNull: true })
+  declare embedding_model: string | null;
+
   @CreatedAt
   @Column({ type: DataType.DATE(6) })
   declare created_at: Date;

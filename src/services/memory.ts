@@ -20,6 +20,15 @@ import { maskPiiText, scanSensitiveWords, sensitiveSummary } from '../lib/securi
 import { scanInjectionRules } from '../lib/security';
 import { recordLlmUsage } from './cost-tracking';
 import { getSettingValue, getSettingValues } from './tenant-settings';
+import {
+  backfillMemoryEmbeddings,
+  compareMemoryPriority,
+  currentEmbeddingModel,
+  embedQueryVector,
+  isMemoryEmbeddingSupported,
+  rankByRelevance,
+  shouldAttemptBackfill,
+} from './memory-relevance';
 import { MEMORY_EXTRACT_SYSTEM_PROMPT, renderMemoryExtractInput } from '../prompts/memory';
 import { resolveExtractionLlm, type ResolvedLlmSettings } from './llm-settings';
 import type { ResolvedFallbackModel } from './tenant-models';
@@ -392,6 +401,8 @@ export async function listUserMemories(
   const rows = await UserMemory.findAll({
     where,
     order: [['updated_at', 'DESC']],
+    // 不取向量列：列表用不上，而它可能有几 KB（一条 1024 维的向量）
+    attributes: { exclude: ['embedding'] },
     // 上限 200 是兜底；limit 传了就取更小的那个
     limit: limit === undefined ? 200 : Math.min(limit, 200),
   });
@@ -461,6 +472,8 @@ export async function listTenantMemories(
   const { rows, count } = await UserMemory.findAndCountAll({
     where,
     order: [['updated_at', 'DESC']],
+    // 不取向量列：列表用不上，而它可能有几 KB（一条 1024 维的向量）
+    attributes: { exclude: ['embedding'] },
     limit: pageSize,
     offset: (page - 1) * pageSize,
   });
@@ -690,6 +703,13 @@ export interface CreateMemoryInput {
   confidence?: number;
   sourceSessionId?: string | null;
   sourceMessageId?: string | null;
+  /**
+   * **true = 不在写这条的时候算向量**（调用方自己批量补）。
+   *
+   * 自动抽取一轮可能新增好几条记忆，逐条算就是好几次 embedding 调用 ——
+   * 那里统一收集起来批量算（embedBatch 一次最多 16 条）。
+   */
+  skipEmbedding?: boolean;
 }
 
 /** 新建一条记忆 */
@@ -698,7 +718,7 @@ export async function createMemory(input: CreateMemoryInput): Promise<UserMemory
   if (content === '') {
     throw new ValidationError('记忆内容不能为空');
   }
-  return UserMemory.create({
+  const row = await UserMemory.create({
     tenant_id: input.tenantId,
     user_id: input.userId,
     category: input.category ?? DEFAULT_CATEGORY,
@@ -711,6 +731,11 @@ export async function createMemory(input: CreateMemoryInput): Promise<UserMemory
     source_session_id: input.sourceSessionId ?? null,
     source_message_id: input.sourceMessageId ?? null,
   });
+  // 尽力而为算向量（失败不影响记忆本身，下一轮会补算）
+  if (input.skipEmbedding !== true) {
+    await embedMemoryRowsQuietly([row]);
+  }
+  return row;
 }
 
 /**
@@ -737,6 +762,9 @@ export async function updateMemoryContent(
     row.content = content;
     // 手动改过的内容就是用户确认过的 —— 置信度拉满
     row.confidence = 1;
+    // ⚠️ **内容变了 → 旧向量作废**（不然会用旧内容的向量去算相关性，
+    //    排出来的顺序跟正文对不上）。置空后由下面的补算重新写上。
+    invalidateMemoryEmbedding(row);
   }
   if (patch.category !== undefined) {
     row.category = patch.category;
@@ -745,7 +773,19 @@ export async function updateMemoryContent(
     row.source = patch.source;
   }
   await row.save();
+  if (patch.content !== undefined) {
+    await embedMemoryRowsQuietly([row]);
+  }
   return row;
+}
+
+/** 内容变了 → 旧的向量不能再用了（置空，等着重新算） */
+function invalidateMemoryEmbedding(row: UserMemory): void {
+  if (!isMemoryEmbeddingSupported()) {
+    return;
+  }
+  row.embedding = null;
+  row.embedding_model = null;
 }
 
 /** 归档 / 恢复（软删） */
@@ -860,20 +900,15 @@ export interface MemoryContextResult {
   injected: MemoryView[];
   /** 因为预算被丢掉了几条 */
   dropped: number;
+  /**
+   * 本轮是不是**按相关性**排的序。
+   * false = 退回了固定顺序（没配 embedding / 调用失败 / 开关关了）。
+   */
+  ranked: boolean;
+  /** 记忆 id → 相关性得分（ranked=false 时是空表） */
+  relevance: Map<string, number>;
 }
 
-/**
- * 取这个用户的记忆，拼成一段能塞进 system prompt 的文本。
- *
- * 取哪几条（排序）：
- *  1. 用户自己写的优先 —— 那是用户明确表达过的
- *  2. 管理员写的次之
- *  3. 模型自动抽的最后
- *  同来源内按置信度降序，再按更新时间降序
- *
- * 预算：条数上限（memory_top_k）和 token 上限（memory_token_budget）都要过，
- * 装不下的从尾部丢（越靠后越不重要）。
- */
 /**
  * 按「条数上限 + token 上限」裁出这一轮要注入的记忆。
  *
@@ -886,7 +921,17 @@ export interface MemoryContextResult {
  */
 export function fitMemoriesToBudget(
   rows: readonly UserMemory[],
-  options: { topK: number; tokenBudget: number },
+  options: {
+    topK: number;
+    tokenBudget: number;
+    /**
+     * **已经排好序**的候选（相关性排序的结果）。
+     *
+     * 不给 = 按固定优先级排（用户写的 > 管理员写的 > 自动抽的），
+     * 也就是本特性上线之前的行为。
+     */
+    order?: readonly UserMemory[] | undefined;
+  },
 ): { kept: UserMemory[]; dropped: number } {
   if (options.topK <= 0) {
     return { kept: [], dropped: rows.length };
@@ -907,7 +952,14 @@ export function fitMemoriesToBudget(
     return true;
   });
 
-  const picked = sortMemoriesByPriority(safe).slice(0, options.topK);
+  // 排好序的候选里，只留通过安全检查的那些（外部给的顺序可能含被拦下的）
+  const safeIds = new Set(safe.map((row) => row.id));
+  const ordered =
+    options.order === undefined
+      ? sortMemoriesByPriority(safe)
+      : options.order.filter((row) => safeIds.has(row.id));
+
+  const picked = ordered.slice(0, options.topK);
   const toRenderable = (row: UserMemory): RenderableMemory => ({
     id: row.id,
     category: row.category,
@@ -931,13 +983,40 @@ export function fitMemoriesToBudget(
   return { kept, dropped };
 }
 
+/**
+ * 取这个用户的记忆，拼成一段能塞进 system prompt 的文本。
+ *
+ * ## 取哪几条（排序）
+ *
+ *  **优先按「跟当前问题相不相关」排**（B4 的记忆检索那一项）：
+ *  用当前问题算一个向量，跟每条记忆的向量算余弦相似度，高的在前。
+ *  排不出来（没配 embedding / 调用失败 / 开关关了）时**退回固定顺序**：
+ *   1. 用户自己写的优先 —— 那是用户明确表达过的
+ *   2. 管理员写的次之
+ *   3. 模型自动抽的最后
+ *   同来源内按置信度降序，再按更新时间降序
+ *
+ *  ⚠️ **相关性是主序、优先级是兜底**，不是反过来 ——
+ *    「最新」不等于「最相关」：用户攒了 50 条记忆时，
+ *    按固定顺序排，本轮问「报销流程」，
+ *    排在前面的是刚写的「我喜欢简洁的回答」，
+ *    真正相关的「发票抬头是 XX 公司」排在第 20 位，topK=8 根本轮不到它。
+ *
+ * 预算：条数上限（memory_top_k）和 token 上限（memory_token_budget）都要过，
+ * 装不下的从尾部丢（越靠后越不重要）。
+ */
 export async function buildMemoryContext(
   tenantId: string,
   userId: string,
-  options: { topK: number; tokenBudget: number },
+  options: {
+    topK: number;
+    tokenBudget: number;
+    /** 当前这一轮用户问的是什么 —— 有它才能按相关性排 */
+    query?: string | undefined;
+  },
 ): Promise<MemoryContextResult> {
   if (options.topK <= 0) {
-    return { text: '', injected: [], dropped: 0 };
+    return { text: '', injected: [], dropped: 0, ranked: false, relevance: new Map() };
   }
 
   const rows = await UserMemory.findAll({
@@ -945,7 +1024,29 @@ export async function buildMemoryContext(
     limit: 200,
   });
 
-  const { kept, dropped } = fitMemoriesToBudget(rows, options);
+  // ---- 相关性排序（可关；关掉 / 失败一律退回固定顺序）----
+  let ordered: UserMemory[] | undefined;
+  let relevance = new Map<string, number>();
+  const query = options.query?.trim() ?? '';
+  if (query !== '' && isMemoryEmbeddingSupported()) {
+    const model = currentEmbeddingModel();
+    if (model !== null) {
+      const queryVector = await embedQueryVector(query, config.MEMORY.RELEVANCE_TIMEOUT_MS);
+      if (queryVector !== null) {
+        const ranked = rankByRelevance(rows, queryVector, model);
+        ordered = ranked.rows;
+        relevance = ranked.scores;
+        // 缺向量的记忆在后台补算（不阻塞这一轮，见 scheduleEmbeddingBackfill）
+        scheduleEmbeddingBackfill(rows, model);
+      }
+    }
+  }
+
+  const { kept, dropped } = fitMemoriesToBudget(rows, {
+    topK: options.topK,
+    tokenBudget: options.tokenBudget,
+    order: ordered,
+  });
   const renderables = kept.map((row) => ({
     id: row.id,
     category: row.category,
@@ -955,7 +1056,7 @@ export async function buildMemoryContext(
   }));
   const text = renderMemoryBlock(renderables);
   if (text === '') {
-    return { text: '', injected: [], dropped };
+    return { text: '', injected: [], dropped, ranked: ordered !== undefined, relevance };
   }
 
   // 记命中次数：哪些记忆真的被喂给了模型
@@ -978,23 +1079,59 @@ export async function buildMemoryContext(
     return row === undefined ? [] : [toView(row)];
   });
 
-  return { text, injected, dropped };
+  return { text, injected, dropped, ranked: ordered !== undefined, relevance };
 }
 
 /** 排序：用户写的 > 管理员写的 > 自动抽的；同档按置信度降序 */
 function sortMemoriesByPriority(rows: readonly UserMemory[]): UserMemory[] {
-  const sourceRank: Record<UserMemorySource, number> = { user: 0, admin: 1, auto: 2 };
-  return [...rows].sort((a, b) => {
-    const bySource = sourceRank[a.source] - sourceRank[b.source];
-    if (bySource !== 0) {
-      return bySource;
-    }
-    const byConfidence = b.confidence - a.confidence;
-    if (byConfidence !== 0) {
-      return byConfidence;
-    }
-    return b.updated_at.getTime() - a.updated_at.getTime();
+  return [...rows].sort(compareMemoryPriority);
+}
+
+/**
+ * 给缺向量的记忆在**后台**补算（不阻塞这一轮）。
+ *
+ * ⚠️ 为什么不在这一轮同步补：补算是一次 embedding 调用（几十到几百毫秒），
+ *    放在对话的关键路径上会让每轮都慢一截。下一轮它就排得上。
+ * ⚠️ 为什么不会无限重试：补算失败会记一次失败时间，
+ *    冷却期内（1 分钟）不再重复调用（见 shouldAttemptBackfill）。
+ */
+function scheduleEmbeddingBackfill(rows: readonly UserMemory[], model: string): void {
+  if (!shouldAttemptBackfill()) {
+    return;
+  }
+  void backfillMemoryEmbeddings(rows, model).catch((err: unknown) => {
+    logger.warn(
+      { err: err instanceof Error ? err.message : String(err) },
+      '补算记忆向量失败（下一轮再试）',
+    );
   });
+}
+
+/**
+ * 给记忆补算向量（尽力而为）。
+ *
+ * 失败**只记日志不影响记忆本身** —— 向量是锦上添花，
+ * 没有它这条记忆照样能注入（只是相关按 0 算）。
+ *
+ * ⚠️ **带超时**：这个函数跑在**用户请求的关键路径上**（用户点「保存一条记忆」）——
+ *    embedding 服务挂着的时候不能让请求挂 60 秒（embedBatch 自己的超时就是 60 秒）。
+ */
+async function embedMemoryRowsQuietly(rows: readonly UserMemory[]): Promise<void> {
+  if (!isMemoryEmbeddingSupported() || rows.length === 0) {
+    return;
+  }
+  const model = currentEmbeddingModel();
+  if (model === null) {
+    return;
+  }
+  try {
+    await backfillMemoryEmbeddings(rows, model, config.MEMORY.RELEVANCE_TIMEOUT_MS);
+  } catch (err: unknown) {
+    logger.warn(
+      { count: rows.length, err: err instanceof Error ? err.message : String(err) },
+      '写入记忆向量失败（不影响记忆本身，下一轮会补算）',
+    );
+  }
 }
 
 // ============================================================
@@ -1410,6 +1547,8 @@ async function applyMemoryActions(params: {
   let updated = 0;
   let archived = 0;
   let skipped = 0;
+  /** 这一轮新增 / 改写过的记忆 —— 循环结束后统一批量算向量 */
+  const touched: UserMemory[] = [];
 
   const byId = new Map(params.existing.map((m) => [m.id, m]));
   // 判重集合要**现查一次库**：快照是 LLM 调用**之前**取的，这十几秒里
@@ -1439,7 +1578,7 @@ async function applyMemoryActions(params: {
         continue;
       }
       try {
-        await createMemory({
+        const created = await createMemory({
           tenantId: params.tenantId,
           userId: params.userId,
           content: action.content,
@@ -1448,7 +1587,10 @@ async function applyMemoryActions(params: {
           confidence: action.confidence,
           sourceSessionId: params.sessionId,
           sourceMessageId: params.messageId,
+          // 向量统一在循环结束后批量算（这一轮可能新增好几条）
+          skipEmbedding: true,
         });
+        touched.push(created);
         activeTexts.push(normalized);
         added += 1;
       } catch (err: unknown) {
@@ -1491,8 +1633,11 @@ async function applyMemoryActions(params: {
       target.category = action.category;
       target.confidence = Math.max(target.confidence, action.confidence);
       target.updated_at = new Date();
+      // 内容变了 → 旧向量作废（统一在循环结束后批量重算）
+      invalidateMemoryEmbedding(target);
       try {
         await target.save();
+        touched.push(target);
         updated += 1;
       } catch (err: unknown) {
         logger.error({ err }, '更新记忆失败');
@@ -1511,6 +1656,9 @@ async function applyMemoryActions(params: {
       skipped += 1;
     }
   }
+
+  // 统一给这一轮碰过的记忆算向量（一次批量调用，不是逐条一次）
+  await embedMemoryRowsQuietly(touched);
 
   return { added, updated, archived, skipped };
 }
@@ -1569,11 +1717,17 @@ async function enforceMemoryCap(tenantId: string, userId: string): Promise<void>
  *  2. 租户级 `memory_enabled`
  *  3. 用户级 `users.preferences.memory_enabled`
  *
+ * 相关性排序另有两层开关（都开才生效）：
+ *  4. 平台级 `MEMORY_RELEVANCE_ENABLED`
+ *  5. 租户级 `memory_relevance_enabled`
+ *
  * **永不抛异常**：记忆是锦上添花，查不到不该让整轮对话 500。
  */
 export async function buildMemoryTextForChat(
   tenantId: string,
   userId: string,
+  /** 当前这一轮用户问的是什么 —— 传了才能按相关性排 */
+  query?: string | undefined,
 ): Promise<string> {
   try {
     if (!config.MEMORY.ENABLED) {
@@ -1584,6 +1738,7 @@ export async function buildMemoryTextForChat(
       'memory_enabled',
       'memory_top_k',
       'memory_token_budget',
+      'memory_relevance_enabled',
     ]);
 
     if (settings['memory_enabled'] === false) {
@@ -1600,12 +1755,33 @@ export async function buildMemoryTextForChat(
     const tokenBudget =
       typeof settings['memory_token_budget'] === 'number' ? settings['memory_token_budget'] : 600;
 
-    const ctx = await buildMemoryContext(tenantId, userId, { topK, tokenBudget });
+    // 相关性排序：平台总开关 ∧ 租户开关（跟重排「平台 ∧ 租户」一个路子）
+    const relevanceEnabled =
+      config.MEMORY.RELEVANCE_ENABLED && settings['memory_relevance_enabled'] !== false;
+
+    const ctx = await buildMemoryContext(tenantId, userId, {
+      topK,
+      tokenBudget,
+      query: relevanceEnabled ? query : undefined,
+    });
     if (ctx.dropped > 0) {
       // 记忆没用上是有价值的信息：条数上限 / token 预算 / 内容被安全规则拦下，都算 dropped
       logger.info(
         { tenantId, userId, injected: ctx.injected.length, dropped: ctx.dropped },
         '部分记忆这一轮没有注入（超出条数上限或 token 预算）',
+      );
+    }
+    if (ctx.ranked) {
+      logger.debug(
+        {
+          tenantId,
+          userId,
+          injected: ctx.injected.map((m) => ({
+            id: m.id,
+            score: Number((ctx.relevance.get(m.id) ?? 0).toFixed(4)),
+          })),
+        },
+        '本轮记忆按相关性排序注入',
       );
     }
     return ctx.text;

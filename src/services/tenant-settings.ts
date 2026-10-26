@@ -201,6 +201,18 @@ export const SETTINGS_REGISTRY: SettingSpec[] = [
     fallback: 600,
   },
   {
+    key: 'memory_relevance_enabled',
+    label: '记忆按相关性排序',
+    category: '记忆',
+    description:
+      '每轮对话用当前问题给记忆做一次向量匹配，**只把最相关的几条**拼进提示词' +
+      '（而不是按「用户写的优先」固定顺序 —— 攒多了以后真正相关的那条会被挤掉）。' +
+      '代价是每轮多一次 embedding 调用（几十到几百毫秒，很便宜）。' +
+      '关掉就退回固定顺序排序，记忆照样注入',
+    type: 'boolean',
+    fallback: true,
+  },
+  {
     key: 'summary_enabled',
     label: '开启会话摘要',
     category: '记忆',

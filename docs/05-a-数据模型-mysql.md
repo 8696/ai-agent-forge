@@ -774,6 +774,8 @@ CREATE TABLE user_memories (
   last_hit_at DATETIME(6) NULL COMMENT '最后一次被注入的时间',
   source_session_id VARCHAR(36) NULL COMMENT '抽取来源会话 id（回溯当时的原话用）',
   source_message_id VARCHAR(36) NULL COMMENT '抽取来源消息 id',
+  embedding JSON NULL COMMENT '记忆正文的向量（归一化后的 float 数组）—— 用于按当前问题做相关性排序；NULL = 还没算',
+  embedding_model VARCHAR(64) NULL COMMENT '生成 embedding 的模型名 —— 换 embedding 模型后据此判定旧向量作废',
   created_at DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6) COMMENT '创建时间',
   updated_at DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6) COMMENT '更新时间',
   INDEX idx_user_memories_tenant_user (tenant_id, user_id),
@@ -782,6 +784,18 @@ CREATE TABLE user_memories (
 ```
 
 > **建表迁移**：`src/migrations/017-create-user-memories.ts`。
+> **加 `embedding` / `embedding_model` 两列**：`src/migrations/035-user-memory-embedding.ts`
+> （2026-10-26 · B4 的「记忆检索」那一项 —— 注入哪几条记忆按「跟当前问题相不相关」排）。
+>
+> ⚠️ **为什么向量存在这张表上，而不是另起一张表 / 放 Qdrant**：
+> `user_memories` 有 `tenant_id` 列 → Sequelize 的租户作用域钩子自动补过滤，
+> **向量存在这一行里就自动继承了租户隔离**（A1 的运行时强制）；
+> 放向量库得重新手写一遍租户过滤 —— 那等于给自己开一个跨租户的口子。
+> 量级也小（单用户最多 50 条自动记忆 + 手写的那几条），几百条向量在 DB 里算余弦是毫秒级。
+>
+> ⚠️ **代码先上线的降级**：迁移没跑时，启动会探一次这两列在不在，
+> 不在就把它们**从模型里摘掉**（`Model.removeAttribute`），
+> 之后所有对 `user_memories` 的查询退回老行为（记忆按固定顺序注入），不会挂。
 >
 > **为什么不用 `users.preferences` JSON 存**：那列能存零散偏好，但撑不住本功能要的
 > 逐条列出 / 逐条改 / 逐条删 / 归档 / 记来源和置信度 / 注入时只取 top N。

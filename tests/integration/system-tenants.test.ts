@@ -6,7 +6,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import axios from 'axios';
 import { apiBase, allHttpFromTokensFile, readTokensFile, type AllHttp } from '../helpers';
-import { AuditLog, Tenant } from '../../src/models';
+import { AuditLog, Tenant, User } from '../../src/models';
 
 const BASE = apiBase();
 
@@ -192,6 +192,27 @@ describe('system-tenants-routes', () => {
       await http.system.post(`/tenants/${acmeId}/admin/reset-password`, {
         new_password: 'AcmeAdmin-123!',
       });
+    });
+
+    /**
+     * ⚠️ **必须把 `must_change_password` 也复位**（2026-10-26 修）。
+     *
+     * 「重置密码」这个动作**本身**就会给该 admin 打上 `must_change_password=true` ——
+     * 上面那次「还原密码」用的还是同一个端点，所以标记仍然是 true。
+     *
+     * 后果（很难查）：**后面所有测试文件都成片挂**。
+     *  - 闸门 `assertPasswordChanged` 只放行 `/me` 和 `/change-password`，其余一律 **403**
+     *  - 已经签好的 token 里 claim 是 undefined（登录时标记还是 false）→ **不受影响**
+     *  - 但**任何在污染之后重新登录一次**的测试，拿到的 token 就带着 claim=true → 403
+     *
+     * 之所以「时好时坏」：**vitest 的测试文件顺序不稳定**（按耗时排），
+     * 污染文件排在后面就没事，排在中间就雪崩。
+     */
+    afterAll(async () => {
+      await User.update(
+        { must_change_password: false },
+        { where: { tenant_id: acmeId, role: 'admin' } },
+      );
     });
 
     it('400 new_password < 8 字符', async () => {

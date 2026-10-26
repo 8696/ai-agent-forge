@@ -156,6 +156,16 @@ const ALLOWED_NO_TENANT_FILTER: Array<{
     snippet: 'UserMemory.count({ where })',
     reason: '同上（记忆计数跟列表共用同一个 where）',
   },
+  {
+    file: 'src/services/memory-relevance.ts',
+    snippet: "UserMemory.findOne({ where: { embedding_model: '__probe__' }",
+    reason:
+      '启动时的**列存在性探针**（迁移 035 没跑时的降级判定）。' +
+      '① 用的是永不命中的哨兵值 `__probe__`，取不到任何真实行；' +
+      '② 只 select `id` 当布尔用（判断「查询有没有因缺列而报错」），**不返回任何租户数据**；' +
+      '③ 它跑在**任何请求上下文之外**（进程启动时），租户作用域钩子此时没有租户可补。' +
+      '⚠️ 缺列时 `embedding_model` 本身也在 WHERE 里 → 查询会报 Unknown column → 探针才检测得到',
+  },
   // ---- 平台方视角的跨租户查询（docs/04-d §6.1「/system/audit 也能查」）----
   {
     file: 'src/lib/audit-log.ts',

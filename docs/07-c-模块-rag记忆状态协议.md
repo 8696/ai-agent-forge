@@ -112,7 +112,7 @@
 | **长期记忆：注入提示词** | ✅ | `buildMemoryContext` + `renderMemoryBlock`；拼在 `buildPrompt` 的资料段**前面** |
 | **长期记忆：用户自助（看 / 改 / 删 / 开关）** | ✅ | `src/gateway/customer/memory-routes.ts` + 前台 `/customer/memories`（含**物理删除**端点：合规场景要的是真删不是软删） |
 | **长期记忆：租户后台（看每个用户的）** | ✅ | `src/gateway/admin/memory-routes.ts` + 后台 `/admin/memories` |
-| 记忆检索（embedding 召回相关历史片段） | ⏳ | 未做 —— 现在是「按优先级取 top N」，没有按当前问题做相关性排序 |
+| 记忆检索（embedding 召回相关历史片段） | ✅ 2026-10-26 | `src/services/memory-relevance.ts`：向量存 `user_memories.embedding`（迁移 `035`）+ 余弦相似度排序 + 相关性是主序 / 优先级兜底；没有向量的按 0 分算（不饿死）；embedding 挂了 / 没配 / 迁移没跑 → 退回固定顺序。详见 12-b §B4 |
 
 > **为什么截断和摘要是两回事**：截断是「丢掉更早的对话」，用户会感知到 AI 忘事
 > （所以必须用 `data-truncated` 明说「已省略更早的 N 轮」，不能悄悄丢）；
