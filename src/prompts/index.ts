@@ -89,6 +89,15 @@ export interface BuildPromptInput {
    * 「位置越靠后模型越容易当成当下的依据」，摘要 / 记忆不能让它们跟资料段脱节。
    */
   toolsText?: string | null;
+  /**
+   * 进行中的工作流进度段（B5 工作流，见 src/workflows/engine.ts 的 buildWorkflowHint）。
+   * 空串 / null = 当前没有进行中的任务。
+   *
+   * ⚠️ **位置紧跟工具段** —— 它是「刚才那件事走到哪了，接着做」的指令，
+   *    跟工具段是一组的（都跟「模型下一步该干什么」有关）。
+   *    它**不是证据**，不能排在资料段后面（那会让模型把它当成知识库原文的结论）。
+   */
+  workflowText?: string | null;
   /** 检索为空时的降级文案（区分「库是空的」和「没命中」） */
   emptyNotice?: string;
   /** 系统提示词的 token 上限；超了硬截断并 warn */
@@ -136,7 +145,7 @@ export function buildPrompt(input: BuildPromptInput): BuiltPrompt {
 
   return {
     ...base,
-    systemText: `${baseText}${input.toolsText ?? ''}${input.summaryText ?? ''}${input.memoryText ?? ''}${rag.text}`,
+    systemText: `${baseText}${input.toolsText ?? ''}${input.workflowText ?? ''}${input.summaryText ?? ''}${input.memoryText ?? ''}${rag.text}`,
     rag,
     truncatedSystem,
   };

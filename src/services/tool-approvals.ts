@@ -1,6 +1,7 @@
 import { Session, type SessionMetadata, type SessionToolApproval } from '../models';
 import { NotFoundError } from '../lib/errors';
-import { approvalKey } from '../tools/execute';
+import { approvalKey } from '../tools/approval-key';
+import { onUserApproved, onUserRejected } from '../workflows/engine';
 
 /**
  * 敏感工具的人工确认（B3 HITL）
@@ -113,7 +114,11 @@ export async function grantToolApproval(
   toolName: string,
   args: unknown,
 ): Promise<{ key: string }> {
-  return upsertApproval(sessionId, tenantId, toolName, args, 'approved');
+  const { key } = await upsertApproval(sessionId, tenantId, toolName, args, 'approved');
+  // B5 工作流：任务从 awaiting_confirmation 转 running
+  //（不属于任何流程的工具没有对应任务，这一步是空操作）
+  await onUserApproved(tenantId, sessionId, key);
+  return { key };
 }
 
 /** 记录一次拒绝（用户点了「取消」） */
@@ -123,7 +128,10 @@ export async function rejectToolApproval(
   toolName: string,
   args: unknown,
 ): Promise<{ key: string }> {
-  return upsertApproval(sessionId, tenantId, toolName, args, 'rejected');
+  const { key } = await upsertApproval(sessionId, tenantId, toolName, args, 'rejected');
+  // B5 工作流：任务转 cancelled（**不执行副作用**）
+  await onUserRejected(tenantId, sessionId, key);
+  return { key };
 }
 
 async function upsertApproval(

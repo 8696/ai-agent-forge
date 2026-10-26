@@ -11,6 +11,20 @@ import {
 import { nanoid } from 'nanoid';
 
 /**
+ * 跑批的触发方式
+ *
+ * - `manual` —— 用户在「评测跑批」页手动点的
+ * - `prompt_regression` —— **提示词发布自动触发的小规模回归**
+ *   （2026-10-26 补上，见 docs/12-d §D1「已知边界」）
+ */
+export type EvaluationRunTrigger = 'manual' | 'prompt_regression';
+
+export const EVALUATION_RUN_TRIGGERS: readonly EvaluationRunTrigger[] = [
+  'manual',
+  'prompt_regression',
+];
+
+/**
  * 评测跑批 —— D1 评测
  *
  * 一行 = 「用某个提示词版本 + 某个模型，把某个评测集跑一遍」的结果。
@@ -53,6 +67,26 @@ export class EvaluationRun extends Model {
   /** running / completed / failed */
   @Column({ type: DataType.STRING(16), allowNull: false, defaultValue: 'running' })
   declare status: string;
+
+  /**
+   * 这次跑批**是怎么来的** —— `manual`（手动点）/ `prompt_regression`（提示词发布自动回归）。
+   *
+   * ⚠️ **必须有**：否则用户在「评测跑批」列表里看到一条莫名出现的 run，
+   * 不知道是谁触发的、为什么跑。迁移 `033` 加的列。
+   */
+  // ⚠️ 列名是 `run_trigger` 不是 `trigger` —— **`trigger` 是 MySQL 的保留字**
+  @Default('manual')
+  @Column({ type: DataType.STRING(32), allowNull: false, defaultValue: 'manual' })
+  declare run_trigger: EvaluationRunTrigger;
+
+  /**
+   * 这次只跑前 N 题（`null` = 跑全集）。
+   *
+   * 「小规模回归」的关键就是**少跑几题** —— 一次题 = 2 次 LLM 调用，
+   * 50 题就是 100 次调用，不适合挂在提示词发布流程上。迁移 `033` 加的列。
+   */
+  @Column({ type: DataType.INTEGER, allowNull: true })
+  declare item_limit: number | null;
 
   @Column({ type: DataType.INTEGER, allowNull: false, defaultValue: 0 })
   declare total_items: number;

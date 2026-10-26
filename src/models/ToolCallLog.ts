@@ -22,10 +22,18 @@ import { nanoid } from 'nanoid';
  *  - `timeout` —— 超过 5 秒被放弃
  *  - `awaiting_confirmation` —— 敏感工具被 HITL 闸门拦下，**没有真正执行**
  *  - `rejected` —— 用户点了「取消」，模型没再调（闸门直接回「用户拒绝」）
+ *  - `blocked` —— **前置步骤没满足**（B5 工作流闸门）：模型想直接提交退款，
+ *    但还没查过订单 → 闸门拦住并告诉模型「先查订单」。不是错误，是流程约束
  *
  * @Table timestamps: false —— DDL 只有 created_at
  */
-export type ToolCallStatus = 'ok' | 'error' | 'timeout' | 'awaiting_confirmation' | 'rejected';
+export type ToolCallStatus =
+  | 'ok'
+  | 'error'
+  | 'timeout'
+  | 'awaiting_confirmation'
+  | 'rejected'
+  | 'blocked';
 
 @Table({ tableName: 'tool_call_logs', timestamps: false })
 export class ToolCallLog extends Model {
@@ -65,7 +73,7 @@ export class ToolCallLog extends Model {
   declare builtin: string | null;
 
   @Column({
-    type: DataType.ENUM('ok', 'error', 'timeout', 'awaiting_confirmation', 'rejected'),
+    type: DataType.ENUM('ok', 'error', 'timeout', 'awaiting_confirmation', 'rejected', 'blocked'),
     allowNull: false,
     defaultValue: 'ok',
   })

@@ -94,6 +94,16 @@ export class Session extends Model {
   })
   declare status: SessionStatus;
 
+  /**
+   * 是否收藏（用户标记的重要会话）。
+   *
+   * 迁移 `031` 加的列。配合「只看收藏」筛选 ——
+   * 见 12-e 需求裁定表 #7。
+   */
+  @Default(false)
+  @Column({ type: DataType.BOOLEAN, allowNull: false })
+  declare favorite: boolean;
+
   /** 首条用户消息的前 20 字（自动生成，用户可重命名） */
   @Column({ type: DataType.STRING(200), allowNull: true })
   declare title: string | null;

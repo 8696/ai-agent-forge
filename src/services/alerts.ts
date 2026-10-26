@@ -48,7 +48,16 @@ const P95_LATENCY_ALERT_MS = 5000;
 const ERROR_RATE_ALERT = 0.05;
 const SINGLE_COST_ALERT_USD = 0.5;
 
-/** 读租户的告警阈值（没配就用平台默认） */
+/**
+ * 读租户的告警阈值（没配就用平台默认）。
+ *
+ * ⚠️ **「没配」和「配成 0」是两件事**（2026-10-26 修）：
+ *    以前写的是 `typeof v === 'number' && v > 0 ? v : 默认值` ——
+ *    那意味着**配成 0 反而会用回默认值**，而配置项的说明写着「设 0 = 不看这一项」。
+ *    文档和代码对不上，用户按说明设 0 发现没生效。
+ *
+ *    现在：没配（null / undefined / 非数字）→ 用默认值；**配成 0 → 真的不看了**。
+ */
 async function alertThresholds(tenantId: string): Promise<{
   p95LatencyMs: number;
   errorRate: number;
@@ -59,11 +68,109 @@ async function alertThresholds(tenantId: string): Promise<{
     getSettingValue(tenantId, 'alert_error_rate'),
     getSettingValue(tenantId, 'alert_single_cost_usd'),
   ]);
+  const numOr = (v: unknown, dflt: number): number =>
+    typeof v === 'number' && Number.isFinite(v) ? v : dflt;
   return {
-    p95LatencyMs: typeof p95 === 'number' && p95 > 0 ? p95 : P95_LATENCY_ALERT_MS,
-    errorRate: typeof errRate === 'number' && errRate > 0 ? errRate : ERROR_RATE_ALERT,
-    singleCostUsd: typeof cost === 'number' && cost > 0 ? cost : SINGLE_COST_ALERT_USD,
+    p95LatencyMs: numOr(p95, P95_LATENCY_ALERT_MS),
+    errorRate: numOr(errRate, ERROR_RATE_ALERT),
+    singleCostUsd: numOr(cost, SINGLE_COST_ALERT_USD),
   };
+}
+
+/**
+ * 告警**规则**视图 —— 后台「告警规则」页用（04-c §5.7.4）
+ *
+ * 规则是**固定的三条**（不是让租户自己写条件表达式 ——
+ * 那是另一个量级的需求，见 04-c §5.7.4 的「与原规格的差异」）。
+ * 租户能改的是**阈值**和**启停**（阈值设 0 = 关掉这一条）。
+ */
+export interface AlertRuleView {
+  key: 'p95_latency' | 'error_rate' | 'single_cost';
+  /** 规则名（页面上显示） */
+  name: string;
+  /** 条件的文字描述（「今天的 p95 延迟 > 5000 ms」） */
+  condition: string;
+  /** 阈值单位 */
+  unit: 'ms' | 'percent' | 'usd';
+  /** 当前阈值（0 = 已关掉这一条） */
+  threshold: number;
+  /** 平台默认值（关掉之后想恢复就填它） */
+  default_threshold: number;
+  /** 今天这一条的实际值（null = 今天没数据） */
+  current_value: number | null;
+  /** 现在是不是触发中 */
+  firing: boolean;
+}
+
+/**
+ * 列出三条告警规则 + 它们当前的状态。
+ *
+ * 跟 `listAdminAlerts` 的区别：那个回答「现在有哪些告警」，
+ * 这个回答「规则长什么样、阈值配的多少、现在到没到」。
+ */
+export async function listAlertRules(tenantId: string): Promise<AlertRuleView[]> {
+  const thresholds = await alertThresholds(tenantId);
+  let today: {
+    conversations: number;
+    p95_latency_ms: number;
+    error_rate: number;
+    max_conversation_cost: number;
+  } | null = null;
+  try {
+    const summary = await getObservabilitySummary(tenantId);
+    today = summary.today;
+  } catch {
+    // traces / cost_logs 还没建 —— 规则照样列，值给 null
+  }
+
+  const pct = (v: number): string => `${(v * 100).toFixed(0)}%`;
+  const ms = (v: number): string => `${v} ms`;
+  const usd = (v: number): string => `$${v.toFixed(4)}`;
+
+  const hasTraffic = today !== null && today.conversations > 0;
+
+  return [
+    {
+      key: 'p95_latency',
+      name: 'p95 响应延迟',
+      condition: `今天的 p95 延迟 > ${ms(thresholds.p95LatencyMs)}`,
+      unit: 'ms',
+      threshold: thresholds.p95LatencyMs,
+      default_threshold: P95_LATENCY_ALERT_MS,
+      current_value: today === null ? null : today.p95_latency_ms,
+      // ⚠️ 阈值 = 0 = 这一条被关掉了（见 alertThresholds 的注释）
+      firing:
+        thresholds.p95LatencyMs > 0 &&
+        hasTraffic &&
+        today!.p95_latency_ms > thresholds.p95LatencyMs,
+    },
+    {
+      key: 'error_rate',
+      name: '错误率',
+      condition: `今天的错误率 > ${pct(thresholds.errorRate)}`,
+      unit: 'percent',
+      threshold: thresholds.errorRate,
+      default_threshold: ERROR_RATE_ALERT,
+      current_value: today === null ? null : today.error_rate,
+      firing:
+        thresholds.errorRate > 0 &&
+        hasTraffic &&
+        today!.error_rate > thresholds.errorRate,
+    },
+    {
+      key: 'single_cost',
+      name: '单条对话成本',
+      condition: `今天最贵的一条对话 > ${usd(thresholds.singleCostUsd)}`,
+      unit: 'usd',
+      threshold: thresholds.singleCostUsd,
+      default_threshold: SINGLE_COST_ALERT_USD,
+      current_value: today === null ? null : today.max_conversation_cost,
+      firing:
+        today !== null &&
+        thresholds.singleCostUsd > 0 &&
+        today.max_conversation_cost > thresholds.singleCostUsd,
+    },
+  ];
 }
 
 export async function listAdminAlerts(tenantId: string): Promise<AdminAlert[]> {
@@ -190,7 +297,12 @@ export async function listAdminAlerts(tenantId: string): Promise<AdminAlert[]> {
     const summary = await getObservabilitySummary(tenantId);
     const today = summary.today;
 
-    if (today.conversations > 0 && today.p95_latency_ms > thresholds.p95LatencyMs) {
+    // ⚠️ 阈值 = 0 = 这一条被关掉了（2026-10-26 修，见 alertThresholds 的注释）
+    if (
+      thresholds.p95LatencyMs > 0 &&
+      today.conversations > 0 &&
+      today.p95_latency_ms > thresholds.p95LatencyMs
+    ) {
       alerts.push({
         id: 'p95_latency_high',
         level: 'warning',
@@ -202,7 +314,11 @@ export async function listAdminAlerts(tenantId: string): Promise<AdminAlert[]> {
       });
     }
 
-    if (today.conversations > 0 && today.error_rate > thresholds.errorRate) {
+    if (
+      thresholds.errorRate > 0 &&
+      today.conversations > 0 &&
+      today.error_rate > thresholds.errorRate
+    ) {
       alerts.push({
         id: 'error_rate_high',
         level: 'error',

@@ -29,6 +29,12 @@ import * as m024 from './024-create-tool-call-logs';
 import * as m025 from './025-add-tool-call-rejected';
 import * as m026 from './026-add-tool-updated-by';
 import * as m027 from './027-normalize-charset';
+import * as m028 from './028-create-missions';
+import * as m029 from './029-tool-call-logs-blocked-status';
+import * as m030 from './030-add-tenant-model-fallback';
+import * as m031 from './031-add-session-favorite';
+import * as m032 from './032-create-agent-runs';
+import * as m033 from './033-evaluation-run-trigger';
 
 /**
  * umzug 迁移 runner（详见 docs/03-b-技术栈-后端栈.md §B.2）
@@ -183,6 +189,36 @@ export function buildMigrator(): Umzug<QueryInterface> {
         name: '027-normalize-charset',
         up: (params) => m027.up(params),
         down: (params) => m027.down(params),
+      },
+      {
+        name: '028-create-missions',
+        up: (params) => m028.up(params),
+        down: (params) => m028.down(params),
+      },
+      {
+        name: '029-tool-call-logs-blocked-status',
+        up: (params) => m029.up(params),
+        down: (params) => m029.down(params),
+      },
+      {
+        name: '030-add-tenant-model-fallback',
+        up: (params) => m030.up(params),
+        down: (params) => m030.down(params),
+      },
+      {
+        name: '031-add-session-favorite',
+        up: (params) => m031.up(params),
+        down: (params) => m031.down(params),
+      },
+      {
+        name: '032-create-agent-runs',
+        up: (params) => m032.up(params),
+        down: (params) => m032.down(params),
+      },
+      {
+        name: '033-evaluation-run-trigger',
+        up: (params) => m033.up(params),
+        down: (params) => m033.down(params),
       },
     ],
   });

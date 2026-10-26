@@ -17,6 +17,7 @@ import { DashboardOutlined, FileSearchOutlined, TeamOutlined, UploadOutlined, Sl
   AuditOutlined,
   KeyOutlined,
   ToolOutlined,
+  AlertOutlined,
 } from '@ant-design/icons';
 
 /**
@@ -124,6 +125,12 @@ const SIDEBAR: SidebarItem[] = [
         icon: <FundOutlined />,
         label: '成本分析',
         to: '/admin/observability/cost',
+      },
+      {
+        key: '/admin/observability/alerts',
+        icon: <AlertOutlined />,
+        label: '告警规则',
+        to: '/admin/observability/alerts',
       },
     ],
   },

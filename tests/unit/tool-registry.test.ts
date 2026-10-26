@@ -19,14 +19,19 @@ const ctx = (tenantId: string): BuiltinToolContext => ({
 });
 
 describe('内置工具注册表（电商客服场景）', () => {
-  it('6 个内置工具都能按 key 取到', () => {
+  it('8 个内置工具都能按 key 取到', () => {
+    // ⚠️ 2026-10-26 从 6 个变成 8 个：为了 B5 工作流补了两个「会动数据」的敏感工具
+    // （update_shipping_address / create_after_sale_ticket）——
+    // 它们是流程 modify_address / after_sale_ticket 的触发节点。
     expect(Object.keys(BUILTIN_TOOLS).sort()).toEqual([
+      'create_after_sale_ticket',
       'list_knowledge_documents',
       'query_coupon_info',
       'query_order_status',
       'query_product_info',
       'query_shipping_track',
       'submit_refund_request',
+      'update_shipping_address',
     ]);
     for (const key of Object.keys(BUILTIN_TOOLS)) {
       expect(getBuiltinTool(key)).toBeDefined();
@@ -45,8 +50,10 @@ describe('内置工具注册表（电商客服场景）', () => {
     }
   });
 
-  it('提交退款申请是敏感工具，其余不是', () => {
+  it('提交退款申请 / 改地址 / 建工单是敏感工具，其余不是', () => {
     expect(getBuiltinTool('submit_refund_request')?.sensitive).toBe(true);
+    expect(getBuiltinTool('update_shipping_address')?.sensitive).toBe(true);
+    expect(getBuiltinTool('create_after_sale_ticket')?.sensitive).toBe(true);
     expect(getBuiltinTool('query_order_status')?.sensitive).toBe(false);
   });
 

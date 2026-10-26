@@ -3,6 +3,7 @@ import { z } from 'zod';
 import type { Transaction } from 'sequelize';
 import { Tenant, PromptVersion, MODEL_USAGE_SCOPES } from '../../models';
 import { getSequelize } from '../../db';
+import { triggerPromptRegressionSafe } from '../../services/prompt-regression';
 import { jwtAuth } from '../jwt-base';
 import { requireAdmin } from './middleware';
 import { ValidationError, NotFoundError } from '../../lib/errors';
@@ -100,6 +101,11 @@ const modelBodySchema = z.object({
   prompt_cache_enabled: z.boolean().nullish(),
   /** 用途：chat=对话模型 / memory=记忆抽取模型 / summary=会话摘要模型。不带 = chat */
   usage_scope: z.enum(MODEL_USAGE_SCOPES).optional(),
+  /**
+   * 备用模型 id（C4）—— 指向同租户**同用途**的另一条模型条目。
+   * 不带 = 不改（编辑时）；null = 取消备用。
+   */
+  fallback_model_id: z.string().trim().max(36).nullish(),
 });
 
 adminConfigRouter.post('/config/models', async (ctx) => {
@@ -115,6 +121,7 @@ adminConfigRouter.post('/config/models', async (ctx) => {
     max_output_tokens: input.max_output_tokens ?? null,
     prompt_cache_enabled: input.prompt_cache_enabled ?? true,
     usage_scope: input.usage_scope ?? 'chat',
+    fallback_model_id: input.fallback_model_id ?? null,
   });
   await writeAuditLog({
     tenant_id: u.tenant_id,
@@ -147,6 +154,7 @@ adminConfigRouter.put('/config/models/:id', async (ctx) => {
     max_output_tokens: input.max_output_tokens ?? null,
     prompt_cache_enabled: input.prompt_cache_enabled ?? true,
     usage_scope: input.usage_scope,
+    fallback_model_id: input.fallback_model_id,
   });
   await writeAuditLog({
     tenant_id: u.tenant_id,
@@ -426,6 +434,15 @@ adminConfigRouter.post('/config/prompts/:version/publish', async (ctx) => {
     details: { from: previous, to: row.version },
     ip: ctx.ip,
   });
+
+  // 提示词改了 → 自动跑一次小规模回归（D1「已知边界」那条，2026-10-26 补上）
+  // ⚠️ **不 await** —— 跑批是异步的（一次题 = 2 次 LLM 调用），
+  //    发布接口不能等它跑完。失败也不影响发布（内部全兜住了）。
+  void triggerPromptRegressionSafe({
+    tenantId: u.tenant_id,
+    userId: u.sub,
+    promptVersion: row.version,
+  });
   ctx.body = {
     version: row.version,
     status: row.status,
@@ -477,6 +494,13 @@ adminConfigRouter.post('/config/prompts/:version/rollback', async (ctx) => {
     resource_id: row.id,
     details: { from: previous, to: row.version },
     ip: ctx.ip,
+  });
+
+  // 回滚也是提示词变了 → 同样自动跑一次小规模回归
+  void triggerPromptRegressionSafe({
+    tenantId: u.tenant_id,
+    userId: u.sub,
+    promptVersion: row.version,
   });
   ctx.body = { version: row.version, status: row.status };
 });

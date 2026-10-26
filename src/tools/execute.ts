@@ -1,12 +1,13 @@
-import { createHash } from 'node:crypto';
 import { tool, type ToolSet } from 'ai';
 import { logger } from '../logger';
 import type { SpanHandle } from '../services/trace';
 import type { BuiltinToolContext } from './builtin/registry';
 import type { ResolvedTool } from './resolve';
+import { approvalKey } from './approval-key';
+import type { GateDecision } from '../workflows/types';
 
 /**
- * 工具执行包装层 —— docs/12-b-需求-ai对话能力.md §B3
+ * 工具执行包装层 —— docs/12-b-需求-ai对话能力.md §B3 / §B5
  *
  * 每一层要做的事（12-b §B3 的验收口径全在这儿）：
  *
@@ -21,10 +22,36 @@ import type { ResolvedTool } from './resolve';
  *    和用户拒绝（rejected）这两条路径原先没有 span，与「每次工具调用写一条 span」
  *    的验收口径对不上。现在这五条路径都有：
  *    正常执行 / 超时 / 抛错 / 被闸门拦下 / 用户拒绝。
+ *
+ * ## 闸门是谁在做决定
+ *
+ * - 注入了 `runtime.gate`（B5 工作流闸门）→ **它完全接管**判断。
+ *   引擎内部已经覆盖了 B3 的敏感工具规则，还多了「前置步骤没做完 → 拦住并告诉模型先做什么」。
+ * - 没注入（单测直接构造 runtime）→ 走这里的内联老逻辑。
+ *
+ * 两者对同一批情况的判断是一致的，所以切换不会改变既有行为。
  */
+
+// 审批键在独立模块（跟工作流引擎共用）—— 这里转出去一份，兼容既有 import
+export { approvalKey, hashArgs, stableStringify } from './approval-key';
 
 /** 单次工具调用的超时（毫秒）。跟重排一样：超时降级，不重试 */
 export const TOOL_TIMEOUT_MS = 5_000;
+
+/**
+ * 闸门回调 —— 问引擎「这一步能不能走」。
+ *
+ * ⚠️ 类型放在这里而不是引擎文件里：`execute.ts` 是工具层，不该依赖工作流实现。
+ */
+export type ToolGate = (input: {
+  /** 模型调用的注册名 */
+  toolName: string;
+  /** 内置实现 key */
+  builtin: string;
+  args: unknown;
+  /** 该工具是否敏感 */
+  sensitive: boolean;
+}) => Promise<GateDecision>;
 
 /** 一次工具调用的记录 —— 会写进 `data-tool-call` part 落库 */
 export interface ToolCallRecord {
@@ -35,8 +62,11 @@ export interface ToolCallRecord {
   builtin: string;
   /** 模型给的入参 */
   args: unknown;
-  /** ok=成功 / error=抛错 / timeout=超时 / awaiting_confirmation=待确认 */
-  status: 'ok' | 'error' | 'timeout' | 'awaiting_confirmation' | 'rejected';
+  /**
+   * ok=成功 / error=抛错 / timeout=超时 / awaiting_confirmation=待确认 /
+   * rejected=用户拒绝 / **blocked=前置步骤没满足**（B5 工作流闸门）
+   */
+  status: 'ok' | 'error' | 'timeout' | 'awaiting_confirmation' | 'rejected' | 'blocked';
   /** 工具的返回值（失败时是降级文案） */
   output: unknown;
   /** 失败原因 */
@@ -76,6 +106,8 @@ export interface ToolRuntime {
     name: string,
     kind: 'step',
     input: Record<string, unknown>,
+    /** 父 span 的 id（不给 = 顶层 span） */
+    parentSpanId?: string | null,
   ) => SpanHandle | undefined;
   /**
    * 工具调用结束 —— 对话链路在这里写 `data-tool-call` part + 工具调用流水。
@@ -89,35 +121,37 @@ export interface ToolRuntime {
    * 「请用同样的参数再调一次」。
    */
   onExecuted?: ((toolName: string, args: unknown) => void) | undefined;
+  /**
+   * **工作流闸门**（B5）—— 问引擎「这一步能不能走」。
+   *
+   * ⚠️ **注入了它就完全接管闸门判断**（引擎内部已覆盖 B3 的敏感工具规则）。
+   *    没注入时走这里 `approvals` / `rejections` 的内联老逻辑。
+   */
+  gate?: ToolGate | undefined;
+  /**
+   * 工具**执行成功**之后的回调 —— 记流程进度（B5）。
+   *
+   * 只有属于某个流程的节点才会带上 `missionId` / `nodeId`；
+   * 普通工具这两个是 null，引擎那边会直接跳过。
+   */
+  onToolSucceeded?: ((info: {
+    toolName: string;
+    builtin: string;
+    args: unknown;
+    output: unknown;
+    missionId: string | null;
+    nodeId: string | null;
+  }) => void | Promise<void>) | undefined;
   /** 单次工具调用的超时（毫秒）；不传 = 用 TOOL_TIMEOUT_MS */
   timeoutMs?: number;
-}
-
-/**
- * 稳定的 JSON 序列化 —— 键排序，保证同样的入参永远得到同样的指纹
- * （模型的入参键顺序不固定，直接 JSON.stringify 会让指纹飘）
- */
-export function stableStringify(value: unknown): string {
-  if (value === null || typeof value !== 'object') {
-    return JSON.stringify(value) ?? 'null';
-  }
-  if (Array.isArray(value)) {
-    return `[${value.map(stableStringify).join(',')}]`;
-  }
-  const entries = Object.entries(value as Record<string, unknown>)
-    .filter(([, v]) => v !== undefined)
-    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
-  return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${stableStringify(v)}`).join(',')}}`;
-}
-
-/** 入参指纹 —— 批准记录的键的一部分 */
-export function hashArgs(args: unknown): string {
-  return createHash('sha256').update(stableStringify(args)).digest('hex').slice(0, 16);
-}
-
-/** 敏感工具的批准键：`工具名:入参指纹` */
-export function approvalKey(toolName: string, args: unknown): string {
-  return `${toolName}:${hashArgs(args)}`;
+  /**
+   * 父 span 的 id —— 工具调用的 span 挂在它下面。
+   *
+   * ⚠️ **不给就是顶层 span** —— 调用树会断（`llm.generate` 和它的工具调用平级）。
+   *   B6 多代理的调用树要求「模型调用 → 子代理调用」能看出层级，
+   *   所以这里必须传主 agent 的 `llm.generate` span id。
+   */
+  parentSpanId?: (() => string | null) | undefined;
 }
 
 /**
@@ -165,16 +199,101 @@ export function buildToolSet(resolved: ResolvedTool[], runtime: ToolRuntime): To
         // return 了，导致它们只有 `data-tool-call` part、没有 `tool.invoke` span，
         // 与 12-b §B3 的验收口径「每次工具调用写一条 span」对不上。
         // 现在这条 span 覆盖**全部**路径：正常执行 / 超时 / 抛错 / 被闸门拦下 / 用户拒绝。
-        const span = runtime.span('tool.invoke', 'step', {
-          tool_name: name,
-          builtin: impl.key,
-          args,
-        });
-        // ---- HITL 闸门：敏感工具先要用户确认 ----
+        const span = runtime.span(
+          'tool.invoke',
+          'step',
+          {
+            tool_name: name,
+            builtin: impl.key,
+            args,
+          },
+          // 父 span（主 agent 的 llm.generate）—— 不给就是顶层，调用树会断
+          runtime.parentSpanId?.() ?? null,
+        );
+        // ---- 闸门：敏感工具先要用户确认 / 工作流前置步骤 ----
         //
         // 命中时不执行，把「需要确认」当成工具结果回灌 ——
         // 模型看到后会去问用户「确认吗」，用户点了之后再调一次就放行。
-        if (requiresConfirmation) {
+        //
+        // ⚠️ **注入了工作流闸门（B5）就由它完全接管** —— 它内部已经覆盖了
+        //    B3 的敏感工具规则，还多了「前置步骤没做完 → 拦住并告诉模型先做什么」。
+        //    没注入闸门（单测直接构造 runtime）时走下面 `approvals` / `rejections`
+        //    的内联老逻辑 —— 两边对同一批情况的判断一致。
+        const gateDecision: GateDecision | null =
+          runtime.gate === undefined
+            ? null
+            : await runtime.gate({
+                toolName: name,
+                builtin: impl.key,
+                args,
+                sensitive: requiresConfirmation,
+              });
+
+        if (gateDecision !== null && gateDecision.kind !== 'allow') {
+          if (gateDecision.kind === 'await') {
+            const record: ToolCallRecord = {
+              tool_call_id: options.toolCallId,
+              tool_name: name,
+              builtin: impl.key,
+              args,
+              status: 'awaiting_confirmation',
+              output: null,
+              error: null,
+              duration_ms: Date.now() - started,
+              confirm_hint: gateDecision.confirmHint,
+            };
+            span?.end({ status: 'awaiting_confirmation', duration_ms: record.duration_ms });
+            await reportCall(runtime, record);
+            return {
+              status: 'awaiting_confirmation',
+              message: gateDecision.message,
+              confirm_hint: gateDecision.confirmHint,
+              ...(gateDecision.approvedArgs !== undefined
+                ? { approved_args: gateDecision.approvedArgs }
+                : {}),
+            };
+          }
+
+          if (gateDecision.kind === 'reject') {
+            const record: ToolCallRecord = {
+              tool_call_id: options.toolCallId,
+              tool_name: name,
+              builtin: impl.key,
+              args,
+              status: 'rejected',
+              output: null,
+              error: null,
+              duration_ms: Date.now() - started,
+            };
+            span?.end({ status: 'rejected', duration_ms: record.duration_ms });
+            await reportCall(runtime, record);
+            return {
+              status: 'rejected',
+              message: gateDecision.message,
+            };
+          }
+
+          // blocked —— 前置步骤没满足。**不是错误**，是流程约束：
+          // 告诉模型「先查什么」，模型就会去查。
+          const blockedRecord: ToolCallRecord = {
+            tool_call_id: options.toolCallId,
+            tool_name: name,
+            builtin: impl.key,
+            args,
+            status: 'blocked',
+            output: gateDecision.message,
+            error: null,
+            duration_ms: Date.now() - started,
+          };
+          span?.end({ status: 'blocked', duration_ms: blockedRecord.duration_ms });
+          await reportCall(runtime, blockedRecord);
+          return {
+            status: 'blocked',
+            message: gateDecision.message,
+          };
+        }
+
+        if (gateDecision === null && requiresConfirmation) {
           const key = approvalKey(name, args);
 
           // 用户明确拒绝过 → 如实告诉模型「拒绝了」，别再问第三次
@@ -265,6 +384,22 @@ export function buildToolSet(resolved: ResolvedTool[], runtime: ToolRuntime): To
           // 下一轮不用再提醒模型「请再调一次」
           if (requiresConfirmation) {
             runtime.onExecuted?.(name, args);
+          }
+          // 流程进度（B5）：属于某个流程的节点执行成功 → 记进度、推状态
+          if (runtime.onToolSucceeded !== undefined) {
+            try {
+              await runtime.onToolSucceeded({
+                toolName: name,
+                builtin: impl.key,
+                args,
+                output,
+                missionId: gateDecision?.missionId ?? null,
+                nodeId: gateDecision?.nodeId ?? null,
+              });
+            } catch (err: unknown) {
+              // 记进度失败不该让工具结果作废 —— 跟 reportCall 一个道理
+              logger.warn({ err, tool: name }, '流程进度记录失败（不影响工具结果）');
+            }
           }
           const record: ToolCallRecord = {
             tool_call_id: options.toolCallId,

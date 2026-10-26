@@ -7,6 +7,7 @@ import {
   EvaluationResult,
   EvaluationRun,
   Tenant,
+  type EvaluationRunTrigger,
   type EvaluationScores,
 } from '../models';
 import { logger } from '../logger';
@@ -414,6 +415,10 @@ export interface RunListRow {
   dataset_id: string;
   dataset_name: string | null;
   prompt_version: string | null;
+  /** 触发方式：manual=手动 / prompt_regression=提示词发布自动回归 */
+  trigger: EvaluationRunTrigger;
+  /** 本次只跑了前 N 题（null = 跑全集） */
+  item_limit: number | null;
   model: string | null;
   provider: string | null;
   status: string;
@@ -437,6 +442,8 @@ function toRunRow(run: EvaluationRun): RunListRow {
     dataset_id: run.dataset_id,
     dataset_name: run.dataset_name,
     prompt_version: run.prompt_version,
+    trigger: run.run_trigger,
+    item_limit: run.item_limit,
     model: run.model,
     provider: run.provider,
     status: run.status,
@@ -576,11 +583,15 @@ function toFinite(v: unknown): number {
  * 接口立刻返回 run（status='running'），实际工作在后台跑。
  * 为什么不在请求里同步跑完：50 题 = 100 次 LLM 调用，几十秒到几分钟，
  * HTTP 请求撑不住（nginx 默认 60s 就断了），而且进度也没法看。
+ *
+ * @param options.limit 只跑前 N 题（小规模回归用；不传 = 跑全集）
+ * @param options.trigger 触发方式（`manual` / `prompt_regression`）
  */
 export async function startEvaluationRun(
   tenantId: string,
   userId: string | null,
   datasetId: string,
+  options?: { limit?: number | undefined; trigger?: EvaluationRunTrigger | undefined },
 ): Promise<EvaluationRun> {
   const dataset = await EvaluationDataset.findOne({
     where: { id: datasetId, tenant_id: tenantId },
@@ -592,24 +603,39 @@ export async function startEvaluationRun(
     throw new ValidationError('评测功能未开启');
   }
 
+  // 小规模回归：只跑前 N 题
+  const limit = options?.limit;
+  const totalItems = limit === undefined ? dataset.item_count : Math.min(limit, dataset.item_count);
+
   const run = await EvaluationRun.create({
     tenant_id: tenantId,
     dataset_id: datasetId,
     dataset_name: dataset.name,
     status: 'running',
-    total_items: dataset.item_count,
+    total_items: totalItems,
     completed_items: 0,
+    run_trigger: options?.trigger ?? 'manual',
+    item_limit: limit ?? null,
     started_at: new Date(),
   });
 
   // 后台跑，不 await —— 错误在 executeRun 内部兜住并写进 run 行
-  void executeRun(run.id, tenantId, datasetId);
+  void executeRun(run.id, tenantId, datasetId, limit);
 
   return run;
 }
 
-/** 跑批的主循环 —— 每条题：生成 → 裁判 → 落明细 */
-async function executeRun(runId: string, tenantId: string, datasetId: string): Promise<void> {
+/**
+ * 跑批的主循环 —— 每条题：生成 → 裁判 → 落明细
+ *
+ * @param itemLimit 只跑前 N 题（不传 = 跑全集）
+ */
+async function executeRun(
+  runId: string,
+  tenantId: string,
+  datasetId: string,
+  itemLimit?: number | undefined,
+): Promise<void> {
   let totalTokens = 0;
   let totalCost = 0;
 
@@ -636,10 +662,13 @@ async function executeRun(runId: string, tenantId: string, datasetId: string): P
       { where: { id: runId } },
     );
 
-    const items = await EvaluationItem.findAll({
+    const allItems = await EvaluationItem.findAll({
       where: { dataset_id: datasetId, tenant_id: tenantId },
       order: [['created_at', 'ASC']],
     });
+    // 小规模回归只跑前 N 题（一次题 = 2 次 LLM 调用，跑全集太贵）
+    const items =
+      itemLimit === undefined ? allItems : allItems.slice(0, itemLimit);
 
     const scored: EvaluationScores[] = [];
 

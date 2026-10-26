@@ -11,6 +11,7 @@ import {
   Popconfirm,
   Space,
   Spin,
+  Switch,
   Tag,
   Tooltip,
   Typography,
@@ -30,6 +31,7 @@ import {
   PlusOutlined,
   ReloadOutlined,
   SendOutlined,
+  StarOutlined,
 } from '@ant-design/icons';
 import { useChat } from '@ai-sdk/react';
 import { DefaultChatTransport } from 'ai';
@@ -44,6 +46,7 @@ import {
   errorMessage,
   fetchSessionMessages,
   fetchSessions,
+  setSessionFavorite,
   renameSession,
   sendFeedback,
   streamErrorMessage,
@@ -145,6 +148,8 @@ export function ChatPage(): ReactElement {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [renaming, setRenaming] = useState<SessionListItem | null>(null);
+  /** 只看收藏的会话（12-e 裁定表 #7） */
+  const [favoriteOnly, setFavoriteOnly] = useState(false);
   const [renameValue, setRenameValue] = useState('');
   /**
    * 待自动发出的问题（首页点「推荐问题 / 资料」跳过来时带 ?q=）。
@@ -157,13 +162,13 @@ export function ChatPage(): ReactElement {
 
   const reloadSessions = useCallback(async (): Promise<void> => {
     try {
-      const data = await fetchSessions();
+      const data = await fetchSessions(1, 50, favoriteOnly);
       setSessions(data.sessions);
       setError(null);
     } catch (err: unknown) {
       setError(errorMessage(err, '加载会话列表失败'));
     }
-  }, []);
+  }, [favoriteOnly]);
 
   useEffect(() => {
     void (async () => {
@@ -231,6 +236,19 @@ export function ChatPage(): ReactElement {
     }
   }, [reloadSessions, setSearchParams]);
 
+  /** 收藏 / 取消收藏（12-e 裁定表 #7） */
+  const onToggleFavorite = useCallback(
+    async (s: SessionListItem): Promise<void> => {
+      try {
+        await setSessionFavorite(s.id);
+        await reloadSessions();
+      } catch (err: unknown) {
+        message.error(errorMessage(err, '操作失败'));
+      }
+    },
+    [reloadSessions],
+  );
+
   const onDeleteSession = useCallback(
     async (id: string): Promise<void> => {
       try {
@@ -265,7 +283,19 @@ export function ChatPage(): ReactElement {
       <Button type="primary" icon={<PlusOutlined />} block onClick={() => void onNewSession()}>
         新对话
       </Button>
-      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', marginTop: 12 }}>
+      <Flex align="center" justify="space-between" style={{ marginTop: 8 }}>
+        <Text type="secondary" style={{ fontSize: 12 }}>
+          {favoriteOnly ? '只看收藏' : '全部会话'}
+        </Text>
+        <Switch
+          size="small"
+          checked={favoriteOnly}
+          onChange={(v) => {
+            setFavoriteOnly(v);
+          }}
+        />
+      </Flex>
+      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', marginTop: 8 }}>
         {sessions.length === 0 ? (
           <Empty description="还没有会话" image={Empty.PRESENTED_IMAGE_SIMPLE} />
         ) : (
@@ -291,6 +321,18 @@ export function ChatPage(): ReactElement {
                 >
                   {s.title ?? '未命名会话'}
                 </Text>
+                <Tooltip title={s.favorite ? '取消收藏' : '收藏'}>
+                  <Button
+                    type="text"
+                    size="small"
+                    icon={<StarOutlined />}
+                    style={s.favorite ? { color: token.colorWarning } : undefined}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void onToggleFavorite(s);
+                    }}
+                  />
+                </Tooltip>
                 <Tooltip title="重命名">
                   <Button
                     type="text"

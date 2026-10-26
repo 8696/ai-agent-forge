@@ -23,6 +23,9 @@ import { EvaluationRun } from './models/EvaluationRun';
 import { EvaluationResult } from './models/EvaluationResult';
 import { Tool } from './models/Tool';
 import { ToolCallLog } from './models/ToolCallLog';
+import { Mission } from './models/Mission';
+import { AgentRun } from './models/AgentRun';
+import { AgentStep } from './models/AgentStep';
 import { installTenantScopeHooks } from './lib/tenant-scope';
 
 /**
@@ -77,6 +80,9 @@ function buildSequelize(): SequelizeType {
   EvaluationResult,
   Tool,
   ToolCallLog,
+  Mission,
+  AgentRun,
+  AgentStep,
 ]);
 
   // 租户作用域的运行时强制（A1）：给每个带 tenant_id 列的模型装上查询钩子，

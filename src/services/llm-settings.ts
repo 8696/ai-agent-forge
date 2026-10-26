@@ -1,6 +1,6 @@
 import { config, getLlm, type ProviderConfig } from '../config';
 import { logger } from '../logger';
-import { resolveActiveModel } from './tenant-models';
+import { resolveActiveModel, type ResolvedFallbackModel } from './tenant-models';
 import { getSettingValues } from './tenant-settings';
 
 /**
@@ -54,6 +54,15 @@ export interface ResolvedLlmSettings {
   source: 'tenant-model' | 'process-default';
   /** 配置有问题但已降级时写在这里，调用方据此告警 */
   degraded: string | null;
+  /**
+   * 备用模型（C4 · 迁移 `030`）。
+   *
+   * 主模型调用失败（provider 报错 / 连不上）**且一个 token 都还没吐出去**时，
+   * 自动切到它重试一次。⚠️ 已经吐过内容就不切 —— 吐出去的字收不回来。
+   *
+   * null = 没配备用（主模型失败就直接报错）。
+   */
+  fallback: ResolvedFallbackModel | null;
 }
 
 /**
@@ -99,6 +108,7 @@ export function mergeSettings(
   settings: RawSettings,
   defaults: ProcessDefaults,
   degraded: string | null = null,
+  fallback: ResolvedFallbackModel | null = null,
 ): ResolvedLlmSettings {
   // KV 值对所有路径都生效 —— 租户没配模型条目时也照样能用。
   // 取值一律走「类型对得上才用」，否则回落 .env 默认：
@@ -142,6 +152,7 @@ export function mergeSettings(
       modelEntryId: null,
       source: 'process-default',
       degraded,
+      fallback,
       ...kvOverlay,
     };
   }
@@ -158,6 +169,7 @@ export function mergeSettings(
     modelEntryId: null,
     source: 'tenant-model',
     degraded,
+    fallback,
     ...kvOverlay,
   };
 }
@@ -228,7 +240,14 @@ export async function resolveLlmSettings(tenantId: string): Promise<ResolvedLlmS
           prompt_cache_enabled: active.promptCacheEnabled,
         };
 
-  return mergeSettings(modelLayer, settings, defaults, active?.degraded ?? null);
+  return mergeSettings(
+    modelLayer,
+    settings,
+    defaults,
+    active?.degraded ?? null,
+    // 备用模型跟着「启用中的那条」走 —— 主模型换了，备用也跟着换
+    active?.fallback ?? null,
+  );
 }
 
 /**
@@ -273,6 +292,13 @@ export interface ResolvedScopedLlm {
   modelEntryId: string | null;
   /** 配置有问题但已降级时写在这里，调用方据此告警 */
   degraded: string | null;
+  /**
+   * 备用模型（C4 · 迁移 `030`）。
+   *
+   * 旁路调用（记忆抽取 / 会话摘要）是**非流式**的 `generateText`，
+   * 失败时切备用**没有「已吐内容收不回来」的问题** —— 这条路最好切。
+   */
+  fallback: ResolvedFallbackModel | null;
 }
 
 /**
@@ -309,6 +335,7 @@ export async function resolveScopedLlm(
         source: 'tenant-model',
         modelEntryId: scopedModel.id,
         degraded: null,
+        fallback: scopedModel.fallback,
       };
     }
     // 密钥解不开 → 记下来，回落到对话模型（别让整个旁路调用停摆）
@@ -326,6 +353,7 @@ export async function resolveScopedLlm(
       source: 'chat-model',
       modelEntryId: chatModel.id,
       degraded,
+      fallback: chatModel.fallback,
     };
   }
   if (chatModel !== null && chatModel.degraded !== null) {
@@ -342,6 +370,7 @@ export async function resolveScopedLlm(
     source: 'process-default',
     modelEntryId: null,
     degraded,
+    fallback: null,
   };
 }
 

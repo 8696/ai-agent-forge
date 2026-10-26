@@ -36,6 +36,8 @@ import {
  *  - `error` 工具抛错（已降级成 tool result 回灌，整轮对话没挂）
  *  - `timeout` 超过 5 秒被放弃
  *  - `awaiting_confirmation` 敏感工具被 HITL 闸门拦下，**没有真正执行**
+ *  - `rejected` 用户点了「取消」
+ *  - `blocked` 前置步骤没满足，被 B5 工作流闸门拦下（不是失败，是流程约束）
  */
 
 const { Text, Paragraph } = Typography;
@@ -47,6 +49,8 @@ const STATUS_LABEL: Record<ToolCallStatus, string> = {
   error: '调用失败',
   timeout: '超时',
   awaiting_confirmation: '待确认（未执行）',
+  rejected: '用户已取消',
+  blocked: '前置未满足（未执行）',
 };
 
 const STATUS_COLOR: Record<ToolCallStatus, string> = {
@@ -54,6 +58,8 @@ const STATUS_COLOR: Record<ToolCallStatus, string> = {
   error: 'red',
   timeout: 'orange',
   awaiting_confirmation: 'gold',
+  rejected: 'default',
+  blocked: 'blue',
 };
 
 /** JSON 参数的展示：压成一行，展开看全文 */

@@ -40,6 +40,10 @@ export interface EvaluationRun {
   dataset_id: string;
   dataset_name: string | null;
   prompt_version: string | null;
+  /** 触发方式：manual=手动跑的 / prompt_regression=提示词发布自动回归 */
+  trigger: 'manual' | 'prompt_regression';
+  /** 本次只跑了前 N 题（null = 跑全集） */
+  item_limit: number | null;
   model: string | null;
   provider: string | null;
   status: 'running' | 'completed' | 'failed';

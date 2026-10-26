@@ -272,6 +272,19 @@ export const SETTINGS_REGISTRY: SettingSpec[] = [
     fallback: 5000,
   },
   {
+    key: 'multi_agent_enabled',
+    label: '多代理协作',
+    category: '模型',
+    description:
+      '开：主 agent 可以把子任务**委派**给专业子代理（订单 / 政策 / 优惠），' +
+      '子代理各查各的、结果汇总给主 agent。' +
+      '**默认开** —— 主 agent 自己决定要不要派活，不是每个问题都派。' +
+      '⚠️ 每次委派都是**额外的一次 LLM 调用**（子代理自己跑一轮），成本比普通工具高；' +
+      '嫌贵就关掉',
+    type: 'boolean',
+    fallback: true,
+  },
+  {
     key: 'alert_error_rate',
     label: '错误率告警阈值',
     category: '成本',

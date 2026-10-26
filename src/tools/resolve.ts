@@ -1,5 +1,6 @@
 import { listEnabledTools } from '../services/tools';
 import { getBuiltinTool, type BuiltinTool } from './builtin/registry';
+import { createHttpToolImpl } from './http-mock';
 
 /**
  * 把「数据库里的注册」解析成「可以交给模型的工具」。
@@ -33,6 +34,25 @@ export async function resolveTenantTools(tenantId: string): Promise<ResolvedTool
   const resolved: ResolvedTool[] = [];
 
   for (const row of rows) {
+    // ---- http 类型：本地 mock 实现（配置形状保留，不真出网）----
+    //
+    // ⚠️ 这里**不能走 `config.builtin`** —— http 工具没有内置实现，
+    //    它的实现要按这一行的 config 动态造（入参 schema 来自租户声明的字段）。
+    if (row.type === 'http') {
+      const impl = createHttpToolImpl(row.config ?? {}, row.name);
+      if (impl === null) {
+        // 配置不合法（没 url / method 不认识）—— 跳过，别让模型调一个必然失败的工具
+        continue;
+      }
+      resolved.push({
+        name: row.name,
+        description: (row.description ?? '').trim() || impl.description,
+        impl,
+        requiresConfirmation: row.requires_confirmation,
+      });
+      continue;
+    }
+
     const builtinKey = row.config?.builtin;
     if (typeof builtinKey !== 'string') {
       continue;

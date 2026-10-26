@@ -21,5 +21,6 @@ export { PromptEditorPage } from './PromptEditorPage';
 export { ObservabilityTraceListPage } from './ObservabilityTraceListPage';
 export { ObservabilityTraceDetailPage } from './ObservabilityTraceDetailPage';
 export { ObservabilityCostPage } from './ObservabilityCostPage';
+export { ObservabilityAlertsPage } from './ObservabilityAlertsPage';
 export { EvaluationDatasetsPage } from './EvaluationDatasetsPage';
 export { EvaluationRunsPage } from './EvaluationRunsPage';

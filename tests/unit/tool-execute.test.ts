@@ -15,6 +15,7 @@ import {
 } from '../../src/tools/execute';
 import type { BuiltinTool } from '../../src/tools/builtin/registry';
 import type { ResolvedTool } from '../../src/tools/resolve';
+import type { GateDecision } from '../../src/workflows/types';
 
 /** 造一个假工具（execute 可替换） */
 function fakeTool(over: Partial<BuiltinTool> = {}): BuiltinTool {
@@ -229,6 +230,151 @@ describe('工具执行包装层', () => {
 
     it('approvalKey = 工具名 + 指纹', () => {
       expect(approvalKey('t', { a: 1 })).toBe(`t:${hashArgs({ a: 1 })}`);
+    });
+  });
+
+  // ============================================================
+  // B5 工作流闸门（docs/12-b §B5.1）
+  // ============================================================
+  describe('工作流闸门', () => {
+    /** 造一个只回固定决策的假闸门 */
+    function gateHarness(
+      decision: GateDecision,
+      over: Partial<ToolRuntime> = {},
+    ): Harness & { gateCalls: Array<{ toolName: string; builtin: string; sensitive: boolean }> } {
+      const gateCalls: Array<{ toolName: string; builtin: string; sensitive: boolean }> = [];
+      const h = harness({
+        gate: async (input) => {
+          gateCalls.push({
+            toolName: input.toolName,
+            builtin: input.builtin,
+            sensitive: input.sensitive,
+          });
+          return decision;
+        },
+        ...over,
+      });
+      return { ...h, gateCalls };
+    }
+
+    it('allow → 正常执行，并回调记流程进度（带 missionId / nodeId）', async () => {
+      const exec = vi.fn(async () => ({ ok: true }));
+      const onToolSucceeded = vi.fn();
+      const h = gateHarness(
+        { kind: 'allow', missionId: 'm-1', nodeId: 'lookup_order' },
+        { onToolSucceeded },
+      );
+      const set = buildToolSet([resolved(fakeTool({ execute: exec }))], h.runtime);
+
+      const out = await callTool(set, 'fake_tool', { value: 'x' });
+
+      expect(out).toEqual({ ok: true });
+      expect(exec).toHaveBeenCalledTimes(1);
+      expect(onToolSucceeded).toHaveBeenCalledTimes(1);
+      expect(onToolSucceeded.mock.calls[0]?.[0]).toMatchObject({
+        toolName: 'fake_tool',
+        missionId: 'm-1',
+        nodeId: 'lookup_order',
+      });
+      expect(h.records[0]?.status).toBe('ok');
+    });
+
+    it('await → 不执行，回灌 awaiting_confirmation', async () => {
+      const exec = vi.fn(async () => ({ ok: true }));
+      const h = gateHarness({
+        kind: 'await',
+        missionId: 'm-1',
+        message: '该操作需要用户确认后才能执行。',
+        confirmHint: '「提交退款申请」需要用户确认。',
+      });
+      const set = buildToolSet([resolved(fakeTool({ execute: exec }), true)], h.runtime);
+
+      const out = await callTool(set, 'fake_tool', { value: 'x' });
+
+      expect(exec).not.toHaveBeenCalled();
+      const result = out as { status: string; message: string; confirm_hint: string };
+      expect(result.status).toBe('awaiting_confirmation');
+      expect(result.confirm_hint).toContain('提交退款申请');
+      expect(h.records[0]?.status).toBe('awaiting_confirmation');
+      // span 也要有（闸门路径同样要覆盖）
+      expect(h.spans[0]?.ended).toBe(true);
+    });
+
+    it('await + 模型改了参数 → 把用户已确认的那组参数回传给它', async () => {
+      const exec = vi.fn(async () => ({ ok: true }));
+      const h = gateHarness({
+        kind: 'await',
+        missionId: 'm-1',
+        message: '用户已经确认过这个工具，确认的参数是 {"value":"x"}。',
+        confirmHint: '「提交退款申请」需要用用户已确认的参数执行。',
+        approvedArgs: { value: 'x' },
+      });
+      const set = buildToolSet([resolved(fakeTool({ execute: exec }), true)], h.runtime);
+
+      const out = await callTool(set, 'fake_tool', { value: 'y' });
+
+      const result = out as { status: string; approved_args: unknown };
+      expect(result.status).toBe('awaiting_confirmation');
+      expect(result.approved_args).toEqual({ value: 'x' });
+    });
+
+    it('reject → 不执行，回灌「用户拒绝」', async () => {
+      const exec = vi.fn(async () => ({ ok: true }));
+      const h = gateHarness({
+        kind: 'reject',
+        message: '用户已经拒绝执行这个操作。',
+      });
+      const set = buildToolSet([resolved(fakeTool({ execute: exec }), true)], h.runtime);
+
+      const out = await callTool(set, 'fake_tool', { value: 'x' });
+
+      expect(exec).not.toHaveBeenCalled();
+      expect((out as { status: string }).status).toBe('rejected');
+      expect(h.records[0]?.status).toBe('rejected');
+    });
+
+    it('blocked → 不执行，回灌「先做什么」（不是失败，是流程约束）', async () => {
+      const exec = vi.fn(async () => ({ ok: true }));
+      const h = gateHarness({
+        kind: 'blocked',
+        missionId: 'm-1',
+        message: '「退款申请」这个操作还不能执行 —— 缺少前置步骤：查订单状态。请先调用 query_order_status。',
+      });
+      const set = buildToolSet([resolved(fakeTool({ execute: exec }), true)], h.runtime);
+
+      const out = await callTool(set, 'fake_tool', { value: 'x' });
+
+      expect(exec).not.toHaveBeenCalled();
+      const result = out as { status: string; message: string };
+      expect(result.status).toBe('blocked');
+      expect(result.message).toContain('query_order_status');
+      expect(h.records[0]?.status).toBe('blocked');
+      expect(h.records[0]?.output).toContain('query_order_status');
+    });
+
+    it('闸门在 → 完全接管判断（老逻辑的 approvals 不再参与）', async () => {
+      const exec = vi.fn(async () => ({ ok: true }));
+      // approvals 是空的 —— 按老逻辑会被拦下，但闸门说放行就该放行
+      const h = gateHarness({ kind: 'allow', missionId: null, nodeId: null }, {});
+      const set = buildToolSet([resolved(fakeTool({ execute: exec }), true)], h.runtime);
+
+      const out = await callTool(set, 'fake_tool', { value: 'x' });
+
+      expect(exec).toHaveBeenCalledTimes(1);
+      expect(out).toEqual({ ok: true });
+    });
+
+    it('闸门拿到的上下文带工具名 / 实现 key / 敏感标记', async () => {
+      const h = gateHarness({ kind: 'allow', missionId: null, nodeId: null });
+      const set = buildToolSet([resolved(fakeTool(), true)], h.runtime);
+
+      await callTool(set, 'fake_tool', { value: 'x' });
+
+      expect(h.gateCalls[0]).toEqual({
+        toolName: 'fake_tool',
+        builtin: 'fake_tool',
+        sensitive: true,
+      });
     });
   });
 });

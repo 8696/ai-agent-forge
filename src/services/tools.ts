@@ -2,6 +2,7 @@ import { Tool, type ToolConfig, type ToolType } from '../models';
 import { NotFoundError, ValidationError } from '../lib/errors';
 import { EXECUTABLE_TOOL_TYPES } from '../models/Tool';
 import { getBuiltinTool } from '../tools/builtin/registry';
+import { HTTP_METHODS } from '../tools/http-mock';
 import { logger } from '../logger';
 
 /**
@@ -35,6 +36,12 @@ export interface ToolView {
   builtin: string | null;
   /** 内置工具的中文名（后台列表展示用） */
   builtin_label: string | null;
+  /** http 工具的目标地址（type='http' 时）—— **只做展示，平台不真出网** */
+  url: string | null;
+  /** http 工具的方法（type='http' 时） */
+  method: string | null;
+  /** http 工具是不是本地 mock（永远是 true —— 真出网已明确不做） */
+  mocked: boolean;
   enabled: boolean;
   requires_confirmation: boolean;
   created_at: string;
@@ -42,6 +49,7 @@ export interface ToolView {
 }
 
 export function toToolView(row: Tool): ToolView {
+  const isHttp = row.type === 'http';
   const builtinKey = row.config?.builtin;
   const impl = typeof builtinKey === 'string' ? getBuiltinTool(builtinKey) : undefined;
   return {
@@ -51,6 +59,9 @@ export function toToolView(row: Tool): ToolView {
     type: row.type,
     builtin: impl === undefined ? null : impl.key,
     builtin_label: impl === undefined ? null : impl.name,
+    url: isHttp && typeof row.config?.url === 'string' ? row.config.url : null,
+    method: isHttp && typeof row.config?.method === 'string' ? row.config.method : null,
+    mocked: isHttp,
     enabled: row.enabled,
     requires_confirmation: row.requires_confirmation,
     created_at: row.created_at.toISOString(),
@@ -87,10 +98,20 @@ export interface ToolInput {
   name: string;
   /** 给模型看的描述 */
   description?: string | undefined;
-  /** 本轮只有 builtin 可执行 */
+  /** 工具类型：`builtin`（内置实现）/ `http`（本地 mock 接口）/ `mcp`（**不做**） */
   type: ToolType;
   /** 内置实现 key（type='builtin' 时必填） */
   builtin?: string | undefined;
+  /** http 工具的目标地址（type='http' 时必填）—— **只做展示与 mock 依据，不真出网** */
+  url?: string | undefined;
+  /** http 工具的方法（type='http' 时，默认 GET） */
+  method?: string | undefined;
+  /** http 工具的模拟响应原文（type='http' 时；填了就用它，不填则平台确定性生成） */
+  mock_response?: unknown;
+  /** http 工具的模拟状态码（type='http' 时，默认 200） */
+  mock_status?: number | undefined;
+  /** http 工具的入参字段声明（type='http' 时） */
+  input_fields?: unknown;
   /** 是否启用 */
   enabled?: boolean | undefined;
   /** 是否敏感（要用户确认） */
@@ -103,8 +124,8 @@ export interface ToolInput {
  * 几个硬约束：
  *  - 调用名必须是合法标识符（模型要按这个名字调，中文/空格会调不出来）
  *  - `builtin` 类型必须指向一个**存在的**实现（指向已下架实现 = 注册了条死工具）
- *  - `http` / `mcp` 本轮不开放 —— 它们的出网策略（SSRF）还没定，
- *    先堵住，免得出现「注册了但永远调不通」的死条目
+ *  - `mcp` **不做**（跨系统：租户那边得自己跑 MCP server）—— 见 12-e 需求裁定表 #1
+ *  - `http` **是本地 mock**：url / method 保留配置形状，但平台不真的发请求
  */
 export function normalizeToolInput(input: ToolInput): {
   name: string;
@@ -123,8 +144,54 @@ export function normalizeToolInput(input: ToolInput): {
 
   if (!EXECUTABLE_TOOL_TYPES.includes(input.type)) {
     throw new ValidationError(
-      `工具类型 ${input.type} 本轮未开放（出网安全策略还没定）。目前只支持 builtin。`,
+      input.type === 'mcp'
+        ? 'MCP 类型不做：它涉及多个系统（租户那边得自己跑一个 MCP server），本平台只做「当前一个系统能闭环」的事。' +
+          '目前支持 builtin（内置实现）和 http（本地 mock 接口）。'
+        : `工具类型 ${input.type} 不支持。目前支持 builtin（内置实现）和 http（本地 mock 接口）。`,
     );
+  }
+
+  const description = (input.description ?? '').trim();
+
+  // ---- http 类型：本地 mock，不真出网 ----
+  if (input.type === 'http') {
+    const url = (input.url ?? '').trim();
+    if (url === '') {
+      throw new ValidationError('http 类型工具必须填目标地址（url）');
+    }
+    if (!/^https?:\/\/[^\s]+$/i.test(url)) {
+      throw new ValidationError('目标地址格式不对（要 http:// 或 https:// 开头，例如 https://api.example.com/orders/{id}）');
+    }
+    const method = (input.method ?? 'GET').trim().toUpperCase();
+    if (!(HTTP_METHODS as readonly string[]).includes(method)) {
+      throw new ValidationError(`不支持的 HTTP 方法：${method}（支持 ${HTTP_METHODS.join(' / ')}）`);
+    }
+    const mockStatus = input.mock_status ?? 200;
+    if (!Number.isInteger(mockStatus) || mockStatus < 100 || mockStatus > 599) {
+      throw new ValidationError('模拟状态码不合法（100~599 的整数）');
+    }
+
+    // config 里不放 undefined —— JSON 列会丢，但显式剔除更干净
+    const config: ToolConfig = { url, method, mock_status: mockStatus };
+    if (input.mock_response !== undefined) {
+      config.mock_response = input.mock_response;
+    }
+    if (input.input_fields !== undefined) {
+      config.input_fields = input.input_fields;
+    }
+
+    return {
+      name,
+      description:
+        description === ''
+          ? `调用 ${method} ${url} 拿到数据。本工具是本地 mock，不会真的向该地址发请求。`
+          : description,
+      type: 'http',
+      config,
+      enabled: input.enabled ?? true,
+      // http 工具默认不敏感 —— 它是读操作；租户可以自己勾上「要确认」
+      requires_confirmation: input.requires_confirmation ?? false,
+    };
   }
 
   const builtin = input.builtin ?? '';
@@ -133,7 +200,6 @@ export function normalizeToolInput(input: ToolInput): {
     throw new ValidationError('内置实现不存在或已下架，请从下拉框里选一个');
   }
 
-  const description = (input.description ?? '').trim();
   return {
     name,
     description: description === '' ? impl.description : description,
@@ -190,6 +256,38 @@ export async function updateTool(
   }
   if (input.requires_confirmation !== undefined) {
     row.requires_confirmation = input.requires_confirmation;
+  }
+  // http 工具的接口配置**可以改** —— url / method 不是模型的调用名，
+  // 改了不影响模型的历史认知（改的只是「这个 mock 返回什么」）
+  if (row.type === 'http') {
+    const config: ToolConfig = { ...(row.config ?? {}) };
+    if (input.url !== undefined) {
+      const url = input.url.trim();
+      if (url === '' || !/^https?:\/\/[^\s]+$/i.test(url)) {
+        throw new ValidationError('目标地址格式不对（要 http:// 或 https:// 开头）');
+      }
+      config.url = url;
+    }
+    if (input.method !== undefined) {
+      const method = input.method.trim().toUpperCase();
+      if (!(HTTP_METHODS as readonly string[]).includes(method)) {
+        throw new ValidationError(`不支持的 HTTP 方法：${method}`);
+      }
+      config.method = method;
+    }
+    if (input.mock_response !== undefined) {
+      config.mock_response = input.mock_response;
+    }
+    if (input.mock_status !== undefined) {
+      if (!Number.isInteger(input.mock_status) || input.mock_status < 100 || input.mock_status > 599) {
+        throw new ValidationError('模拟状态码不合法（100~599 的整数）');
+      }
+      config.mock_status = input.mock_status;
+    }
+    if (input.input_fields !== undefined) {
+      config.input_fields = input.input_fields;
+    }
+    row.config = config;
   }
   // 记一下最后是谁改的（建表时有 created_by，改的人原来没记）
   if (userId !== undefined && userId !== '') {

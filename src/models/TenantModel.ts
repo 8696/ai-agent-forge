@@ -119,6 +119,17 @@ export class TenantModel extends Model {
   @Column({ type: DataType.BOOLEAN, allowNull: false })
   declare is_active: boolean;
 
+  /**
+   * 备用模型（指向同租户**同 scope**的另一条模型条目）。
+   *
+   * 主模型调用失败（provider 报错 / 连不上）**且一个 token 都还没吐出去**时，
+   * 自动切到它重试一次。⚠️ **已经吐过内容就不切** —— 吐出去的字收不回来。
+   *
+   * 迁移 `030` 加的列。见 docs/12-c §C4 与 docs/06 §6.3。
+   */
+  @Column({ type: DataType.STRING(36), allowNull: true })
+  declare fallback_model_id: string | null;
+
   @Column({ type: DataType.STRING(36), allowNull: true })
   declare updated_by: string | null;
 

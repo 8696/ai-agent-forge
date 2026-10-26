@@ -60,14 +60,19 @@ describe('admin-tools-routes', () => {
   });
 
   describe('GET /tools/builtins · 内置工具清单', () => {
-    it('200 + 6 个内置工具（电商客服场景）', async () => {
+    it('200 + 8 个内置工具（电商客服场景）', async () => {
       const r = await http.acmeAdmin.get('/tools/builtins');
       expect(r.status).toBe(200);
       const builtins = (r.data as { builtins: Array<{ key: string; sensitive: boolean }> })
         .builtins;
-      expect(builtins).toHaveLength(6);
+      // ⚠️ 2026-10-26 从 6 个变成 8 个：B5 工作流补了两个敏感工具
+      // （update_shipping_address / create_after_sale_ticket）
+      expect(builtins).toHaveLength(8);
       expect(builtins.map((b) => b.key)).toContain('submit_refund_request');
       expect(builtins.find((b) => b.key === 'submit_refund_request')?.sensitive).toBe(true);
+      // 新增的两个也是敏感工具（会动数据，要用户点头）
+      expect(builtins.find((b) => b.key === 'update_shipping_address')?.sensitive).toBe(true);
+      expect(builtins.find((b) => b.key === 'create_after_sale_ticket')?.sensitive).toBe(true);
     });
   });
 
@@ -120,15 +125,39 @@ describe('admin-tools-routes', () => {
       expect(r.status).toBe(400);
     });
 
-    it('400 http / mcp 类型本轮未开放', async () => {
-      for (const type of ['http', 'mcp']) {
-        const r = await http.acmeAdmin.post(
-          '/tools',
-          { name: `type_tool_${Date.now()}`, type, url: 'https://example.com' },
-          { validateStatus: () => true },
-        );
-        expect(r.status, `${type} 类型本轮应被拒`).toBe(400);
-      }
+    it('201 http 类型（本地 mock）可注册', async () => {
+      const r = await http.acmeAdmin.post(
+        '/tools',
+        {
+          name: `http_tool_${Date.now()}`,
+          type: 'http',
+          url: 'https://api.example.com/orders/{id}',
+          method: 'GET',
+        },
+        { validateStatus: () => true },
+      );
+      // ⚠️ 2026-10-26：http 类型改成「本地 mock」—— 保留 url/method 的配置形状，
+      //    但平台不真的发请求（见 12-e 需求裁定表 #2）
+      expect(r.status, 'http 类型应该能注册').toBe(201);
+      await http.acmeAdmin.delete(`/tools/${r.data.tool.id}`, { validateStatus: () => true });
+    });
+
+    it('400 mcp 类型不做（跨系统：租户那边得自己跑 MCP server）', async () => {
+      const r = await http.acmeAdmin.post(
+        '/tools',
+        { name: `mcp_tool_${Date.now()}`, type: 'mcp', url: 'https://example.com' },
+        { validateStatus: () => true },
+      );
+      expect(r.status, 'mcp 类型应被拒').toBe(400);
+    });
+
+    it('400 http 类型缺 url', async () => {
+      const r = await http.acmeAdmin.post(
+        '/tools',
+        { name: `http_tool_${Date.now()}`, type: 'http' },
+        { validateStatus: () => true },
+      );
+      expect(r.status).toBe(400);
     });
   });
 

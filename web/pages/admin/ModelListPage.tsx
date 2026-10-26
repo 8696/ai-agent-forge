@@ -315,6 +315,7 @@ export function ModelListPage(): ReactElement {
       <ModelEditor
         target={editing}
         defaults={defaults}
+        models={models}
         onClose={() => setEditing(null)}
         onSaved={() => {
           setEditing(null);
@@ -333,11 +334,14 @@ export function ModelListPage(): ReactElement {
 function ModelEditor({
   target,
   defaults,
+  models,
   onClose,
   onSaved,
 }: {
   target: TenantModelItem | 'new' | null;
   defaults: ProcessLlmDefaults | null;
+  /** 本租户的全部模型条目 —— 「备用模型」下拉框的候选来源 */
+  models: TenantModelItem[];
   onClose: () => void;
   onSaved: () => void;
 }): ReactElement {
@@ -347,6 +351,13 @@ function ModelEditor({
   const [checkResult, setCheckResult] = useState<{ ok: boolean; reason?: string } | null>(null);
   const isNew = target === 'new';
   const editing = target !== null && target !== 'new' ? target : null;
+
+  // 备用模型下拉的候选：**同一用途**、且不是自己
+  const watchedScope = Form.useWatch('usage_scope', form);
+  const fallbackOptions = models
+    .filter((m) => m.usage_scope === (watchedScope ?? 'chat'))
+    .filter((m) => m.id !== editing?.id)
+    .map((m) => ({ value: m.id, label: `${m.name}（${m.model_id}）` }));
 
   useEffect(() => {
     if (editing === null) {
@@ -361,6 +372,7 @@ function ModelEditor({
       max_output_tokens: editing.max_output_tokens,
       prompt_cache_enabled: editing.prompt_cache_enabled,
       usage_scope: editing.usage_scope,
+      fallback_model_id: editing.fallback_model_id ?? undefined,
       api_key: '',
     });
   }, [editing, form]);
@@ -402,6 +414,8 @@ function ModelEditor({
         max_output_tokens: (values.max_output_tokens as number | null) ?? null,
         prompt_cache_enabled: (values.prompt_cache_enabled as boolean) ?? true,
         usage_scope: (values.usage_scope as ModelUsageScope) ?? 'chat',
+        // 备用模型：null = 取消备用；undefined = 不带这个键（新建时无所谓）
+        fallback_model_id: (values.fallback_model_id as string | undefined) ?? null,
       };
       const typedKey = (values.api_key as string | undefined) ?? '';
       // 编辑时留空 = 保持原密钥；只有真填了才提交
@@ -460,6 +474,22 @@ function ModelEditor({
 
         <Form.Item name="provider" label="Provider 标识">
           <Input placeholder="zhipu / openai-compatible（仅用于识别，不参与调用）" allowClear />
+        </Form.Item>
+
+        <Form.Item
+          name="fallback_model_id"
+          label="备用模型"
+          extra={
+            '主模型调用失败（provider 报错 / 连不上）时自动切到它再试一次 —— ' +
+            '只在「一个内容字都还没吐出去」时才切，已经吐出去的字收不回来。' +
+            '备用必须是**同一用途**下的另一条（用途不同、成本也不同）。'
+          }
+        >
+          <Select
+            allowClear
+            placeholder="不配（主模型失败就直接报错）"
+            options={fallbackOptions}
+          />
         </Form.Item>
 
         <Form.Item

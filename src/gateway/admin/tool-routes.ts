@@ -8,6 +8,7 @@ import { ValidationError } from '../../lib/errors';
 import type { TenantUserJwtPayload } from '../../lib/jwt';
 import { createTool, deleteTool, getTool, listTools, toToolView, updateTool } from '../../services/tools';
 import { listBuiltinTools, getBuiltinTool } from '../../tools/builtin/registry';
+import { createHttpToolImpl } from '../../tools/http-mock';
 import { TOOL_TIMEOUT_MS } from '../../tools/execute';
 
 /**
@@ -33,7 +34,16 @@ function currentUser(ctx: { state: Record<string, unknown> }): TenantUserJwtPayl
   return ctx.state.adminUser as TenantUserJwtPayload;
 }
 
-const toolTypeSchema = z.enum(['builtin', 'http', 'mcp']);
+/**
+ * 工具类型。
+ *
+ * ⚠️ **`mcp` 不开放** —— 涉及多个系统（租户那边得自己跑 MCP server），
+ *    「当前一个系统做完」做不到。见 12-e 需求裁定表 #1。
+ * ⚠️ **`http` 是「本地 mock」** —— 保留 url/method 的配置形状，
+ *    但平台**不真的发请求**，按 `(租户, url, method, 入参)` 确定性生成响应。
+ *    见 12-e 需求裁定表 #2。
+ */
+const toolTypeSchema = z.enum(['builtin', 'http']);
 
 const createBodySchema = z.object({
   /** 调用名（英文标识符） */
@@ -43,6 +53,16 @@ const createBodySchema = z.object({
   type: toolTypeSchema.default('builtin'),
   /** 内置实现 key（type='builtin' 时必填） */
   builtin: z.string().trim().max(64).optional(),
+  /** http 类型的目标地址（**只做展示与 mock 依据，不真出网**） */
+  url: z.string().trim().max(500).optional(),
+  /** http 类型的方法 */
+  method: z.string().trim().max(10).optional(),
+  /** http 类型的模拟响应原文（填了就用它） */
+  mock_response: z.unknown().optional(),
+  /** http 类型的模拟状态码 */
+  mock_status: z.number().int().optional(),
+  /** http 类型的入参字段声明 */
+  input_fields: z.unknown().optional(),
   enabled: z.boolean().optional(),
   requires_confirmation: z.boolean().optional(),
 });
@@ -51,6 +71,12 @@ const patchBodySchema = z.object({
   description: z.string().trim().max(1000).optional(),
   enabled: z.boolean().optional(),
   requires_confirmation: z.boolean().optional(),
+  /** http 类型：接口配置可以改（url / method 不是模型的调用名） */
+  url: z.string().trim().max(500).optional(),
+  method: z.string().trim().max(10).optional(),
+  mock_response: z.unknown().optional(),
+  mock_status: z.number().int().optional(),
+  input_fields: z.unknown().optional(),
 });
 
 const testBodySchema = z.object({
@@ -92,6 +118,11 @@ adminToolRouter.post('/tools', async (ctx: Context) => {
     description: input.description,
     type: input.type,
     builtin: input.builtin,
+    url: input.url,
+    method: input.method,
+    mock_response: input.mock_response,
+    mock_status: input.mock_status,
+    input_fields: input.input_fields,
     enabled: input.enabled,
     requires_confirmation: input.requires_confirmation,
   });
@@ -102,7 +133,13 @@ adminToolRouter.post('/tools', async (ctx: Context) => {
     action: 'TOOL_CREATED',
     resource_type: 'tool',
     resource_id: row.id,
-    details: { name: row.name, type: row.type, builtin: row.config?.builtin ?? null },
+    details: {
+      name: row.name,
+      type: row.type,
+      builtin: row.config?.builtin ?? null,
+      // http 类型记一下指向哪个接口（**不记 mock_response 原文** —— 可能含敏感内容）
+      url: row.config?.url ?? null,
+    },
     ip: ctx.ip,
   });
 
@@ -174,6 +211,7 @@ adminToolRouter.delete('/tools/:id', async (ctx: Context) => {
  * POST /tools/:id/test —— 试连一次
  *
  * 内置工具直接用实现跑一次（传样例入参，或调用方给的入参）。
+ * **http 类型（本地 mock）** 按它的 config 动态造实现再跑。
  * 返回真实结果 + 耗时 —— 租户能当场确认「这个工具调得通」。
  */
 adminToolRouter.post('/tools/:id/test', async (ctx: Context) => {
@@ -182,9 +220,15 @@ adminToolRouter.post('/tools/:id/test', async (ctx: Context) => {
   const input = testBodySchema.parse(ctx.request.body ?? {});
 
   const row = await getTool(u.tenant_id, id);
-  const builtinKey = row.config?.builtin;
-  const impl = typeof builtinKey === 'string' ? getBuiltinTool(builtinKey) : undefined;
-  if (impl === undefined) {
+  // http 类型的实现是动态的（入参 schema 来自租户声明的字段），按 config 现造
+  const impl =
+    row.type === 'http'
+      ? createHttpToolImpl(row.config ?? {}, row.name)
+      : (() => {
+          const builtinKey = row.config?.builtin;
+          return typeof builtinKey === 'string' ? getBuiltinTool(builtinKey) : undefined;
+        })();
+  if (impl === undefined || impl === null) {
     throw new ValidationError('这条工具的实现已经不存在了（可能已下架），请重新注册');
   }
 

@@ -8,7 +8,9 @@ import {
   Empty,
   Form,
   Input,
+  InputNumber,
   Popconfirm,
+  Radio,
   Select,
   Space,
   Switch,
@@ -49,10 +51,15 @@ import {
  * 同一个内置工具，餐饮租户该写「查这个门店的订单」，物流租户该写「查运单轨迹」。
  * 所以「改描述」是这页最值钱的功能，改完**下一轮对话立刻生效**（不用重启）。
  *
- * ## 本轮只支持 builtin
+ * ## 支持的两类
  *
- * `http` / `mcp` 两类的出网安全策略还没定（调租户内网系统要放行私网，
- * 但云元数据地址永远得禁），先堵住 —— 免得出现「注册了但永远调不通」的死条目。
+ * - `builtin` —— 平台内置实现（实现在代码里，这一页做的是「注册」）
+ * - `http` —— **本地 mock 接口**：保留 url / method 的配置形状，
+ *   但平台**不真的发请求**（真出网是跨系统 + 出网策略问题，见 12-e 需求裁定表 #2）。
+ *   租户填的接口地址只用来展示和生成确定性 mock 响应。
+ *
+ * ⚠️ `mcp` **不支持** —— 涉及多个系统（租户那边得自己跑 MCP server），
+ * 见 12-e 需求裁定表 #1。
  */
 
 const { Text, Paragraph } = Typography;
@@ -137,16 +144,25 @@ export function ToolsPage(): ReactElement {
         <Space>
           <Text strong>{v}</Text>
           <Tag color="blue">{row.type}</Tag>
+          {row.type === 'http' && <Tag color="cyan">本地 mock</Tag>}
           {row.enabled ? <Tag color="green">启用中</Tag> : <Tag>已禁用</Tag>}
           {row.requires_confirmation && <Tag color="orange">需确认</Tag>}
         </Space>
       ),
     },
     {
-      title: '内置工具',
+      title: '实现',
       dataIndex: 'builtin_label',
       render: (v: string | null, row: ToolItem) =>
-        v === null ? <Text type="secondary">—</Text> : <Text>{v}</Text>,
+        row.type === 'http' ? (
+          <Text type="secondary" style={{ fontSize: 12 }} ellipsis={{ tooltip: row.url ?? '' }}>
+            {`${row.method ?? 'GET'} ${row.url ?? '—'}`}
+          </Text>
+        ) : v === null ? (
+          <Text type="secondary">—</Text>
+        ) : (
+          <Text>{v}</Text>
+        ),
     },
     {
       title: '描述（模型看到的就是这段）',
@@ -281,14 +297,21 @@ function ToolEditor({
   const isNew = target === 'new';
   const editing = target !== null && target !== 'new' ? target : null;
 
+  // 跟随表单里的「类型」切换显示 —— 选了 http 就把内置下拉框换成接口配置
+  const watchedType = Form.useWatch('type', form);
+  const isHttp = editing !== null ? editing.type === 'http' : watchedType === 'http';
+
   useEffect(() => {
     if (editing === null) {
       return;
     }
     form.setFieldsValue({
+      type: editing.type,
       name: editing.name,
       description: editing.description ?? '',
       builtin: editing.builtin ?? undefined,
+      url: editing.url ?? '',
+      method: editing.method ?? 'GET',
       enabled: editing.enabled,
       requires_confirmation: editing.requires_confirmation,
     });
@@ -298,28 +321,54 @@ function ToolEditor({
     const values = (await form.validateFields()) as Record<string, unknown>;
     setSaving(true);
     try {
+      const base = {
+        description: String(values.description ?? ''),
+        enabled: values.enabled === undefined ? true : Boolean(values.enabled),
+        requires_confirmation:
+          values.requires_confirmation === undefined
+            ? undefined
+            : Boolean(values.requires_confirmation),
+      };
+
       if (editing === null) {
-        await createTool({
-          name: String(values.name ?? ''),
-          description: String(values.description ?? ''),
-          type: 'builtin',
-          builtin: String(values.builtin ?? ''),
-          enabled: values.enabled === undefined ? true : Boolean(values.enabled),
-          requires_confirmation:
-            values.requires_confirmation === undefined
-              ? undefined
-              : Boolean(values.requires_confirmation),
-        });
+        if (values.type === 'http') {
+          await createTool({
+            name: String(values.name ?? ''),
+            type: 'http',
+            url: String(values.url ?? ''),
+            method: String(values.method ?? 'GET'),
+            mock_status: values.mock_status === undefined ? 200 : Number(values.mock_status),
+            ...base,
+          });
+        } else {
+          await createTool({
+            name: String(values.name ?? ''),
+            type: 'builtin',
+            builtin: String(values.builtin ?? ''),
+            ...base,
+          });
+        }
         message.success('已注册，下一轮对话立即生效');
       } else {
-        await updateTool(editing.id, {
-          description: String(values.description ?? ''),
-          enabled: values.enabled === undefined ? undefined : Boolean(values.enabled),
-          requires_confirmation:
-            values.requires_confirmation === undefined
-              ? undefined
-              : Boolean(values.requires_confirmation),
-        });
+        // 编辑：调用名和类型注册后不改（改调用名等于换了个工具，模型的历史认知全废）
+        // 但 http 工具的接口配置可以改 —— url / method 不是模型的调用名
+        if (editing.type === 'http') {
+          await updateTool(editing.id, {
+            description: base.description,
+            enabled: base.enabled,
+            requires_confirmation: base.requires_confirmation,
+            url: values.url === undefined ? undefined : String(values.url),
+            method: values.method === undefined ? undefined : String(values.method),
+            mock_status:
+              values.mock_status === undefined ? undefined : Number(values.mock_status),
+          });
+        } else {
+          await updateTool(editing.id, {
+            description: base.description,
+            enabled: base.enabled,
+            requires_confirmation: base.requires_confirmation,
+          });
+        }
         message.success('已保存，下一轮对话立即生效');
       }
       onSaved();
@@ -349,23 +398,74 @@ function ToolEditor({
         form={form}
         layout="vertical"
         preserve={false}
-        initialValues={{ enabled: true, requires_confirmation: false }}
+        initialValues={{ enabled: true, requires_confirmation: false, type: 'builtin', method: 'GET' }}
       >
-        <Form.Item
-          name="builtin"
-          label="内置工具"
-          rules={[{ required: true, message: '选一个平台内置工具' }]}
-          extra="工具的实现在平台代码里，这里选的是「用哪一个」。"
-        >
-          <Select
-            placeholder="选一个内置工具"
-            disabled={!isNew}
-            options={builtins.map((b) => ({
-              value: b.key,
-              label: `${b.name}（${b.key}）${b.sensitive ? ' · 敏感' : ''}`,
-            }))}
-          />
-        </Form.Item>
+        {isNew && (
+          <Form.Item
+            name="type"
+            label="类型"
+            extra="「http 接口」是本地 mock：平台不会真的向那个地址发请求，只按参数生成模拟响应。"
+          >
+            <Radio.Group>
+              <Radio value="builtin">内置实现</Radio>
+              <Radio value="http">http 接口（本地 mock）</Radio>
+            </Radio.Group>
+          </Form.Item>
+        )}
+
+        {!isHttp ? (
+          <Form.Item
+            name="builtin"
+            label="内置工具"
+            rules={[{ required: true, message: '选一个平台内置工具' }]}
+            extra="工具的实现在平台代码里，这里选的是「用哪一个」。"
+          >
+            <Select
+              placeholder="选一个内置工具"
+              disabled={!isNew}
+              options={builtins.map((b) => ({
+                value: b.key,
+                label: `${b.name}（${b.key}）${b.sensitive ? ' · 敏感' : ''}`,
+              }))}
+            />
+          </Form.Item>
+        ) : (
+          <>
+            <Alert
+              type="info"
+              showIcon
+              style={{ marginBottom: 16 }}
+              message="本地 mock 接口"
+              description="平台不会真的向这个地址发请求 —— 它只用来展示和生成确定性模拟响应。真接外部系统是跨系统的事，本平台不做。"
+            />
+            <Form.Item
+              name="url"
+              label="接口地址"
+              rules={[
+                { required: true, message: '填一个目标地址' },
+                { pattern: /^https?:\/\/\S+$/, message: '要 http:// 或 https:// 开头' },
+              ]}
+              extra="例：https://api.example.com/orders/{order_no}"
+            >
+              <Input placeholder="https://api.example.com/orders/{order_no}" />
+            </Form.Item>
+            <Form.Item name="method" label="方法">
+              <Select
+                options={['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].map((m) => ({
+                  value: m,
+                  label: m,
+                }))}
+              />
+            </Form.Item>
+            <Form.Item
+              name="mock_status"
+              label="模拟状态码"
+              extra="默认 200。填非 2xx（比如 500）可以演示「接口调不通」时 AI 怎么应对。"
+            >
+              <InputNumber min={100} max={599} style={{ width: '100%' }} />
+            </Form.Item>
+          </>
+        )}
 
         <Form.Item
           name="name"
@@ -408,7 +508,7 @@ function ToolEditor({
 
         {editing !== null && (
           <Paragraph type="secondary" style={{ fontSize: 12 }}>
-            调用名和内置实现注册后不能再改 —— 改调用名等于换了个工具，模型的历史认知就全废了。
+            调用名和类型注册后不能再改 —— 改调用名等于换了个工具，模型的历史认知就全废了。
             需要换实现的话，删掉重新注册一个。
           </Paragraph>
         )}

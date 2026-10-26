@@ -292,40 +292,59 @@ CREATE TABLE tool_call_logs (
 > `awaiting_confirmation` 这一档是 HITL 闸门拦下的调用 —— 工具**没有真正执行**，
 > 所以 `output` 是空的。
 
-### 任务表（missions，工作流主表）⏳ 未建表（本期未做 · DDL 预留 · 迁移没建）
+### 任务表（missions，工作流主表）✅ 已建表 2026-10-26（迁移 `028`）
 
-> ⚠️ **下面这段 DDL 还没有对应的迁移** —— `src/migrations/` 里**没有**建 `missions` 的文件，
-> 库里也没有这张表。本期未做（跟 [12-b §B5](./12-b-需求-ai对话能力.md) 的口径一致：
-> B5 的完整状态机等 `http` 类工具开放、租户接入真实业务系统时一起做）。
-> HITL 的最小实现已经在 B3 的 `tools/` 里做了（批准记录寄在 `sessions.metadata`）。
->
-> 下面写的是**下一轮做 B5 时直接照着建的 DDL** —— 建表前记得先补一个迁移
-> （`027` 号已被字符集规范化那条占了，从 `028` 往后编号）。
+> **建表迁移**：`src/migrations/028-create-missions.ts`
+> **模型**：`src/models/Mission.ts`　**引擎**：`src/workflows/engine.ts`
+> 需求见 [12-b §B5 / §B5.1](./12-b-需求-ai对话能力.md)。
 
 ```sql
 CREATE TABLE missions (
-  id VARCHAR(36) PRIMARY KEY COMMENT 'UUID',
+  id VARCHAR(36) PRIMARY KEY COMMENT '任务 id（nanoid 21）',
   tenant_id VARCHAR(36) NOT NULL COMMENT '所属租户',
-  session_id VARCHAR(36) COMMENT '触发的会话（NULL 表示非对话触发的后台任务）',
-  type VARCHAR(100) NOT NULL COMMENT '任务类型（如 modify_order / issue_ticket）',
-  state ENUM('pending', 'running', 'awaiting_confirmation', 'completed', 'failed', 'cancelled') DEFAULT 'pending' COMMENT '任务状态机',
-  is_sensitive BOOLEAN DEFAULT FALSE COMMENT '是否敏感操作（true 需 HITL 确认）',
-  context JSON COMMENT '任务输入上下文（订单 ID、改地址等）',
-  result JSON COMMENT '任务执行结果',
+  session_id VARCHAR(36) COMMENT '触发的会话（后台任务为空）',
+  user_id VARCHAR(36) COMMENT '触发者（匿名挂件 / 对外 API 为空）',
+  type VARCHAR(100) NOT NULL COMMENT '流程类型（refund_request / modify_address / after_sale_ticket）',
+  state ENUM('pending','running','awaiting_confirmation','completed','failed','cancelled') DEFAULT 'pending' COMMENT '任务状态机',
+  is_sensitive BOOLEAN DEFAULT FALSE COMMENT '是否含敏感操作（true 需 HITL 确认）',
+  current_step VARCHAR(100) COMMENT '当前节点 id（断点恢复靠它知道从哪继续）',
+  approval_key VARCHAR(255) COMMENT '用户批准的那次工具调用（工具名:入参指纹）',
+  context JSON COMMENT '流程收集到的中间数据（订单信息、优惠信息…）',
+  result JSON COMMENT '流程最终结果',
+  expires_at DATETIME(6) COMMENT '超时时间（过期 → cancelled）',
   created_at DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6) COMMENT '创建时间',
   updated_at DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6) COMMENT '更新时间',
   INDEX idx_session (session_id),
   INDEX idx_tenant_state (tenant_id, state),
-  INDEX idx_state (state, updated_at)
-) COMMENT '任务表（B5 状态机工作流 · 未做）';
+  INDEX idx_state_updated (state, updated_at),
+  INDEX idx_missions_tenant_approval (tenant_id, approval_key),
+  INDEX idx_missions_tenant_user (tenant_id, user_id, state)
+) COMMENT '任务表（B5 状态机工作流）';
 ```
 
-> ⚠️ **2026-10-25 修正**：原 DDL 只有 `idx_session` / `idx_state`，
-> **没有 `tenant_id` 开头的索引** —— 而 B5 的验收要求「`missions` 强制按 `tenant_id` 过滤」，
-> 过滤条件没索引会全表扫。补上 `idx_tenant_state (tenant_id, state)`
-> （「本租户处于某状态的任务」是这个表最常见的查询）。
+> ⚠️ **2026-10-26 相对 2026-10-25 预留版补了 5 列**（预留版只有 9 列）：
+> `user_id`（找「这个用户还有哪些任务没结束」）、
+> `current_step`（断点恢复要知道从哪个节点继续）、
+> `approval_key`（批准/拒绝时定位到具体那条任务）、
+> `expires_at`（超时自动取消），
+> 以及 `idx_missions_tenant_approval` / `idx_missions_tenant_user` 两个索引。
 >
-> （`missions` 的 `tenant_id` 列本身原来就有，这次只补索引。）
+> ⚠️ **`approval_key` 为什么要有索引**：用户点「确认执行」时，
+> 后端要按「租户 + 会话 + 这次调用的审批键」找到那条任务并把它从
+> `awaiting_confirmation` 转成 `running`。没索引就是全表扫。
+>
+> ⚠️ **`idx_state_updated` 改名了**：预留版叫 `idx_state`，
+> 实际建表时按 `(state, updated_at)` 的组合命名，跟仓库里其他索引的命名习惯对齐。
+
+#### 工具调用流水加了一档状态（迁移 `029`）
+
+`tool_call_logs.status` 的 ENUM 加了 **`blocked`** ——
+B5 工作流闸门的新拦截路径：「前置步骤没满足」（模型想直接提交退款，
+但还没查过订单，闸门拦住并告诉它先查）。
+
+它既不是 `awaiting_confirmation`（没人要点头），也不是 `rejected`（用户没拒绝），
+也不是 `error`（不是失败）—— 是**流程约束**。混用任何一个都会让后台筛选失真。
+
 
 ### 评测集表（evaluation_datasets / evaluation_items）✅ D1 已落地 2026-10-24
 
@@ -775,6 +794,54 @@ CREATE TABLE user_memories (
 >
 > **不加外键**：跟 `evaluation_*` / `cost_logs` / `traces` 一致 ——
 > 记忆要跨子系统查，外键只会拖慢写入。
+
+---
+
+### 多代理批次表（agent_runs · B6 多代理协作）✅ 已落地 2026-10-26
+
+> **建表迁移**：`src/migrations/032-create-agent-runs.ts`
+> **模型**：`src/models/AgentRun.ts` / `src/models/AgentStep.ts`
+
+```sql
+CREATE TABLE agent_runs (
+  id VARCHAR(36) PRIMARY KEY COMMENT '批次 id（nanoid 21）',
+  tenant_id VARCHAR(36) NOT NULL COMMENT '所属租户',
+  session_id VARCHAR(36) COMMENT '触发的会话',
+  user_id VARCHAR(36) COMMENT '触发者（匿名挂件 / 对外 API 为空）',
+  turn_id VARCHAR(36) COMMENT '触发这轮对话的 assistant 消息 id —— 定位「本轮」的批次',
+  question TEXT NOT NULL COMMENT '触发这次多代理的原始问题',
+  state ENUM('running','completed','failed') DEFAULT 'running' COMMENT '批次状态',
+  shared_state JSON COMMENT '共享状态：{ agent_key: 产出 }（子代理之间靠它协作）',
+  result JSON COMMENT '最终结果',
+  created_at DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6) COMMENT '创建时间',
+  updated_at DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6) COMMENT '更新时间',
+  INDEX idx_agent_runs_session (session_id),
+  INDEX idx_agent_runs_tenant_turn (tenant_id, turn_id)
+) COMMENT '多代理批次（B6 多代理协作）';
+
+CREATE TABLE agent_steps (
+  id VARCHAR(36) PRIMARY KEY COMMENT '步骤 id（nanoid 21）',
+  tenant_id VARCHAR(36) NOT NULL COMMENT '所属租户',
+  run_id VARCHAR(36) NOT NULL COMMENT '所属批次',
+  agent VARCHAR(64) NOT NULL COMMENT '子代理角色 key',
+  task TEXT NOT NULL COMMENT '子任务描述',
+  output JSON COMMENT '子代理产出',
+  state ENUM('ok','failed') DEFAULT 'ok' COMMENT '这一步的结果',
+  error VARCHAR(1000) COMMENT '失败原因',
+  span_id VARCHAR(36) COMMENT '关联的 trace span（调用树靠它）',
+  created_at DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6) COMMENT '调用时间',
+  INDEX idx_agent_steps_run (run_id, created_at),
+  INDEX idx_agent_steps_tenant (tenant_id)
+) COMMENT '多代理的每一步（B6 · 调用树）';
+```
+
+> ⚠️ **为什么是独立两张表，不塞进 `sessions.metadata`**：
+> ① metadata 每轮对话都要读，多代理的产出（几个 KB）会拖慢每一轮；
+> ② metadata 是 JSON 列没有独立索引，「查这个会话跑过哪些批次」只能全表扫；
+> ③ 共享状态会**越滚越大**（每个子代理的产出都进去）。
+
+> ⚠️ **`turn_id` 是「本轮」的锚点**：一轮对话里主 agent 派的每一次活
+> 属于**同一个批次**（共享状态互通），下一轮就是新批次。
 
 ---
 

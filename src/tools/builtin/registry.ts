@@ -5,6 +5,8 @@ import { queryShippingTrack } from './shipping';
 import { queryCouponInfo } from './coupon';
 import { listKnowledgeDocuments } from './knowledge';
 import { submitRefundRequest } from './refund';
+import { updateShippingAddress } from './address';
+import { createAfterSaleTicket } from './ticket';
 
 /**
  * 内置工具注册表 —— 代码侧的全部可用实现
@@ -17,6 +19,10 @@ import { submitRefundRequest } from './refund';
  *  - mock 数据（订单 / 商品 / 物流 / 优惠券）—— 演示「AI 能拿到知识库之外的实时数据」
  *  - 真实数据（知识库文档清单）—— 演示「工具能触到真实库」
  *  - 敏感操作（提交退款申请）—— 演示 HITL 人工确认
+ *
+ * 2026-10-26 补了两个（B5 工作流落地需要）：`update_shipping_address` /
+ * `create_after_sale_ticket` —— 它们是流程 `modify_address` / `after_sale_ticket`
+ * 的**触发节点**（见 docs/12-b §B5.1）。
  */
 export const BUILTIN_TOOLS: Record<string, BuiltinTool> = {
   [queryOrderStatus.key]: queryOrderStatus,
@@ -25,6 +31,8 @@ export const BUILTIN_TOOLS: Record<string, BuiltinTool> = {
   [queryCouponInfo.key]: queryCouponInfo,
   [listKnowledgeDocuments.key]: listKnowledgeDocuments,
   [submitRefundRequest.key]: submitRefundRequest,
+  [updateShippingAddress.key]: updateShippingAddress,
+  [createAfterSaleTicket.key]: createAfterSaleTicket,
 };
 
 /** 按 key 取实现；取不到说明注册了一条指向已下架实现的记录 */

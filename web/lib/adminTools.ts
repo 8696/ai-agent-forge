@@ -16,8 +16,15 @@ import { apiErrorMessage } from './apiError';
  * 餐饮租户该写「查这个门店的订单」，物流租户该写「查运单轨迹」。
  */
 
-/** 工具类型。本轮只有 builtin 可执行（http / mcp 的出网策略还没定） */
-export type ToolType = 'builtin' | 'http' | 'mcp';
+/**
+ * 工具类型。
+ *
+ * ⚠️ **`mcp` 不开放** —— 涉及多个系统（租户那边得自己跑 MCP server），
+ *    「当前一个系统做完」做不到。见 12-e 需求裁定表 #1。
+ * ⚠️ **`http` 是「本地 mock」** —— 保留 url/method 的配置形状，
+ *    但平台**不真的发请求**。见 12-e 需求裁定表 #2。
+ */
+export type ToolType = 'builtin' | 'http';
 
 export interface ToolItem {
   id: string;
@@ -30,6 +37,12 @@ export interface ToolItem {
   builtin: string | null;
   /** 内置工具的中文名（展示用） */
   builtin_label: string | null;
+  /** http 工具的目标地址（**只做展示，平台不真出网**） */
+  url: string | null;
+  /** http 工具的方法 */
+  method: string | null;
+  /** 是不是本地 mock（http 类型永远是 true） */
+  mocked: boolean;
   enabled: boolean;
   /** 是否敏感操作（要用户确认才执行） */
   requires_confirmation: boolean;
@@ -46,11 +59,29 @@ export interface BuiltinToolInfo {
   sample_args: unknown;
 }
 
+/** http 工具的入参字段声明（后台填，平台据此生成校验 schema） */
+export interface HttpInputField {
+  name: string;
+  type: 'string' | 'number' | 'boolean';
+  required?: boolean;
+  description?: string;
+}
+
 export interface SaveToolInput {
   name: string;
   description?: string | undefined;
   type?: ToolType | undefined;
   builtin?: string | undefined;
+  /** http 工具的目标地址 */
+  url?: string | undefined;
+  /** http 工具的方法 */
+  method?: string | undefined;
+  /** http 工具的模拟响应原文（JSON 文本） */
+  mock_response?: unknown;
+  /** http 工具的模拟状态码 */
+  mock_status?: number | undefined;
+  /** http 工具的入参字段声明 */
+  input_fields?: HttpInputField[] | undefined;
   enabled?: boolean | undefined;
   requires_confirmation?: boolean | undefined;
 }

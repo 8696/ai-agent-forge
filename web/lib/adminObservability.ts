@@ -132,6 +132,33 @@ export interface ObservabilitySummary {
   trend: Array<{ date: string; conversations: number; cost: number; errors: number }>;
 }
 
+/**
+ * 告警规则（GET /observability/alerts/rules）
+ *
+ * 三条固定规则：p95 延迟 / 错误率 / 单条对话成本。
+ * 阈值存在租户设置里（`alert_*`），改阈值走通用配置页。
+ */
+export interface AlertRuleItem {
+  key: 'p95_latency' | 'error_rate' | 'single_cost';
+  name: string;
+  /** 条件的文字描述 */
+  condition: string;
+  unit: 'ms' | 'percent' | 'usd';
+  /** 当前阈值（0 = 这一条被关掉了） */
+  threshold: number;
+  /** 平台默认值 */
+  default_threshold: number;
+  /** 今天这一条的实际值 */
+  current_value: number | null;
+  /** 现在是不是触发中 */
+  firing: boolean;
+}
+
+export async function fetchAlertRules(): Promise<AlertRuleItem[]> {
+  const { data } = await adminApi.get<{ rules: AlertRuleItem[] }>('/observability/alerts/rules');
+  return data.rules;
+}
+
 export async function fetchSummary(): Promise<ObservabilitySummary> {
   const { data } = await adminApi.get<ObservabilitySummary>('/observability/summary');
   return data;

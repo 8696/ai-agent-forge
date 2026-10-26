@@ -10,6 +10,7 @@ import {
   type UserMemoryStatus,
 } from '../models';
 import { logger } from '../logger';
+import { withModelFallback } from '../lib/llm-failover';
 import { withRetry } from '../lib/retry';
 import { config } from '../config';
 import { estimateTokens } from '../lib/token-estimate';
@@ -21,6 +22,7 @@ import { recordLlmUsage } from './cost-tracking';
 import { getSettingValue, getSettingValues } from './tenant-settings';
 import { MEMORY_EXTRACT_SYSTEM_PROMPT, renderMemoryExtractInput } from '../prompts/memory';
 import { resolveExtractionLlm, type ResolvedLlmSettings } from './llm-settings';
+import type { ResolvedFallbackModel } from './tenant-models';
 import { startTrace, type TraceHandle } from './trace';
 
 /**
@@ -1169,10 +1171,6 @@ async function runExtraction(params: {
   });
 
   // 7) 调抽取模型
-  const anthropic = createAnthropic({
-    apiKey: extractionLlm.apiKey,
-    baseURL: extractionLlm.baseUrl,
-  });
   const llmSpan = params.trace.span('llm.extract', 'llm', {
     model: extractionLlm.model,
     provider: extractionLlm.provider,
@@ -1182,44 +1180,54 @@ async function runExtraction(params: {
   let result: Awaited<ReturnType<typeof generateText>>;
   try {
     // ⚠️ maxRetries: 0 —— 重试统一由 withRetry 负责（带抖动，见 src/lib/retry.ts）
-    result = await withRetry(
-      () =>
-        generateText({
-          model: anthropic(extractionLlm.model),
-          system: MEMORY_EXTRACT_SYSTEM_PROMPT,
-          messages: [
-            {
-              role: 'user',
-              content: renderMemoryExtractInput({
-                userText: params.userText,
-                assistantText: params.assistantText,
-                existing: existing.map((m) => ({
-                  id: m.id,
-                  category: m.category,
-                  content: m.content,
-                  source: m.source,
-                })),
-              }),
+    //
+    // ⚠️ **外层套 withModelFallback**（C4 备用模型）：重试全失败后切备用模型再试一次。
+    //    抽取是**非流式**调用 —— 失败就是失败，切过去没有「已吐内容收不回来」的问题。
+    result = await withModelFallback({
+      primary: extractionLlm,
+      fallback: extractionLlm.fallback,
+      call: (target) =>
+        withRetry(
+          () => {
+            const client = createAnthropic({ apiKey: target.apiKey, baseURL: target.baseUrl });
+            return generateText({
+              model: client(target.model),
+              system: MEMORY_EXTRACT_SYSTEM_PROMPT,
+              messages: [
+                {
+                  role: 'user',
+                  content: renderMemoryExtractInput({
+                    userText: params.userText,
+                    assistantText: params.assistantText,
+                    existing: existing.map((m) => ({
+                      id: m.id,
+                      category: m.category,
+                      content: m.content,
+                      source: m.source,
+                    })),
+                  }),
+                },
+              ],
+              temperature: 0,
+              // ⚠️ 上限要给够：推理型模型（glm-5.3 等）的思考 token 也算输出 token，
+              //    给 800 的话它刚想完就快到顶了，JSON 会被截断 → 解析出来是空。
+              //    条目里配的 max_output_tokens 可能偏小，这里取「至少 2000」——
+              //    租户可以调大，但调小到会截断 JSON 的程度没有意义。
+              maxOutputTokens: Math.max(MIN_EXTRACT_OUTPUT_TOKENS, target.maxOutputTokens ?? 0),
+              abortSignal: AbortSignal.timeout(config.MEMORY.EXTRACT_TIMEOUT_MS),
+              maxRetries: 0,
+            });
+          },
+          {
+            onRetry: (attempt: number, delayMs: number, err: unknown) => {
+              logger.warn(
+                { attempt, delayMs, err: err instanceof Error ? err.message : String(err) },
+                'LLM 调用失败，准备重试',
+              );
             },
-          ],
-          temperature: 0,
-          // ⚠️ 上限要给够：推理型模型（glm-5.3 等）的思考 token 也算输出 token，
-          //    给 800 的话它刚想完就快到顶了，JSON 会被截断 → 解析出来是空。
-          //    条目里配的 max_output_tokens 可能偏小，这里取「至少 2000」——
-          //    租户可以调大，但调小到会截断 JSON 的程度没有意义。
-          maxOutputTokens: Math.max(MIN_EXTRACT_OUTPUT_TOKENS, extractionLlm.maxOutputTokens ?? 0),
-          abortSignal: AbortSignal.timeout(config.MEMORY.EXTRACT_TIMEOUT_MS),
-          maxRetries: 0,
-        }),
-      {
-        onRetry: (attempt: number, delayMs: number, err: unknown) => {
-          logger.warn(
-            { attempt, delayMs, err: err instanceof Error ? err.message : String(err) },
-            'LLM 调用失败，准备重试',
-          );
-        },
-      },
-    );
+          },
+        ),
+    });
     llmSpan.end({
       input_tokens: result.usage.inputTokens ?? 0,
       output_tokens: result.usage.outputTokens ?? 0,
@@ -1351,6 +1359,8 @@ async function resolveExtractionLlmSafely(
   provider: string;
   maxOutputTokens: number | null;
   source: string;
+  /** 备用模型（C4）—— 抽取失败时顶上来的那条 */
+  fallback: ResolvedFallbackModel | null;
 }> {
   try {
     const resolved = await resolveExtractionLlm(tenantId);
@@ -1367,6 +1377,7 @@ async function resolveExtractionLlmSafely(
       provider: resolved.provider,
       maxOutputTokens: null,
       source: resolved.source,
+      fallback: resolved.fallback,
     };
   } catch (err: unknown) {
     logger.warn(
@@ -1380,6 +1391,8 @@ async function resolveExtractionLlmSafely(
       provider: fallback.provider,
       maxOutputTokens: fallback.maxOutputTokens,
       source: 'fallback-chat',
+      // 回落成对话模型了，备用也跟着换成对话模型的备用
+      fallback: fallback.fallback,
     };
   }
 }

@@ -14,6 +14,7 @@ const SPAN_KIND_META: Record<string, { label: string; color: string }> = {
   cost: { label: '成本记账', color: 'gold' },
   storage: { label: '存储', color: 'green' },
   step: { label: '步骤', color: 'default' },
+  agent: { label: '子代理', color: 'geekblue' },
 };
 
 export function spanMeta(kind: string): { label: string; color: string } {
@@ -28,8 +29,14 @@ export function spanMeta(kind: string): { label: string; color: string } {
  * 「哪一步慢」是这一页存在的唯一理由 —— 总耗时只能告诉你「有问题」，
  * 时间线才能告诉你「问题在哪」。
  *
- * ⚠️ 2026-10-25：从 `ObservabilityTraceDetailPage` 里抽出来的 —— 规格 §7 列了这个组件，
- *    以前那段逻辑内联在页面里。
+ * ## 调用树（B6 多代理）
+ *
+ * ⚠️ **2026-10-26**：span 现在支持父子关系（`parent_span_id`）——
+ *    多代理的子代理调用挂在主 agent 的 `llm.generate` span 下面，
+ *    这里按父子关系**缩进渲染**，一眼能看出「哪个代理被派了什么活」。
+ *
+ *    没有 `parent_span_id` 的 span（老数据 / 顶层 span）当根节点。
+ *    父节点不在列表里的（理论上不会）也当根节点 —— 不让数据异常把 span 弄丢。
  */
 export function TraceTimeline({ spans }: { spans: TraceSpan[] }): ReactElement {
   /** 展开中的 span id（null = 都没展开） */
@@ -39,46 +46,71 @@ export function TraceTimeline({ spans }: { spans: TraceSpan[] }): ReactElement {
     return <Empty description="这次调用没有记录 span" />;
   }
 
-  return (
-    <>
-      {spans.map((span) => {
-        const meta = spanMeta(span.kind);
-        const expanded = openSpan === span.id;
-        return (
-          <Card
-            key={span.id}
-            size="small"
-            style={{ marginBottom: 8 }}
-            styles={{ body: { padding: 12 } }}
-            onClick={() => setOpenSpan(expanded ? null : span.id)}
-          >
-            <Space orientation="vertical" size={6} style={{ width: '100%' }}>
-              <Space wrap size={8}>
-                <Text type="secondary" style={{ fontSize: 12, fontFamily: 'monospace' }}>
-                  {new Date(span.started_at).toLocaleTimeString()}
-                </Text>
-                <Tag color={meta.color}>{meta.label}</Tag>
-                <Text strong>{span.name}</Text>
-                <Text type="secondary">{span.duration_ms ?? 0} ms</Text>
-                {span.status === 'error' && <Tag color="red">失败</Tag>}
-              </Space>
-              {span.error_message !== null && (
-                <Text type="danger" style={{ fontSize: 12 }}>
-                  {span.error_message}
-                </Text>
-              )}
-              {expanded && (
-                <Space orientation="vertical" size={8} style={{ width: '100%' }}>
-                  <JsonBlock title="入参" value={span.input} />
-                  <JsonBlock title="出参" value={span.output} />
-                </Space>
+  const byId = new Map(spans.map((s) => [s.id, s]));
+  const childrenOf = new Map<string | null, TraceSpan[]>();
+  for (const span of spans) {
+    const parent =
+      span.parent_span_id !== null && byId.has(span.parent_span_id)
+        ? span.parent_span_id
+        : null;
+    const list = childrenOf.get(parent);
+    if (list === undefined) {
+      childrenOf.set(parent, [span]);
+    } else {
+      list.push(span);
+    }
+  }
+
+  const renderBranch = (span: TraceSpan, depth: number): ReactElement => {
+    const meta = spanMeta(span.kind);
+    const expanded = openSpan === span.id;
+    const children = childrenOf.get(span.id) ?? [];
+    return (
+      <div key={span.id} style={{ marginLeft: depth === 0 ? 0 : 20 }}>
+        {depth > 0 && (
+          <Text type="secondary" style={{ fontSize: 11, marginLeft: 2 }}>
+            └
+          </Text>
+        )}
+        <Card
+          size="small"
+          style={{ marginBottom: 8 }}
+          styles={{ body: { padding: 12 } }}
+          onClick={() => setOpenSpan(expanded ? null : span.id)}
+        >
+          <Space orientation="vertical" size={6} style={{ width: '100%' }}>
+            <Space wrap size={8}>
+              <Text type="secondary" style={{ fontSize: 12, fontFamily: 'monospace' }}>
+                {new Date(span.started_at).toLocaleTimeString()}
+              </Text>
+              <Tag color={meta.color}>{meta.label}</Tag>
+              <Text strong>{span.name}</Text>
+              <Text type="secondary">{span.duration_ms ?? 0} ms</Text>
+              {span.status === 'error' && <Tag color="red">失败</Tag>}
+              {children.length > 0 && (
+                <Tag color="geekblue">{children.length} 个子调用</Tag>
               )}
             </Space>
-          </Card>
-        );
-      })}
-    </>
-  );
+            {span.error_message !== null && (
+              <Text type="danger" style={{ fontSize: 12 }}>
+                {span.error_message}
+              </Text>
+            )}
+            {expanded && (
+              <Space orientation="vertical" size={8} style={{ width: '100%' }}>
+                <JsonBlock title="入参" value={span.input} />
+                <JsonBlock title="出参" value={span.output} />
+              </Space>
+            )}
+          </Space>
+        </Card>
+        {children.map((child) => renderBranch(child, depth + 1))}
+      </div>
+    );
+  };
+
+  const roots = childrenOf.get(null) ?? [];
+  return <>{roots.map((span) => renderBranch(span, 0))}</>;
 }
 
 /** 入参 / 出参的 JSON 展示块 */

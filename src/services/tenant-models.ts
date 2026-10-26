@@ -36,6 +36,8 @@ export interface TenantModelView {
   is_active: boolean;
   /** 用途：chat=对话模型 / memory=记忆抽取模型 */
   usage_scope: ModelUsageScope;
+  /** 备用模型 id（C4）—— null = 没配 */
+  fallback_model_id: string | null;
   updated_at: string;
 }
 
@@ -54,6 +56,8 @@ export function toModelView(row: TenantModel): TenantModelView {
     prompt_cache_enabled: row.prompt_cache_enabled,
     is_active: row.is_active,
     usage_scope: row.usage_scope,
+    /** 备用模型 id（C4）—— null = 没配 */
+    fallback_model_id: row.fallback_model_id ?? null,
     updated_at: row.updated_at.toISOString(),
   };
 }
@@ -86,6 +90,11 @@ export interface UpsertModelInput {
   prompt_cache_enabled: boolean;
   /** 用途；不传 = chat（对话模型） */
   usage_scope?: ModelUsageScope | undefined;
+  /**
+   * 备用模型（指向同租户**同 scope**的另一条模型条目）。
+   * undefined = 不改；null = 取消备用；'xxx' = 换新。
+   */
+  fallback_model_id?: string | null | undefined;
 }
 
 export async function createTenantModel(
@@ -124,6 +133,12 @@ export async function createTenantModel(
         prompt_cache_enabled: input.prompt_cache_enabled,
         usage_scope: scope,
         is_active: existingCount === 0,
+        fallback_model_id: await normalizeFallbackId({
+          tenantId,
+          scope,
+          selfId: null,
+          fallbackId: input.fallback_model_id ?? null,
+        }),
         updated_by: userId,
       },
       { transaction: t },
@@ -168,6 +183,14 @@ export async function updateTenantModel(
   row.temperature = input.temperature;
   row.max_output_tokens = input.max_output_tokens;
   row.prompt_cache_enabled = input.prompt_cache_enabled;
+  if (input.fallback_model_id !== undefined) {
+    row.fallback_model_id = await normalizeFallbackId({
+      tenantId,
+      scope: row.usage_scope,
+      selfId: row.id,
+      fallbackId: input.fallback_model_id,
+    });
+  }
   if (normalized !== null) {
     row.api_key_enc = normalized.encrypted.cipher;
     row.api_key_hint = normalized.encrypted.hint;
@@ -248,6 +271,18 @@ export async function deleteTenantModel(tenantId: string, id: string): Promise<v
 }
 
 /** 对话链路拿到的「启用中的那条模型」—— 密钥已解密（失败时 degraded 有值） */
+export interface ResolvedFallbackModel {
+  id: string;
+  name: string;
+  provider: string;
+  apiKey: string;
+  baseUrl: string;
+  model: string;
+  temperature: number | null;
+  maxOutputTokens: number | null;
+  promptCacheEnabled: boolean;
+}
+
 export interface ResolvedActiveModel {
   id: string;
   name: string;
@@ -260,6 +295,8 @@ export interface ResolvedActiveModel {
   promptCacheEnabled: boolean;
   /** 密钥解不开等原因导致降级时写这里；null = 一切正常 */
   degraded: string | null;
+  /** 备用模型；null = 没配（主模型失败就直接报错） */
+  fallback: ResolvedFallbackModel | null;
 }
 
 /**
@@ -300,7 +337,78 @@ export async function resolveActiveModel(
     maxOutputTokens: row.max_output_tokens,
     promptCacheEnabled: row.prompt_cache_enabled,
     degraded,
+    fallback: await resolveFallbackModel(tenantId, scope, row.fallback_model_id),
   };
+}
+
+/**
+ * 解析备用模型 —— 主模型失败时顶上来的那条。
+ *
+ * ⚠️ **备用模型的密钥解不开时当没有备用**（返回 null）——
+ *    主模型还能正常用，没必要因为备用不可用就拖垮整轮。
+ * ⚠️ 备用必须是**同租户、同 scope** 的另一条（配的时候已经校验过，
+ *    这里再查一次是防「配完之后那条模型被删了 / 改了 scope」）。
+ */
+async function resolveFallbackModel(
+  tenantId: string,
+  scope: ModelUsageScope,
+  fallbackId: string | null,
+): Promise<ResolvedFallbackModel | null> {
+  if (fallbackId === null || fallbackId === '') {
+    return null;
+  }
+  const row = await TenantModel.findOne({
+    where: { id: fallbackId, tenant_id: tenantId, usage_scope: scope },
+  });
+  if (row === null) {
+    logger.warn({ tenantId, scope, fallbackId }, '备用模型不存在或已改用途，按没有备用处理');
+    return null;
+  }
+  try {
+    return {
+      id: row.id,
+      name: row.name,
+      provider: row.provider ?? 'custom',
+      apiKey: decryptSecret(row.api_key_enc),
+      baseUrl: row.base_url,
+      model: row.model_id,
+      temperature: row.temperature === null ? null : Number(row.temperature),
+      maxOutputTokens: row.max_output_tokens,
+      promptCacheEnabled: row.prompt_cache_enabled,
+    };
+  } catch (err: unknown) {
+    logger.error({ err, tenantId, modelId: row.id }, '备用模型密钥不可用，按没有备用处理');
+    return null;
+  }
+}
+
+/**
+ * 校验「备用模型」指向的条目 —— 必须是**同租户、同 scope**的另一条。
+ *
+ * ⚠️ 跨租户 / 跨用途都拒绝：chat 的备用不能是 memory 的
+ *    （用途不同、成本也不同 —— 拿抽取用的便宜模型顶对话是事故）。
+ */
+async function normalizeFallbackId(params: {
+  tenantId: string;
+  scope: ModelUsageScope;
+  selfId: string | null;
+  fallbackId: string | null;
+}): Promise<string | null> {
+  const id = params.fallbackId;
+  if (id === null || id === '') {
+    return null;
+  }
+  if (params.selfId !== null && id === params.selfId) {
+    throw new ValidationError('备用模型不能是它自己');
+  }
+  const row = await TenantModel.findOne({
+    where: { id, tenant_id: params.tenantId, usage_scope: params.scope },
+    attributes: ['id'],
+  });
+  if (row === null) {
+    throw new ValidationError('备用模型必须是本租户、同一用途下的另一条模型');
+  }
+  return id;
 }
 
 // ============================================================

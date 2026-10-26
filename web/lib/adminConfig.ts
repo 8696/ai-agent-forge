@@ -53,6 +53,8 @@ export interface TenantModelItem {
   is_active: boolean;
   /** 用途：chat=对话模型 / memory=记忆抽取模型 / summary=会话摘要模型 */
   usage_scope: ModelUsageScope;
+  /** 备用模型 id（C4）—— null = 没配 */
+  fallback_model_id: string | null;
   updated_at: string;
 }
 
@@ -68,6 +70,8 @@ export interface SaveModelInput {
   prompt_cache_enabled?: boolean;
   /** 用途；不带 = chat */
   usage_scope?: ModelUsageScope;
+  /** 备用模型 id（C4）；不带 = 不改（编辑时）；null = 取消备用 */
+  fallback_model_id?: string | null;
 }
 
 export interface ModelTestResult {

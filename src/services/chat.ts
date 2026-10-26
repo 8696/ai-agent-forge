@@ -11,6 +11,7 @@ import {
   type LanguageModelUsage,
   type ModelMessage,
   type SystemModelMessage,
+  type ToolSet,
   type UIMessageStreamWriterWithOutcome,
 } from 'ai';
 import type { ChatDataTypes, ChatUIMessage } from '@shared/types/chat';
@@ -53,6 +54,9 @@ import { extractAndApplyMemories } from './memory';
 import type { SpanHandle, TraceHandle } from './trace';
 import { renderToolsBlock, type ToolApprovalHint } from '@shared/prompts/chat/tools';
 import { approvalKey, buildToolSet, type ToolRuntime } from '../tools/execute';
+import { evaluateGate, recordStepSuccess } from '../workflows/engine';
+import { failoverTextStream, type LlmTarget } from '../lib/llm-failover';
+import { createDelegateTool } from '../tools/delegate';
 import { markToolExecuted } from './tool-approvals';
 import { writeToolCallLog } from './tool-call-logs';
 import type { ResolvedTool } from '../tools/resolve';
@@ -162,8 +166,15 @@ export async function listSessions(
   actor: SessionActor,
   page: number,
   pageSize: number,
+  /** 只看收藏的（12-e 裁定表 #7） */
+  favoriteOnly = false,
 ): Promise<SessionListResult> {
-  const where = { tenant_id: actor.tenantId, user_id: actor.userId };
+  const where = {
+    tenant_id: actor.tenantId,
+    user_id: actor.userId,
+    // ⚠️ 收藏筛选带在 where 里 —— `favoriteOnly` 时只回收藏的会话
+    ...(favoriteOnly ? { favorite: true } : {}),
+  };
   const { rows, count } = await Session.findAndCountAll({
     where,
     order: [['started_at', 'DESC']],
@@ -192,6 +203,7 @@ export async function listSessions(
       title: s.title,
       status: s.status,
       channel: s.channel,
+      favorite: s.favorite,
       message_count: countBySession.get(s.id) ?? 0,
       started_at: s.started_at.toISOString(),
       last_message_at: (lastAtBySession.get(s.id) ?? s.started_at).toISOString(),
@@ -220,6 +232,23 @@ export async function renameSession(
 export async function deleteSession(id: string, actor: SessionActor): Promise<void> {
   const session = await loadOwnedSession(id, actor);
   await session.destroy();
+}
+
+/**
+ * 收藏 / 取消收藏一个会话（12-e 需求裁定表 #7）
+ *
+ * `favorite` 传 null = 切换（收藏↔取消），传 true/false = 设成指定状态。
+ * 返回切换后的状态。
+ */
+export async function setSessionFavorite(
+  id: string,
+  actor: SessionActor,
+  favorite: boolean | null,
+): Promise<boolean> {
+  const session = await loadOwnedSession(id, actor);
+  session.favorite = favorite === null ? !session.favorite : favorite;
+  await session.save();
+  return session.favorite;
 }
 
 // ============================================================
@@ -514,6 +543,16 @@ export interface BuildContextInput {
    * 空串 = 这个租户没有启用任何工具。
    */
   toolsText?: string | null;
+  /**
+   * 进行中的工作流进度段（B5）—— 由路由层查好传进来。
+   *
+   * ⚠️ **这是「断点恢复」的补偿手段**：本项目的流程是**模型驱动**的
+   *   （推动流程前进的是模型调工具，不是引擎自己往下走），
+   *   所以进程重启 / 会话隔天回来之后，得靠这段提示告诉模型
+   *   「刚才那件事走到哪了，接着做」。
+   *   空串 = 当前没有进行中的任务。
+   */
+  workflowText?: string | null;
 }
 
 /**
@@ -590,6 +629,7 @@ export function buildContextWindow(input: BuildContextInput): ContextWindow {
     summaryText: summaryBlock,
     memoryText,
     toolsText: input.toolsText ?? '',
+    workflowText: input.workflowText ?? '',
     hits: keptHits,
     // 没命中时给模型一句明话，避免它凭印象编；
     // 检索整体故障时用另一句措辞，用户能从 UI 上看出是系统问题
@@ -766,6 +806,21 @@ export interface StreamContext {
    * 光靠用户回一句「确认」，模型可能只回「好的」就完了，工具永远没跑。
    */
   pendingToolApprovals?: ToolApprovalHint[];
+  /**
+   * 多代理协作开不开（B6）—— 租户级开关（`multi_agent_enabled`）。
+   *
+   * ⚠️ **默认开**：主 agent 自己决定要不要派活，不是每个问题都派。
+   *    租户嫌贵可以关掉 —— 多代理每次委派都是**额外一次 LLM 调用**。
+   */
+  multiAgentEnabled?: boolean;
+  /**
+   * 进行中的工作流进度段（B5）—— **由路由层在开流之前查好传进来**。
+   *
+   * 空串 / undefined = 当前没有进行中的任务。
+   * 这段是「断点恢复」的关键：模型驱动的流程不会自己往前走，
+   * 得靠提示告诉模型「刚才那件事走到哪了」。
+   */
+  workflowHint?: string | null;
   /**
    * 观测句柄（D2）。路由层创建、这里消费：
    * 检索 / 调模型 / 记账三段各自记成 span，流结束时把 trace 收掉。
@@ -949,10 +1004,43 @@ export function createChatStream(ctxData: StreamContext) {
         // 工具名 → 用户已确认的那份入参
         approvedArgs: ctxData.toolApprovedArgs ?? new Map<string, unknown>(),
         // 每次工具调用记一条 span（docs/12-b §B3 验收：写一条 span）
-        span: (name, kind, input) => ctxData.trace?.span(name, kind, input),
+        // ⚠️ **第 4 个参数（父 span id）必须转发** —— 不转发的话工具调用的 span
+        //    全是顶层节点，调用树是断的（B6 多代理要求「模型调用 → 子代理调用」看得出层级）
+        span: (name, kind, input, parentSpanId) =>
+          ctxData.trace?.span(name, kind, input, parentSpanId ?? null),
         // 敏感工具真的跑完了 → 这条批准用掉了，别再提醒模型
         onExecuted: (toolName, args) => {
           void markToolExecuted(session.id, session.tenant_id, approvalKey(toolName, args));
+        },
+        // 工具调用的 span 挂在主 agent 的 llm.generate 下面（调用树）
+        // ⚠️ 用 getter —— 工具执行发生在流式生成期间，那时 llm span 才刚建好
+        parentSpanId: () => llmSpanHolder.span?.id ?? null,
+        // ---- 工作流闸门（B5）----
+        //
+        // 问引擎「这一步能不能走」。引擎内部**完全接管**闸门判断：
+        // 它已经覆盖了 B3 的敏感工具规则，还多了「前置步骤没做完 → 拦住并告诉模型先做什么」。
+        gate: async ({ toolName, builtin, args, sensitive }) =>
+          evaluateGate({
+            tenantId: session.tenant_id,
+            sessionId: session.id,
+            userId: session.user_id ?? null,
+            toolName,
+            builtin,
+            args,
+            sensitive,
+            approvals: ctxData.toolApprovals ?? new Set<string>(),
+            rejections: ctxData.toolRejections ?? new Set<string>(),
+            approvedArgs: ctxData.toolApprovedArgs ?? new Map<string, unknown>(),
+          }),
+        // 流程进度（B5）：节点执行成功 → 记进度、推状态
+        onToolSucceeded: async (info) => {
+          await recordStepSuccess({
+            tenantId: session.tenant_id,
+            missionId: info.missionId,
+            nodeId: info.nodeId,
+            builtin: info.builtin,
+            output: info.output,
+          });
         },
         // 工具调用结束 → ① 落一条 data-tool-call part（刷新页面后卡片还在）
         //                 ② 写一条工具调用流水（后台「工具调用记录」页读它）
@@ -975,6 +1063,29 @@ export function createChatStream(ctxData: StreamContext) {
       };
       const toolSet = buildToolSet(resolvedTools, toolRuntime);
 
+      // ---- 多代理（B6 · 监督者模式）----
+      //
+      // 租户开了才挂 `delegate_to_agent` —— 主 agent 通过它把子任务派给专业子代理。
+      // ⚠️ 委派是**额外的一次 LLM 调用**（子代理自己跑一轮），成本比普通工具高。
+      const delegateTool =
+        ctxData.multiAgentEnabled === true
+          ? createDelegateTool({
+              tenantId: session.tenant_id,
+              sessionId: session.id,
+              userId: session.user_id ?? null,
+              // 「本轮」的标识 —— 一轮对话里的多次委派属于同一个批次（共享状态互通）
+              turnId: assistantRowId,
+              question: ctxData.userText,
+              llm,
+              trace: ctxData.trace ?? null,
+              // 主 agent 的 llm span —— 子代理的 span 挂在它下面（调用树）
+              parentSpanId: () => llmSpanHolder.span?.id ?? null,
+              // 上报这次委派 → 前端能看到「AI 派了个活给 XX 代理」
+              report: toolRuntime.onCall,
+            })
+          : {};
+      const allTools: ToolSet = { ...toolSet, ...delegateTool };
+
       // ---- 组装上下文 ----
       const window = buildContextWindow({
         tenantName,
@@ -990,6 +1101,7 @@ export function createChatStream(ctxData: StreamContext) {
         summaryState: ctxData.summaryState ?? null,
         memoryText: ctxData.memoryText ?? '',
         toolsText,
+        workflowText: ctxData.workflowHint ?? '',
       });
 
       // 引用片段**必须带 id**：AI SDK 客户端对 data part 的去重只在 `chunk.id != null`
@@ -1105,12 +1217,18 @@ export function createChatStream(ctxData: StreamContext) {
         throw new CircuitOpenError(`${llm.provider}|${llm.baseUrl}`);
       }
 
-      const result = streamText({
-        model: anthropic(llm.model),
+      // 起一次模型调用 —— 主模型和**备用模型**走同一条路（只有连接配置不同）。
+      //
+      // ⚠️ 备用模型不是「另一个模型 id」，而是**租户配的另一条模型条目**
+      //    （自己的 apiKey / baseUrl / 温度 / 输出上限）—— 见 docs/12-c §C4。
+      const startGeneration = (target: LlmTarget) => {
+        const client = createAnthropic({ apiKey: target.apiKey, baseURL: target.baseUrl });
+        return streamText({
+        model: client(target.model),
         system: systemMessage,
         messages: window.history,
-        temperature: llm.temperature,
-        maxOutputTokens: llm.maxOutputTokens,
+        temperature: target.temperature ?? llm.temperature,
+        maxOutputTokens: target.maxOutputTokens ?? llm.maxOutputTokens,
         // ---- 工具（B3 工具调用）----
         //
         // AI SDK 的**自动工具循环**：模型说要工具 → SDK 调 execute →
@@ -1119,8 +1237,8 @@ export function createChatStream(ctxData: StreamContext) {
         //
         // 步数上限防死循环：模型拿不到想要的数据时可能反复调同一个工具，
         // 没有上限就是一次对话烧掉几十次 LLM 调用。
-        ...(Object.keys(toolSet).length > 0
-          ? { tools: toolSet, stopWhen: stepCountIs(TOOL_MAX_STEPS) }
+        ...(Object.keys(allTools).length > 0
+          ? { tools: allTools, stopWhen: stepCountIs(TOOL_MAX_STEPS) }
           : {}),
         // 思考模式：各 provider 对 thinking 参数的支持程度不同，
         // 打开前先在目标 provider 上验一轮（docs/06 §6.4）
@@ -1136,7 +1254,10 @@ export function createChatStream(ctxData: StreamContext) {
               },
             }
           : {}),
-      });
+        });
+      };
+
+      const result = startGeneration(llm);
       // ⚠️ **用 totalUsage 不用 usage**：
       //    `usage` 是**最后一步**的用量，`totalUsage` 才是**整个工具循环**的累计。
       //    工具循环会让一轮产生多次 LLM 调用，取错就等于少记账（成本分析会偏低）。
@@ -1150,14 +1271,45 @@ export function createChatStream(ctxData: StreamContext) {
         retrieved: window.hits.length,
       });
 
+      // ---- 备用模型 failover（C4）----
+      //
+      // ⚠️ **只在「一个内容 chunk 都还没吐出去」时才切** ——
+      //    已经吐给浏览器的字收不回来：重切会导致内容重复，
+      //    重复的 tool call 还会**真的执行两遍**（提交两次退款单）。
+      //
+      // AI SDK v7 的失败形态：provider 挂掉时流里吐一个 `{type:'error'}` chunk
+      // （不是抛异常）—— 实测确认，见 src/lib/llm-failover.ts 的注释。
+      // 备用模型先取到局部变量 —— TS 的窄化（narrowing）不跨闭包保留
+      const fallbackModel = llm.fallback;
+      const failover = failoverTextStream({
+        primary: result.stream,
+        startFallback:
+          fallbackModel === null
+            ? null
+            : () => {
+                const fb = startGeneration(fallbackModel);
+                return { stream: fb.stream, usage: fb.totalUsage };
+              },
+        // 切到备用 → usage 也要换（主模型那次没产出内容，usage 基本是空的）
+        onSwitch: (usage) => {
+          generation.totalUsage = usage;
+        },
+        onFailover: () => {
+          logger.warn(
+            { primaryModel: llm.model, fallbackModel: fallbackModel?.model ?? null },
+            '主模型流失败，切备用模型重试',
+          );
+        },
+      });
+
       writer.merge(
         toUIMessageStream({
-          stream: result.stream,
+          stream: failover.stream,
           sendReasoning: true,
           // 必须传 tools —— 不传的话 SDK 不会把工具调用转成 UI part。
           // ⚠️ 前端**只渲染我们自己的 data-tool-call part**，原生 tool-* part 不渲染
           //（原生 part 不落库，刷新后会消失；data-tool-call 落库）。
-          ...(Object.keys(toolSet).length > 0 ? { tools: toolSet } : {}),
+          ...(Object.keys(allTools).length > 0 ? { tools: allTools } : {}),
         }),
       );
 
@@ -1169,7 +1321,10 @@ export function createChatStream(ctxData: StreamContext) {
       // result.text 和 result.stream 可以同时用（SDK 内部把流 tee 成两份，
       // 一份给 merge、一份给 text 的累积），但客户端断连时 text 可能永远
       // 不 resolve —— 所以套一层超时，判不出来就放行。
-      const fullText = await withTimeout(result.text, config.SECURITY.GUARD_TIMEOUT_MS, '');
+      // ⚠️ **用 failover.text 不用 result.text** ——
+      //    切了备用之后 result.text 会 reject（AI_NoOutputGeneratedError），
+      //    而备用模型的正文要**照样过输出审核**（D4）—— 不能因为换了模型就绕过审核。
+      const fullText = await withTimeout(failover.text, config.SECURITY.GUARD_TIMEOUT_MS, '');
       if (fullText.trim() !== '') {
         const verdict = await guardAssistantOutput(fullText, guardActor);
         if (verdict.blocked) {

@@ -1,6 +1,6 @@
 import type { ReactElement } from 'react';
 import { useEffect, useMemo, useState } from 'react';
-import { Alert, Button, Card, Drawer, Empty, Progress, Space, Table, Tag, Typography, message, theme } from 'antd';
+import { Alert, Button, Card, Drawer, Empty, Progress, Space, Table, Tag, Tooltip, Typography, message, theme } from 'antd';
 import type { TableColumnsType } from 'antd';
 import { ReloadOutlined } from '@ant-design/icons';
 import { PageHeader } from '../../components/shell/PageHeader';
@@ -141,6 +141,20 @@ export function EvaluationRunsPage(): ReactElement {
       width: 130,
       render: (v: string | null) =>
         v === null ? <Tag>内置默认</Tag> : <Tag color="blue">{v}</Tag>,
+    },
+    {
+      title: '触发方式',
+      dataIndex: 'trigger',
+      key: 'trigger',
+      width: 150,
+      render: (v: EvaluationRun['trigger'], row: EvaluationRun) =>
+        v === 'prompt_regression' ? (
+          <Tooltip title={`提示词发布后自动跑的小规模回归（只跑了前 ${row.item_limit ?? '?'} 题）`}>
+            <Tag color="purple">提示词回归</Tag>
+          </Tooltip>
+        ) : (
+          <Tag>手动</Tag>
+        ),
     },
     {
       title: '模型',

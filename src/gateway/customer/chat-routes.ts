@@ -22,6 +22,7 @@ import {
   loadSessionUiMessages,
   parseChatRequest,
   renameSession,
+  setSessionFavorite,
   type ChatRequestBody,
   type ParsedRequest,
 } from '../../services/chat';
@@ -40,6 +41,7 @@ import {
   loadToolApprovals,
   rejectToolApproval,
 } from '../../services/tool-approvals';
+import { buildWorkflowHint } from '../../workflows/engine';
 
 /**
  * customer 对话路由 —— 详见 docs/12-b-需求-ai对话能力.md §B1（多轮对话 + LLM 流式）
@@ -69,6 +71,11 @@ customerChatRouter.use(jwtAuth, requireCustomer);
 const listQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   page_size: z.coerce.number().int().min(1).max(100).default(20),
+  /** 只看收藏的会话（12-e 裁定表 #7） */
+  favorite: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform((v) => v === 'true'),
 });
 
 const createBodySchema = z.object({
@@ -98,7 +105,12 @@ function currentUser(ctx: Context): TenantUserJwtPayload {
 
 customerChatRouter.get('/sessions', async (ctx) => {
   const input = listQuerySchema.parse(ctx.query);
-  ctx.body = await listSessions(actorFromJwt(currentUser(ctx)), input.page, input.page_size);
+  ctx.body = await listSessions(
+    actorFromJwt(currentUser(ctx)),
+    input.page,
+    input.page_size,
+    input.favorite,
+  );
 });
 
 customerChatRouter.post('/sessions', async (ctx) => {
@@ -133,6 +145,21 @@ customerChatRouter.patch('/sessions/:id', async (ctx) => {
     input.title,
   );
   ctx.body = { id: session.id, title: session.title };
+});
+
+/**
+ * PATCH /sessions/:id/favorite —— 收藏 / 取消收藏（12-e 裁定表 #7）
+ *
+ * body 不带 / 带 null = **切换**；带 true / false = 设成指定状态。
+ */
+customerChatRouter.patch('/sessions/:id/favorite', async (ctx) => {
+  const body = (ctx.request.body ?? {}) as { favorite?: boolean | null };
+  const favorite = await setSessionFavorite(
+    ctx.params.id ?? '',
+    actorFromJwt(currentUser(ctx)),
+    body.favorite === undefined ? null : body.favorite,
+  );
+  ctx.body = { id: ctx.params.id ?? '', favorite };
 });
 
 customerChatRouter.delete('/sessions/:id', async (ctx) => {
@@ -346,6 +373,16 @@ export async function runChatTurn(options: ChatTurnOptions): Promise<ChatTurnRes
       state: p.state === 'rejected' ? ('rejected' as const) : ('approved' as const),
     }));
 
+    // 8.9) 进行中的工作流进度（B5）。同样在开流之前查好。
+    //      这是「断点恢复」的补偿手段 —— 本项目的流程是模型驱动的，
+    //      进程重启 / 隔天回来之后，得靠这段提示告诉模型「接着做」。
+    const workflowHint = await buildWorkflowHint(session.tenant_id, session.id);
+
+    // 8.10) 多代理开关（B6）。**没配 = 开**（registry 的 fallback 是 true）。
+    //       委派是额外的一次 LLM 调用，嫌贵的租户可以关掉。
+    const multiAgentRaw = await getSettingValue(session.tenant_id, 'multi_agent_enabled');
+    const multiAgentEnabled = multiAgentRaw !== false;
+
     // 9) 租户级配置：模型 / 温度 / 缓存开关（§C4）+ 生效的提示词正文（§C3）
     //    都在开流之前查完；租户没配就回落 .env 进程默认 + 内置默认提示词
     const resolvedPrompt = await resolveTenantPrompt(
@@ -377,6 +414,8 @@ export async function runChatTurn(options: ChatTurnOptions): Promise<ChatTurnRes
       toolRejections,
       toolApprovedArgs,
       pendingToolApprovals,
+      workflowHint,
+      multiAgentEnabled,
       ip: ctx.ip,
       trace,
     });

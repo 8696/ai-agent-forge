@@ -40,7 +40,16 @@ import { config } from '../config';
  */
 export type TraceKind = 'chat' | 'api' | 'evaluation' | 'memory' | 'summary';
 
-export type SpanKind = 'http' | 'retrieval' | 'llm' | 'guard' | 'cost' | 'storage' | 'step';
+export type SpanKind =
+  | 'http'
+  | 'retrieval'
+  | 'llm'
+  | 'guard'
+  | 'cost'
+  | 'storage'
+  | 'step'
+  /** B6 多代理：子代理的调用（挂在主 agent 的 llm span 下面） */
+  | 'agent';
 
 export interface TraceUsage {
   input_tokens?: number;
@@ -74,6 +83,8 @@ export interface EndTraceInput {
 
 interface SpanState {
   id: string;
+  /** 父 span 的 id；null = 顶层 span（B6 多代理的调用树靠它） */
+  parentSpanId: string | null;
   name: string;
   kind: SpanKind;
   startedAt: Date;
@@ -104,7 +115,19 @@ export interface TraceHandle {
   readonly kind: TraceKind;
   readonly channel: string | null;
   /** 开一个 span（挂在这条 trace 下） */
-  span(name: string, kind: SpanKind, input?: Record<string, unknown> | null): SpanHandle;
+  /**
+   * 开一个 span。
+   *
+   * @param parentSpanId 父 span 的 id —— **不传就是顶层 span**。
+   *   B6 多代理用它把「子代理的调用」挂到「主 agent 的 llm span」下面，
+   *   trace 详情页就能渲染成调用树。
+   */
+  span(
+    name: string,
+    kind: SpanKind,
+    input?: Record<string, unknown> | null,
+    parentSpanId?: string | null,
+  ): SpanHandle;
   /** 结束 trace 并落库（重复调用只生效一次） */
   end(input?: EndTraceInput): Promise<void>;
   /** 结束 trace 并标记为失败 */
@@ -142,9 +165,15 @@ export function startTrace(input: StartTraceInput): TraceHandle {
     kind: input.kind ?? 'chat',
     channel: input.channel ?? null,
 
-    span(name: string, kind: SpanKind, spanInput?: Record<string, unknown> | null): SpanHandle {
+    span(
+      name: string,
+      kind: SpanKind,
+      spanInput?: Record<string, unknown> | null,
+      parentSpanId?: string | null,
+    ): SpanHandle {
       const state: SpanState = {
         id: nanoid(21),
+        parentSpanId: parentSpanId ?? null,
         name,
         kind,
         startedAt: new Date(),
@@ -235,7 +264,7 @@ export function startTrace(input: StartTraceInput): TraceHandle {
                 id: s.id,
                 trace_id: id,
                 tenant_id: input.tenantId,
-                parent_span_id: null,
+                parent_span_id: s.parentSpanId,
                 name: s.name,
                 kind: s.kind,
                 status: s.status,

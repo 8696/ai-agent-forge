@@ -27,7 +27,7 @@ export interface ToolCallRecord {
   /** 内置实现 key */
   builtin: string;
   args: unknown;
-  status: 'ok' | 'error' | 'timeout' | 'awaiting_confirmation' | 'rejected';
+  status: 'ok' | 'error' | 'timeout' | 'awaiting_confirmation' | 'rejected' | 'blocked';
   output: unknown;
   error: string | null;
   duration_ms: number;
@@ -70,6 +70,9 @@ function statusTag(status: ToolCallRecord['status']): ReactElement {
       return <Tag color="orange">待确认</Tag>;
     case 'rejected':
       return <Tag color="default">用户已取消</Tag>;
+    case 'blocked':
+      // B5 工作流闸门：模型跳过了一步，被拦下来告诉它先做什么
+      return <Tag color="blue">前置未满足</Tag>;
     default:
       return <Tag>未知</Tag>;
   }

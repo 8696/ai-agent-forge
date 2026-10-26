@@ -61,6 +61,8 @@ const FALLBACK_LLM: ResolvedLlmSettings = {
   modelEntryId: null,
   source: 'process-default',
   degraded: null,
+  // C4 备用模型：没配就是 null（主模型失败直接报错）
+  fallback: null,
 };
 
 /** 测试专用模型条目的名字前缀（用来清掉上次跑剩下的） */

@@ -70,7 +70,13 @@
 
 - 每个 provider 配置 QPS 限制（按 model；provider 自带限流时遵循 provider 文档）
 - 主 provider 挂了自动切到备选（**改 `LLM_PROVIDER` 切到下家 + 备选 `*_ANTHROPIC_BASE_URL`**，业务代码不动）
-- 当前 MVP 不做自动 failover（要在 server.ts 写 retry + 探测逻辑），人工切
+- ⚠️ **2026-10-26 更新：租户级的自动 failover 已做**（C4 的「备用模型」）
+  - 平台级仍是「人工切」（改 `.env` 换 provider）—— 那是运维动作
+  - **租户级是自动切**：租户在 `/admin/models` 给一条模型配「备用模型」
+    （同租户、同用途的另一条），主模型调用失败时自动切过去再试一次
+  - 实现见 `src/lib/llm-failover.ts`，规格见 [12-c §C4](./12-c-需求-管理员可配置.md)
+  - ⚠️ **流式对话只在「还没吐过内容」时才切** —— 吐出去的字收不回来
+    （详见 12-c §C4 的「流式对话只在…」那条）
 
 ## 6.4 思考模式（reasoning）的 provider 支持情况
 

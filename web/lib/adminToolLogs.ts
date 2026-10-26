@@ -10,7 +10,13 @@ import { apiErrorMessage } from './apiError';
  * 用来回答「AI 到底调没调这个工具、调了什么、返回了什么」。
  */
 
-export type ToolCallStatus = 'ok' | 'error' | 'timeout' | 'awaiting_confirmation';
+export type ToolCallStatus =
+  | 'ok'
+  | 'error'
+  | 'timeout'
+  | 'awaiting_confirmation'
+  | 'rejected'
+  | 'blocked';
 
 export interface ToolCallLogItem {
   id: string;

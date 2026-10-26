@@ -103,9 +103,10 @@ export type ChatDataTypes = {
     args: unknown;
     /**
      * ok=成功 / error=抛错 / timeout=超时 /
-     * awaiting_confirmation=待用户确认（没执行） / rejected=用户已取消
+     * awaiting_confirmation=待用户确认（没执行） / rejected=用户已取消 /
+     * **blocked=前置步骤没满足**（B5 工作流闸门：模型跳过了一步，被拦下来告诉它先做什么）
      */
-    status: 'ok' | 'error' | 'timeout' | 'awaiting_confirmation' | 'rejected';
+    status: 'ok' | 'error' | 'timeout' | 'awaiting_confirmation' | 'rejected' | 'blocked';
     /** 工具的返回值（失败时是降级文案） */
     output: unknown;
     /** 失败原因 */
@@ -144,6 +145,8 @@ export interface SessionListItem {
   title: string | null;
   status: string;
   channel: string;
+  /** 是否收藏（用户标记的重要会话） */
+  favorite: boolean;
   message_count: number;
   started_at: string;
   last_message_at: string | null;

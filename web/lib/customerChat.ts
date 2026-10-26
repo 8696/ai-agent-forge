@@ -28,14 +28,36 @@ export interface CreateSessionResponse {
 
 export type { SessionListItem, ChatUIMessage };
 
-export async function fetchSessions(page = 1, pageSize = 50): Promise<{
+export async function fetchSessions(
+  page = 1,
+  pageSize = 50,
+  favoriteOnly = false,
+): Promise<{
   sessions: SessionListItem[];
   pagination: SessionPagination;
 }> {
   const { data } = await customerApi.get<{
     sessions: SessionListItem[];
     pagination: SessionPagination;
-  }>('/sessions', { params: { page, page_size: pageSize } });
+  }>('/sessions', {
+    params: { page, page_size: pageSize, ...(favoriteOnly ? { favorite: 'true' } : {}) },
+  });
+  return data;
+}
+
+/**
+ * 收藏 / 取消收藏（12-e 裁定表 #7）
+ *
+ * `favorite` 不传 = 切换；传 true / false = 设成指定状态。
+ */
+export async function setSessionFavorite(
+  id: string,
+  favorite?: boolean | null,
+): Promise<{ id: string; favorite: boolean }> {
+  const { data } = await customerApi.patch<{ id: string; favorite: boolean }>(
+    `/sessions/${encodeURIComponent(id)}/favorite`,
+    favorite === undefined ? {} : { favorite },
+  );
   return data;
 }
 
