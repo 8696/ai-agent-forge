@@ -70,6 +70,52 @@ export interface SearchResult {
   hits: SearchHit[];
 }
 
+/** 一篇文档的切片（诊断 + 编辑视图用） */
+export interface DocumentChunk {
+  chunk_index: number;
+  text: string;
+  source: string;
+  /**
+   * 标题层级路径（如 `['产品手册', '退款政策']`）。
+   * null = 改结构感知切块之前入库的老块，没有这个信息
+   * （老文档重新索引之后才会有）。
+   */
+  heading_path: string[] | null;
+  /** 该块是本节第几块（1 起）；老块没有 → null */
+  section_chunk_index: number | null;
+  /** 本节一共切成了几块；老块没有 → null */
+  section_chunk_total: number | null;
+  /** 有没有被人工改过（改过文字或改过结构） */
+  edited: boolean;
+  updated_at: number;
+}
+
+export interface DocumentChunksResult {
+  document: {
+    id: string;
+    title: string;
+    file_type: DocumentFileType | null;
+    status: DocumentStatus;
+    chunk_count: number;
+    /** 这篇文档有没有人工编辑过的块（重新索引时会被保留） */
+    has_manual_edits: boolean;
+  };
+  chunks: DocumentChunk[];
+  pagination: KnowledgePagination;
+}
+
+/** 一次切片写操作的结果 */
+export interface ChunkWriteResult {
+  /** 改文字 / 还原时是这块的序号 */
+  chunk_index?: number;
+  /** 改完之后的总块数 */
+  chunk_count: number;
+  /** 这次真正重新算的向量数（改动的那几块） */
+  embedded: number;
+  /** 复用了旧向量的块数（省下的 embedding 调用） */
+  reused: number;
+}
+
 /** 后端只放行这三种扩展名，前端上传前先拦一道，少一次往返 */
 export const ACCEPTED_UPLOAD_EXTENSIONS = ['.pdf', '.md', '.markdown', '.txt'];
 
@@ -131,10 +177,88 @@ export async function searchKnowledge(
 }
 
 /**
+ * 拉一篇文档的切片（诊断视图）。
+ *
+ * 跨租户访问一律 404（后端先查 DB 归属，再按 tenant_id 过滤 Qdrant）。
+ */
+export async function fetchDocumentChunks(
+  id: string,
+  params?: { page?: number; page_size?: number },
+): Promise<DocumentChunksResult> {
+  const { data } = await adminApi.get<DocumentChunksResult>(`/knowledge/${id}/chunks`, {
+    params,
+  });
+  return data;
+}
+
+// ===== 切片编辑（写操作） =====
+//
+// ⚠️ **编辑之后后端会重算被改动的那几块的向量** —— 一块文本 = 一个向量，
+//    只改文字不改向量的话，检索按旧向量排序却返回新文字，模型会答错。
+//    没改的块复用旧向量，所以改 1 块只多 1 次 embedding 调用。
+
+/** 改一块的文字 */
+export async function editChunk(
+  id: string,
+  index: number,
+  text: string,
+): Promise<ChunkWriteResult> {
+  const { data } = await adminApi.patch<ChunkWriteResult>(
+    `/knowledge/${id}/chunks/${index}`,
+    { text },
+    { timeout: 120_000 },
+  );
+  return data;
+}
+
+/**
+ * 把一块拆成两块。
+ *
+ * @param at 拆分位置（相对**整块文本**的字符位置）
+ */
+export async function splitChunk(
+  id: string,
+  index: number,
+  at: number,
+): Promise<ChunkWriteResult> {
+  const { data } = await adminApi.post<ChunkWriteResult>(
+    `/knowledge/${id}/chunks/${index}/split`,
+    { at },
+    { timeout: 120_000 },
+  );
+  return data;
+}
+
+/** 把几块合并成一块（必须连续） */
+export async function mergeChunks(
+  id: string,
+  indexes: number[],
+): Promise<ChunkWriteResult> {
+  const { data } = await adminApi.post<ChunkWriteResult>(
+    `/knowledge/${id}/chunks/merge`,
+    { indexes },
+    { timeout: 120_000 },
+  );
+  return data;
+}
+
+/** 把一块还原成程序生成的文本（撤销人工改动） */
+export async function resetChunk(
+  id: string,
+  index: number,
+): Promise<ChunkWriteResult> {
+  const { data } = await adminApi.post<ChunkWriteResult>(
+    `/knowledge/${id}/chunks/${index}/reset`,
+    null,
+    { timeout: 120_000 },
+  );
+  return data;
+}
+
+/**
  * 从 axios 错误里取出后端返回的可读消息。
  * 后端错误体是 { code, message, details }（src/gateway/error-handler.ts）。
- */
-export function errorMessage(err: unknown, fallback: string): string {
+ */export function errorMessage(err: unknown, fallback: string): string {
   const e = err as {
     response?: { status?: number; data?: { message?: string } };
     message?: string;

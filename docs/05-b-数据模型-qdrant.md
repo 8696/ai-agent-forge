@@ -40,15 +40,39 @@ Collection: documents          (租户共享一个 collection)
 
 **Payload（JSON 元数据）**：
 
-| 字段          | 类型            | 说明                         |
-| ------------- | --------------- | ---------------------------- |
-| `doc_id`      | string          | 关联 MySQL `documents.id`    |
-| `chunk_index` | int             | 块在文档中的位置（0-based）  |
-| `text`        | string          | 块的原文（给 LLM 做引用）    |
-| `tenant_id`   | string          | 租户隔离（搜索时强制过滤）   |
-| `source`      | string          | 文档标题（UI 显示用）        |
-| `department`  | string?         | 可选：部门（未来按部门过滤） |
-| `updated_at`  | int (timestamp) | 文档更新时间                 |
+| 字段           | 类型            | 说明                                       |
+| -------------- | --------------- | ------------------------------------------ |
+| `doc_id`       | string          | 关联 MySQL `documents.id`                  |
+| `chunk_index`  | int             | 块在文档中的位置（0-based）                |
+| `text`         | string          | 块的原文（给 LLM 做引用）                  |
+| `tenant_id`    | string          | 租户隔离（搜索时强制过滤）                 |
+| `source`       | string          | 文档标题（UI 显示用）                      |
+| `department`   | string?         | 可选：部门（未来按部门过滤）               |
+| `updated_at`   | int (timestamp) | 文档更新时间                               |
+| `heading_path` | string[]?       | **可选**：该块所属的标题层级路径（2026-10-27 加） |
+| `section_chunk_index` | int?      | **可选**：该块是本节第几块（1 起，2026-10-27 加） |
+| `section_chunk_total` | int?      | **可选**：本节一共切成了几块（2026-10-27 加）  |
+| `embedding_model` | string?     | **可选**：生成这个向量的 embedding 模型名（2026-10-27 加） |
+
+> **`heading_path`（2026-10-27 · 结构感知切块）**：
+> 结构感知切块之后，每块都知道自己在文档的哪一节（如 `['产品手册', '退款政策']`），
+> 后台「切片浏览」页按它分组展示 —— 排查「标题有没有被劈开」全靠它。
+>
+> ⚠️ **可选字段**：改切法之前入库的老块**没有**这个字段（读出来是 `undefined` → 页面显示「无标题路径」），
+> 老文档重新索引之后才会有。**老文档不重新索引，它的切法还是老一套**（按字符滑窗）。
+
+> **`section_chunk_index` / `section_chunk_total`（2026-10-27）**：
+> 一节被切成 N 块时，各块的面包屑**一模一样**，光看文本分不出先后。
+> 这两个字段告诉检索层「这是长章节的第 3 块 / 共 5 块」。
+> ⚠️ **只进 payload，不进块文本** —— 进文本会污染向量（每块都多几个数字 token）。
+
+> **`embedding_model`（2026-10-27）**：
+> 人工编辑切片时**复用没变的块的向量**（省 embedding 调用），复用前要核对模型名 ——
+> 换了 embedding 模型但维度没变的话，两套模型的向量混在一起算相似度没有意义。
+> ⚠️ 老点没有这个字段 → 复用时当作「对不上」→ 一律重算（安全）。
+
+> **`doc_id` 上有 keyword payload index**（`ensureCollection()` 里建的）——
+> 后台按文档拉块（`fetchDocChunks`）走的是索引点查，不是全扫。
 
 > **关键**：搜索时**强制加 `tenant_id` 过滤**，避免跨租户泄露。这条写死在 `src/rag/qdrant.ts:vectorSearch()` 里，
 > 且该函数的 `tenantId` 参数**没有默认值**——调用方拿不到租户 id 就编译不过，从根上杜绝「忘了加 filter」。
@@ -84,6 +108,12 @@ Collection: documents          (租户共享一个 collection)
 **没有 Qdrant 的数据**：MySQL 不直接存向量；只有元数据（doc_id、status、chunk_count）。
 **没有 MySQL 的数据**：Qdrant 不存租户名、用户信息、文档标题的详细元数据；只存搜索需要的 payload。
 
+⚠️ **但「块正文」现在两边都有**（2026-10-27）：
+`payload.text` 和 MySQL `document_chunks.text` 是同一份内容的两个副本 ——
+**MySQL 那份是权威副本**（Qdrant 只是检索索引）。
+原因是人工编辑切片：Qdrant 不是 CMS（没事务、没版本、没法撤销），
+而正文得有地方能改、能还原、能审计。详见 [05-a · 文档切片表](./05-a-数据模型-mysql.md)。
+
 ### 5.6.5 备份与迁移
 
 - **Qdrant 数据备份**：`curl -X POST http://localhost:6333/collections/documents/snapshots`（导出快照文件）
@@ -102,7 +132,15 @@ Collection: documents          (租户共享一个 collection)
     ├─→ 写 MySQL documents 表（status='indexing'）
     │
     ▼
-[3] 拆块：PDF → text → splitByChunk (800字/块, overlap=150)
+[3] 拆块：PDF → text → **元素层** → 结构感知切块（800字/块, overlap=150）
+    │  元素层（src/rag/elements/）先按格式把文档解析成带类型的元素序列：
+    │    Markdown → AST（标题层级 / 列表 / 代码块 / 表格都是独立节点）
+    │    PDF      → 页 + 段（页边界是硬边界）
+    │    TXT      → 段
+    │  然后（src/rag/chunk.ts）按标题分节 → 节内按元素聚合成块 →
+    │  块首拼「标题路径」面包屑。**块不跨节，标题不会被劈成两半。**
+    │  单个元素超预算才在内部切：表格按行（重复表头）/ 代码按行 / 段落按句
+    │  （详见 07-c 模块 08）
     │
     ▼
 [4] Embedding API → 每个块得到 1536 维向量

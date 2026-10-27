@@ -34,6 +34,7 @@ import {
   publicApiKeyAdminRouter,
 } from './gateway';
 import { rebuildFromQdrant } from './rag/bm25';
+import { ensureCollection } from './rag/qdrant';
 
 /**
  * 后端入口 —— 详见 docs/13-扩展指南.md Step 1 + 02-系统架构与目录.md §2.1
@@ -122,6 +123,23 @@ async function bootstrap(): Promise<void> {
   // 后台跑且不 await：Qdrant 不可用 / 数据量大时都不该拖住启动；
   // 重建期间检索测试页只有向量一路结果，完成后自动变成混合检索。
   void rebuildFromQdrant();
+
+  /**
+   * 保证 Qdrant collection + payload 索引就位。
+   *
+   * ⚠️ 2026-10-27 加的：payload 索引（尤其 `chunk_index` 的 integer 索引）
+   *    是「后台切片浏览页按块序号排序」的**硬前提** —— 缺了 Qdrant 直接 400。
+   *    而索引以前只在「上传时」才建（`upsertDocumentChunks` → `ensureCollection`），
+   *    只读端点用不上 → 所以这里在启动时也确保一次。
+   *
+   * 后台跑且不 await：Qdrant 不可用时不该拖住启动（切片浏览页会退化成「加载失败」）。
+   */
+  void ensureCollection().catch((err: unknown) => {
+    logger.error(
+      { err: err instanceof Error ? err.message : String(err) },
+      'Qdrant collection / payload 索引初始化失败',
+    );
+  });
 
   // 优雅退出
   const shutdown = (signal: string): void => {

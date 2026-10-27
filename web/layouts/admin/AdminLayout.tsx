@@ -19,6 +19,7 @@ import { DashboardOutlined, FileSearchOutlined, TeamOutlined, UploadOutlined, Sl
   ToolOutlined,
   AlertOutlined,
   SwapOutlined,
+  PartitionOutlined,
 } from '@ant-design/icons';
 
 /**
@@ -50,6 +51,12 @@ const SIDEBAR: SidebarItem[] = [
         icon: <FileSearchOutlined />,
         label: '检索测试',
         to: '/admin/knowledge/test',
+      },
+      {
+        key: '/admin/knowledge/chunks',
+        icon: <PartitionOutlined />,
+        label: '切片浏览',
+        to: '/admin/knowledge/chunks',
       },
     ],
   },

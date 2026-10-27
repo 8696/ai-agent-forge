@@ -28,6 +28,12 @@ export const ACTION_LABEL: Record<string, string> = {
   DOCUMENT_DELETE: '删除文档',
   DOCUMENT_INDEX_FAILED: '文档索引失败',
 
+  // —— 租户后台：知识库切片编辑 ——
+  DOCUMENT_CHUNK_EDITED: '编辑切片',
+  DOCUMENT_CHUNK_SPLIT: '拆分切片',
+  DOCUMENT_CHUNK_MERGED: '合并切片',
+  DOCUMENT_CHUNK_RESET: '还原切片',
+
   // —— 租户后台：模型 / 提示词 / 设置 ——
   TENANT_MODEL_CREATE: '新建模型配置',
   TENANT_MODEL_UPDATE: '修改模型配置',

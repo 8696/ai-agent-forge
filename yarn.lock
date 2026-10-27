@@ -1335,7 +1335,7 @@
 
 "@types/koa@^3.0.3":
   version "3.0.3"
-  resolved "https://registry.yarnpkg.com/@types/koa/-/koa-3.0.3.tgz#aa41a80d0d9fed1e3b87d33d1a7057c8badeb668"
+  resolved "https://registry.npmmirror.com/@types/koa/-/koa-3.0.3.tgz#aa41a80d0d9fed1e3b87d33d1a7057c8badeb668"
   integrity sha512-TdtNEJ7sYSrFQcVuS2ySsVqnq5EyE3oJbnfFJvkC9UtGP4Kpem5KE7r+ivHIbIAQAofSqnlB5D3vkfYO69TQpg==
   dependencies:
     "@types/accepts" "*"

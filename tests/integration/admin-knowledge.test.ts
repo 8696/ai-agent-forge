@@ -1,6 +1,6 @@
 /**
  * tests/integration/admin-knowledge.test.ts
- * 对应 src/gateway/admin/knowledge-routes.ts（5 个端点）
+ * 对应 src/gateway/admin/knowledge-routes.ts（6 个端点）
  * 详见 docs/12-c-需求-管理员可配置.md §C1
  *
  * ⚠️ 前置条件（跟仓库其它 integration 测试一样，由 vitest globalSetup 保证）：
@@ -69,6 +69,26 @@ interface SearchResponse {
     vector_rank: number | null;
     bm25_rank: number | null;
   }>;
+}
+
+/** GET /knowledge/:id/chunks 的响应 */
+interface ChunksResponse {
+  document: {
+    id: string;
+    title: string;
+    file_type: string | null;
+    status: string;
+    chunk_count: number;
+  };
+  chunks: Array<{
+    chunk_index: number;
+    text: string;
+    source: string;
+    /** 标题层级路径；老块（改切法之前入库的）是 null */
+    heading_path: string[] | null;
+    updated_at: number;
+  }>;
+  pagination: { page: number; page_size: number; total: number; total_pages: number };
 }
 
 /** 造一个内存里的 .md 文件；Node 18+ 有全局 FormData / Blob，axios 能直接发 multipart */
@@ -244,6 +264,78 @@ describe('admin-knowledge-routes', () => {
         { query: MARKER },
         { validateStatus: () => true },
       );
+      expect(r.status).toBe(401);
+    });
+  });
+
+  describe('GET /knowledge/:id/chunks · 查看切片（2026-10-27）', () => {
+    it('200 + 返回每一块（序号 / 字数 / 标题路径 / 正文），块数与 chunk_count 一致', async () => {
+      const content = [
+        `# ${MARKER} 制度`,
+        '',
+        '## 适用范围',
+        '',
+        `${MARKER} 的适用范围说明。`,
+        '',
+        '## 报销时限',
+        '',
+        `${MARKER} 的时限说明。`,
+      ].join('\n');
+      const uploaded = await uploadAcme(content);
+
+      const r = await http.acmeAdmin.get<ChunksResponse>(`/knowledge/${uploaded.id}/chunks`);
+      expect(r.status).toBe(200);
+      expect(r.data.document.id).toBe(uploaded.id);
+      expect(r.data.pagination.total).toBe(uploaded.chunk_count);
+      expect(r.data.chunks).toHaveLength(uploaded.chunk_count);
+
+      // 块序号从 0 连续
+      expect(r.data.chunks.map((c) => c.chunk_index)).toEqual(
+        r.data.chunks.map((_, i) => i),
+      );
+      // 标题路径有值（结构感知切块之后才有的字段）
+      const withPath = r.data.chunks.filter((c) => c.heading_path !== null);
+      expect(withPath.length).toBeGreaterThan(0);
+      for (const c of withPath) {
+        expect((c.heading_path ?? []).length).toBeGreaterThan(0);
+      }
+      // 正文里能看到标题路径面包屑
+      expect(r.data.chunks.some((c) => c.text.includes('>'))).toBe(true);
+    });
+
+    it('分页生效', async () => {
+      const uploaded = await uploadAcme(
+        Array.from({ length: 6 }, (_, i) => `第 ${i} 段 ${MARKER} 内容。`).join('\n\n'),
+      );
+      const r = await http.acmeAdmin.get<ChunksResponse>(
+        `/knowledge/${uploaded.id}/chunks?page=1&page_size=2`,
+      );
+      expect(r.status).toBe(200);
+      expect(r.data.pagination.page).toBe(1);
+      expect(r.data.pagination.page_size).toBe(2);
+      expect(r.data.chunks.length).toBeLessThanOrEqual(2);
+      expect(r.data.pagination.total).toBe(uploaded.chunk_count);
+    });
+
+    it('404 文档不存在', async () => {
+      const r = await http.acmeAdmin.get('/knowledge/does-not-exist/chunks', {
+        validateStatus: () => true,
+      });
+      expect(r.status).toBe(404);
+    });
+
+    it('404 跨租户：globex 拿 acme 的文档 id 看切片', async () => {
+      const uploaded = await uploadAcme(`${MARKER} 只属于 acme 的内容。`);
+      const r = await http.globAdmin.get(`/knowledge/${uploaded.id}/chunks`, {
+        validateStatus: () => true,
+      });
+      expect(r.status).toBe(404);
+    });
+
+    it('401 无 token', async () => {
+      const r = await axios.get(`${BASE}/api/v1/admin/knowledge/whatever/chunks`, {
+        validateStatus: () => true,
+      });
       expect(r.status).toBe(401);
     });
   });

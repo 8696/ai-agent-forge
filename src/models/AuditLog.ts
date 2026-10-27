@@ -39,6 +39,11 @@ export type AuditAction =
   | 'DOCUMENT_UPLOAD'
   | 'DOCUMENT_DELETE'
   | 'DOCUMENT_INDEX_FAILED'
+  // —— 租户后台：知识库切片编辑（人工改过知识库内容，得能查出是谁改的）——
+  | 'DOCUMENT_CHUNK_EDITED'
+  | 'DOCUMENT_CHUNK_SPLIT'
+  | 'DOCUMENT_CHUNK_MERGED'
+  | 'DOCUMENT_CHUNK_RESET'
   // —— 租户后台：模型 / 提示词 / 设置 ——
   | 'TENANT_MODEL_CREATE'
   | 'TENANT_MODEL_UPDATE'

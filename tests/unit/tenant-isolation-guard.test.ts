@@ -166,6 +166,15 @@ const ALLOWED_NO_TENANT_FILTER: Array<{
       '③ 它跑在**任何请求上下文之外**（进程启动时），租户作用域钩子此时没有租户可补。' +
       '⚠️ 缺列时 `embedding_model` 本身也在 WHERE 里 → 查询会报 Unknown column → 探针才检测得到',
   },
+  {
+    file: 'src/services/document-chunks.ts',
+    snippet: 'DocumentChunk.count()',
+    reason:
+      '启动时的**表存在性探针**（迁移 036 没跑时的降级判定）。' +
+      '① 它跑在**任何请求上下文之外**（进程启动时），租户作用域钩子此时没有租户可补；' +
+      '② 它只做 count 判表在不在，**不返回任何租户数据**；' +
+      '③ 探针的返回值只决定「切片编辑功能要不要开放」，不参与任何业务判断。',
+  },
   // ---- 平台方视角的跨租户查询（docs/04-d §6.1「/system/audit 也能查」）----
   {
     file: 'src/lib/audit-log.ts',

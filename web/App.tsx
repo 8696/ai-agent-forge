@@ -1,6 +1,6 @@
 import type { ReactElement } from 'react';
 import { useEffect } from 'react';
-import { ConfigProvider } from 'antd';
+import { App as AntdApp, ConfigProvider } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
 import { RouterProvider } from 'react-router-dom';
 import { router } from './routes';
@@ -16,6 +16,12 @@ import { useThemeMode } from './lib/themeMode';
  *
  * 深色模式（docs/04-d §9.3）：顶栏的 ☀ / 🌙 按钮切，
  * 选择存 localStorage；根组件订阅同一个 store，切换立即生效。
+ *
+ * ⚠️ **`<AntdApp>` 是 antd v6 的 App 容器** —— 提供 message / notification / modal
+ *    的**上下文**。没有它，页面里只能用静态 `message.success()`，
+ *    而静态方法**拿不到主题上下文**（深色模式下弹出的提示还是亮色），
+ *    并且控制台会打一条 `[antd: message] Static function can not consume context` 警告。
+ *    页面里要弹提示就用 `AntdApp.useApp()` 拿的 `message`。
  */
 export function App(): ReactElement {
   const mode = useThemeMode();
@@ -28,7 +34,9 @@ export function App(): ReactElement {
 
   return (
     <ConfigProvider locale={zhCN} theme={mode === 'dark' ? darkTheme : lightTheme}>
-      <RouterProvider router={router} />
+      <AntdApp>
+        <RouterProvider router={router} />
+      </AntdApp>
     </ConfigProvider>
   );
 }

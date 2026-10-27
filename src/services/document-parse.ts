@@ -18,6 +18,13 @@ export interface ParsedDocument {
   text: string;
   /** PDF 页数（其它类型为 undefined） */
   pages?: number;
+  /**
+   * PDF 每页的文本（其它类型为 undefined）。
+   *
+   * **页边界是 PDF 仅剩的结构信号** —— 章节、换页都体现在这儿，
+   * 切块时用它当硬边界（见 src/rag/elements/plaintext.ts）。
+   */
+  pageTexts?: string[];
 }
 
 export async function extractText(
@@ -42,9 +49,24 @@ async function extractPdf(absolutePath: string): Promise<ParsedDocument> {
   const buffer = await fs.readFile(absolutePath);
   const parser = new PDFParse({ data: buffer });
   try {
-    const result = await parser.getText();
+    /**
+     * ⚠️ **`pageJoiner: ''` 必须显式传**（2026-10-27 加的）：
+     * pdf-parse v2 的 `getText()` 默认会在每页后面插一个 `-- 1 of 12 --` 的页码标记
+     * （默认值是 `'\n-- page_number of total_number --'`，实际渲染成 `-- 1 of 12 --`）。
+     * 那个标记会：
+     *   1. 进到正文里 → 进向量（纯噪声 token）
+     *   2. 出现在引用卡片里（用户看到一串莫名的话）
+     * 传空串 = 关掉标记，页面之间仍然用空行分隔。
+     *
+     * `result.pages` 里是**每页的文本**，那是 PDF 仅剩的结构信号，必须留着。
+     */
+    const result = await parser.getText({ pageJoiner: '' });
     // total 是总页数；扫描件 PDF 也能返回 total，但 text 全是空
-    return { text: result.text, pages: result.total };
+    return {
+      text: result.text,
+      pages: result.total,
+      pageTexts: result.pages.map((page) => page.text),
+    };
   } finally {
     await parser.destroy();
   }

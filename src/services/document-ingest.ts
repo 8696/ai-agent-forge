@@ -6,7 +6,13 @@ import { removeUploadFile, saveUpload } from './document-upload';
 import { extractText } from './document-parse';
 import { ingestDocument } from '../rag/ingest';
 import { bm25RemoveDoc } from '../rag/bm25';
-import { deleteDocumentPoints } from '../rag/qdrant';
+import { deleteDocumentPoints, fetchDocChunkVectors } from '../rag/qdrant';
+import {
+  collectPreservedEdits,
+  deleteChunks,
+  loadChunks,
+  saveIndexedChunks,
+} from './document-chunks';
 
 /**
  * 文档入库 / 删除的**共享实现**
@@ -131,11 +137,33 @@ export async function indexDocument(
 ): Promise<{ status: number; body: Record<string, unknown> }> {
   try {
     const parsed = await extractText(doc.file_path as string, doc.file_type as DocumentFileType);
+
+    /**
+     * 重新索引时的两件「不要白扔」的事：
+     *   1. **保留人工编辑** —— 从 DB 读出人工改过的块，重新切完按源区间重叠度搬回去
+     *   2. **复用没变的块的向量** —— 100 块里改 1 块，不该重算 100 次 embedding
+     */
+    const previous = await loadChunks(actor.tenantId, doc.id);
+    const preservedEdits = collectPreservedEdits(previous);
+    const existing = await fetchDocChunkVectors({ docId: doc.id, tenantId: actor.tenantId });
+
     const result = await ingestDocument({
       documentId: doc.id,
       tenantId: actor.tenantId,
       title: doc.title,
       text: parsed.text,
+      fileType: doc.file_type as DocumentFileType,
+      pageTexts: parsed.pageTexts,
+      preservedEdits,
+      existingChunks: existing,
+    });
+
+    // 写 DB 权威副本（Qdrant 只是检索索引 —— 正文得有个能编辑、能撤销的家）
+    await saveIndexedChunks({
+      tenantId: actor.tenantId,
+      documentId: doc.id,
+      chunks: result.chunks,
+      previous,
     });
 
     await doc.update({
@@ -154,6 +182,8 @@ export async function indexDocument(
         status: 'ready',
         chunk_count: result.chunkCount,
         pages: parsed.pages,
+        /** 人工编辑没能搬回来的条数（切法变了 → 对不上） */
+        unmatched_edits: result.unmatchedEdits,
       },
     };
   } catch (err: unknown) {
@@ -214,6 +244,15 @@ export async function removeDocument(doc: Document, tenantId: string): Promise<s
     const message = err instanceof Error ? err.message : String(err);
     failures.push(`bm25:${message}`);
     logger.error({ docId: doc.id, err: message }, '删 BM25 索引失败');
+  }
+
+  // DB 里的切片副本（权威副本）—— 文档没了，这些行也不该留着
+  try {
+    await deleteChunks(tenantId, doc.id);
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    failures.push(`chunks:${message}`);
+    logger.error({ docId: doc.id, err: message }, '删切片副本失败');
   }
 
   if (doc.file_path !== null) {

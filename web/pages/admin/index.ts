@@ -15,6 +15,7 @@ export { ToolLogsPage } from './ToolLogsPage';
 export { AdminMemoriesPage } from './MemoriesPage';
 export { KnowledgeDocumentsPage } from './KnowledgeDocumentsPage';
 export { KnowledgeSearchPage } from './KnowledgeSearchPage';
+export { KnowledgeChunksPage } from './KnowledgeChunksPage';
 export { ModelListPage } from './ModelListPage';
 export { SettingsPage } from './SettingsPage';
 export { PromptEditorPage } from './PromptEditorPage';

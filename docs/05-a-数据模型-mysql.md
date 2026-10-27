@@ -183,6 +183,54 @@ CREATE TABLE documents (
 > `ENUM('pdf','markdown','txt')`。上传白名单（`src/services/document-upload.ts`）
 > 只放行这三种扩展名，传 `.docx` 返 400。
 
+### 文档切片表（document_chunks）✅ 已落地 2026-10-27（迁移 `036`）
+
+```sql
+CREATE TABLE document_chunks (
+  id VARCHAR(36) PRIMARY KEY COMMENT '块 id（nanoid 21）',
+  tenant_id VARCHAR(36) NOT NULL COMMENT '所属租户',
+  document_id VARCHAR(36) NOT NULL COMMENT '所属文档（documents.id）',
+  chunk_index INT NOT NULL COMMENT '块序号（0-based，同一篇文档内连续）',
+  text MEDIUMTEXT NOT NULL COMMENT '最终进向量的完整文本（面包屑 + 重叠区 + 正文）',
+  generated_text MEDIUMTEXT NOT NULL COMMENT '最近一次由程序生成的文本 —— 「还原」的依据',
+  heading_path JSON COMMENT '标题层级路径（面包屑的来源）',
+  source_char_start INT DEFAULT 0 COMMENT '在归一化原文里的起始位置（人工编辑后仅供参考）',
+  source_char_end INT DEFAULT 0 COMMENT '在归一化原文里的结束位置（人工编辑后仅供参考）',
+  edited BOOLEAN DEFAULT false COMMENT '有没有被人工干预过',
+  edited_by VARCHAR(36) COMMENT '谁改的（admin 用户 id）',
+  edited_at DATETIME(6) COMMENT '什么时候改的',
+  section_chunk_index INT DEFAULT 0 COMMENT '该块是本节第几块（1 起）',
+  section_chunk_total INT DEFAULT 0 COMMENT '本节一共切成了几块',
+  created_at DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6),
+  UNIQUE KEY idx_document_chunks_unique (tenant_id, document_id, chunk_index),
+  INDEX idx_document_chunks_document (document_id, chunk_index)
+) COMMENT '文档切片表 —— 切片的权威副本（Qdrant 只是检索索引）';
+```
+
+> **为什么要有这张表**：切片的正文以前**只有一份真身，在 Qdrant 的 payload 里**。
+> 那对「查看」够用，对「编辑」不够 ——
+>
+> - Qdrant 不是 CMS：没事务、没版本、没法撤销
+> - point id 是 `randomUUID()`，跟 `chunk_index` 没有稳定映射
+> - 「重新索引」= 从磁盘原文件重切 + `deleteDocumentPoints`
+>   → **静默吃掉所有人工编辑**
+>
+> 所以把正文的权威副本落到 MySQL，Qdrant 只当**检索索引**。
+> 详见 [04-c §5.13.1](./04-c-ui-后台管理页面.md)（后台「切片浏览」页的编辑功能）。
+>
+> **`generated_text` 不是「原始切块文本」**：拆过 / 合过之后原件已经不存在了，
+> 存一份「上一次由程序生成的文本」比硬撑「原始」更诚实。
+> 拆块 / 合块时新块取「拆分/合并那一刻的文本」。
+>
+> **`source_char_*` 在人工编辑之后只是参考**：编辑后的文字不再对应原文。
+> 它的价值在「切法没变时，重新索引能把人工编辑原样搬回去」
+> （按**源区间重叠度**配对，见 `src/rag/chunk.ts` 的 `applyPreservedEdits`）。
+>
+> ⚠️ **降级**：迁移 `036` 没跑时，索引 / 检索**照常工作**（只写 Qdrant，不写 DB），
+>    只是**编辑功能不可用**（端点返回 503）。
+>    启动时会探一次表在不在（`probeDocumentChunksTable`），跟迁移 034 / 035 一个路子。
+
 ### 工具注册表（tools）
 
 ```sql

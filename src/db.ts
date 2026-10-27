@@ -8,6 +8,7 @@ import { UserMemory } from './models/UserMemory';
 import { SystemUser } from './models/SystemUser';
 import { ApiKey } from './models/ApiKey';
 import { Document } from './models/Document';
+import { DocumentChunk } from './models/DocumentChunk';
 import { Session } from './models/Session';
 import { Message } from './models/Message';
 import { PromptVersion } from './models/PromptVersion';
@@ -29,6 +30,7 @@ import { AgentStep } from './models/AgentStep';
 import { installTenantScopeHooks } from './lib/tenant-scope';
 import { probeApiKeySha256Column } from './lib/api-key-auth';
 import { probeUserMemoryEmbeddingColumns } from './services/memory-relevance';
+import { probeDocumentChunksTable } from './services/document-chunks';
 
 /**
  * Sequelize 实例（单例）。
@@ -67,6 +69,7 @@ function buildSequelize(): SequelizeType {
   SystemUser,
   ApiKey,
   Document,
+  DocumentChunk,
   Session,
   Message,
   PromptVersion,
@@ -128,6 +131,12 @@ export async function initDatabase(): Promise<void> {
   //    探一次、把两列摘掉，记忆退回固定顺序的注入排序，功能少一半但不影响使用。
   //    详见 src/services/memory-relevance.ts 的 probeUserMemoryEmbeddingColumns。
   await probeUserMemoryEmbeddingColumns();
+
+  // ⚠️ **迁移 036（document_chunks 表）跑了没** —— 表是「切片编辑」功能的存储底座：
+  //    切片的权威副本存在这张表里（Qdrant 只是检索索引）。
+  //    表不在时**索引 / 检索照常工作**（只写 Qdrant），只是编辑功能不可用 ——
+  //    不因为一张附属表缺了就把整个知识库搞挂。
+  await probeDocumentChunksTable();
 }
 
 // 重导出 DataTypes / Sequelize 类型，给后续 migration 用
