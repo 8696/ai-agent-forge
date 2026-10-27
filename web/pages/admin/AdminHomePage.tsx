@@ -1,5 +1,5 @@
 import type { ReactElement } from 'react';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Alert, Button, Card, Col, Empty, Row, Space, Tag, Typography, theme } from 'antd';
 import { ReloadOutlined, RightOutlined, TeamOutlined } from '@ant-design/icons';
 import { Link, useNavigate } from 'react-router-dom';
@@ -45,21 +45,46 @@ export function AdminHomePage(): ReactElement {
   const [summary, setSummary] = useState<ObservabilitySummary | null>(null);
   const [alerts, setAlerts] = useState<AdminAlert[] | null>(null);
   const [errMsg, setErrMsg] = useState<string | null>(null);
+  /**
+   * 告警列表**单独**的错误。
+   *
+   * ⚠️ 以前 `errMsg` 只在 summary **和** alerts 同时失败时才设置 ——
+   *    单点失败被静默吞掉，告警卡片永远停在「加载中…」，用户看不出是挂了还是真没告警。
+   */
+  const [alertsErrMsg, setAlertsErrMsg] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+
+  /** 组件还活着吗 —— 避免卸载后 setState */
+  const aliveRef = useRef(true);
+  useEffect(() => {
+    aliveRef.current = true;
+    return () => {
+      aliveRef.current = false;
+    };
+  }, []);
 
   const load = async (): Promise<void> => {
     setLoading(true);
     setErrMsg(null);
+    setAlertsErrMsg(null);
     try {
       // 两个接口独立失败不互相连坐：指标挂了不该把告警也吞掉
       const [s, a] = await Promise.allSettled([fetchSummary(), fetchAlerts()]);
-      setSummary(s.status === 'fulfilled' ? s.value : null);
-      setAlerts(a.status === 'fulfilled' ? a.value : null);
-      if (s.status === 'rejected' && a.status === 'rejected') {
+      if (!aliveRef.current) return;
+      if (s.status === 'fulfilled') {
+        setSummary(s.value);
+      } else {
+        setSummary(null);
         setErrMsg('加载后台概览失败');
       }
+      if (a.status === 'fulfilled') {
+        setAlerts(a.value);
+      } else {
+        setAlerts(null);
+        setAlertsErrMsg('告警列表加载失败，暂时看不到异常告警');
+      }
     } finally {
-      setLoading(false);
+      if (aliveRef.current) setLoading(false);
     }
   };
 
@@ -69,6 +94,7 @@ export function AdminHomePage(): ReactElement {
 
   const trend = summary?.trend ?? [];
 
+  // 图表配色走 antd token —— 写死 hex 的话跟主题主色对不上，深色模式下也对不上
   const conversationOption = {
     tooltip: { trigger: 'axis' },
     grid: { left: 50, right: 20, top: 30, bottom: 40 },
@@ -80,8 +106,8 @@ export function AdminHomePage(): ReactElement {
         type: 'line',
         smooth: true,
         data: trend.map((t) => t.conversations),
-        itemStyle: { color: '#1677ff' },
-        areaStyle: { color: 'rgba(22,119,255,0.12)' },
+        itemStyle: { color: token.colorPrimary },
+        areaStyle: { color: token.colorPrimaryBg },
       },
     ],
   };
@@ -97,8 +123,8 @@ export function AdminHomePage(): ReactElement {
         type: 'line',
         smooth: true,
         data: trend.map((t) => t.cost),
-        itemStyle: { color: '#52c41a' },
-        areaStyle: { color: 'rgba(82,196,26,0.12)' },
+        itemStyle: { color: token.colorSuccess },
+        areaStyle: { color: token.colorSuccessBg },
       },
     ],
   };
@@ -187,7 +213,10 @@ export function AdminHomePage(): ReactElement {
       </Row>
 
       <Card title="异常告警" style={{ marginBottom: 16 }}>
-        {alerts === null ? (
+        {alertsErrMsg !== null ? (
+          // 单点失败要给用户看得见的降级提示，不能停在「加载中…」
+          <Alert type="warning" showIcon title="告警加载失败" description={alertsErrMsg} />
+        ) : alerts === null ? (
           <Empty description="加载中…" />
         ) : alerts.length === 0 ? (
           <Empty description="今天没有异常" />
@@ -237,7 +266,7 @@ export function AdminHomePage(): ReactElement {
       <Link to="/admin/users" style={{ display: 'block', maxWidth: 420 }}>
         <Card hoverable styles={{ body: { padding: '18px 20px' } }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8 }}>
-            <TeamOutlined style={{ color: '#13c2c2', fontSize: 18 }} />
+            <TeamOutlined style={{ color: token.colorPrimary, fontSize: 18 }} />
             <Text strong style={{ fontSize: 15, flex: 1 }}>
               用户管理
             </Text>
@@ -261,6 +290,7 @@ function StatCard({
   extra?: string | undefined;
   danger?: boolean;
 }): ReactElement {
+  const { token } = theme.useToken();
   return (
     <Card styles={{ body: { padding: '18px 20px' } }}>
       <Text type="secondary" style={{ fontSize: 12 }}>
@@ -271,7 +301,7 @@ function StatCard({
           fontSize: 26,
           fontWeight: 600,
           lineHeight: 1.35,
-          color: danger ? '#cf1322' : undefined,
+          color: danger ? token.colorError : undefined,
         }}
       >
         {value}

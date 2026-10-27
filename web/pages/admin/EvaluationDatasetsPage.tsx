@@ -1,5 +1,5 @@
 import type { ReactElement } from 'react';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   Alert,
   Button,
@@ -82,11 +82,23 @@ export function EvaluationDatasetsPage(): ReactElement {
   const [promptVersions, setPromptVersions] = useState<PromptVersionItem[]>([]);
   const [runSubmitting, setRunSubmitting] = useState(false);
 
+  /** 组件还活着吗 —— 避免卸载后 setState */
+  const aliveRef = useRef(true);
+  useEffect(() => {
+    aliveRef.current = true;
+    return () => {
+      aliveRef.current = false;
+    };
+  }, []);
+
   const load = async (): Promise<void> => {
     setErrMsg(null);
     try {
-      setRows(await fetchDatasets());
+      const res = await fetchDatasets();
+      if (!aliveRef.current) return;
+      setRows(res);
     } catch (err: unknown) {
+      if (!aliveRef.current) return;
       setRows(null);
       setErrMsg(evaluationErrorMessage(err, '加载评测集失败'));
     }
@@ -98,8 +110,11 @@ export function EvaluationDatasetsPage(): ReactElement {
 
   const openDetail = async (row: EvaluationDataset): Promise<void> => {
     try {
-      setDetail(await fetchDataset(row.id));
+      const res = await fetchDataset(row.id);
+      if (!aliveRef.current) return;
+      setDetail(res);
     } catch (err: unknown) {
+      if (!aliveRef.current) return;
       message.error(evaluationErrorMessage(err, '加载评测集详情失败'));
     }
   };
@@ -289,7 +304,7 @@ export function EvaluationDatasetsPage(): ReactElement {
             },
             style: { cursor: 'pointer' },
           })}
-          locale={{ emptyText: rows === null ? '加载中…' : '还没有评测集' }}
+          locale={{ emptyText: rows === null ? '加载中…' : '还没有评测集，上传一份跑跑看' }}
         />
       </Card>
 

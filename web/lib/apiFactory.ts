@@ -1,5 +1,6 @@
 import axios, { type AxiosInstance } from 'axios';
 import { attachTokenInterceptor, onUnauthorized } from './apiShared';
+import { isWrongOldPasswordError } from './apiError';
 
 const TOKEN_KEY = 'agent_platform_token';
 
@@ -47,6 +48,29 @@ const LOGIN_PATH_BY_BASE_URL: Record<string, string> = {
 };
 
 /**
+ * 按 baseURL 找登录页 —— 组件里要自己跳登录时用
+ * （改密页 token 过期时需要带上提示，不能只 `location.replace`）。
+ */
+export function loginPathForBaseUrl(baseURL: string | undefined): string | null {
+  if (baseURL === undefined) return null;
+  return LOGIN_PATH_BY_BASE_URL[baseURL] ?? null;
+}
+
+/**
+ * 「登录已过期」的跳转参数 —— 登录页读到它就显示「登录已过期，请重新登录」。
+ *
+ * ⚠️ 走 **URL query** 而不是 router state：token 过期时用的是
+ *    `window.location.replace`（整页刷新），router state 会丢。
+ */
+export const EXPIRED_REASON_PARAM = 'reason';
+export const EXPIRED_REASON_VALUE = 'expired';
+
+/** 拼一个「登录已过期」的登录页地址 */
+export function expiredLoginUrl(loginPath: string): string {
+  return `${loginPath}?${EXPIRED_REASON_PARAM}=${EXPIRED_REASON_VALUE}`;
+}
+
+/**
  * 前端 axios 实例：自动带 Authorization 头（token 来自 localStorage）
  * 详见 docs/03-c-技术栈-前端栈.md §C.1
  *
@@ -61,17 +85,24 @@ export function createApi(baseURL: string): AxiosInstance {
     instance,
     () => {
       setToken(null);
+      if (loginPath === null) return;
+      // 已经在登录页上就别跳了（登录接口本身失败也返 401）
+      if (window.location.pathname.startsWith(loginPath)) return;
+      // ⚠️ **改密页交给页面自己跳** —— 它要显示「登录已过期，请重新登录」，
+      //    而且用 router 跳（不用整页刷新，提示才留得住）。这里只清 token。
+      if (window.location.pathname.endsWith('/change-password')) return;
       // JWT 过期 → 自动跳本子系统的登录页（docs/04-d §11.3「JWT 过期自动跳登录」）。
       // 用 `replace` 而不是 `push`：登录完不该再按「后退」回到受保护的页面。
-      // 已经在登录页上就别跳了（登录接口本身失败也返 401）。
-      if (loginPath !== null && !window.location.pathname.startsWith(loginPath)) {
-        window.location.replace(loginPath);
-      }
+      window.location.replace(expiredLoginUrl(loginPath));
     },
     {
       // ⚠️ 「改密码时旧密码不对」也是 401，但它不代表 token 过期 ——
       //    清 token + 跳登录会把正在改密的用户白踢一次。
-      skip: (url) => url.endsWith('/change-password'),
+      //    ⚠️ **只能豁免「原密码不正确」这一种**（按响应体 message 判）——
+      //    以前这里是 `url.endsWith('/change-password')`，把该端点的**所有** 401
+      //    都豁免了：token 过期时 → 不清 token、不跳登录、界面一直显示
+      //    「原密码不正确」→ 用户永远改不了密码。
+      skip: (url, err) => url.endsWith('/change-password') && isWrongOldPasswordError(err),
     },
   );
   return instance;

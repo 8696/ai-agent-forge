@@ -49,11 +49,28 @@ const SIDEBAR: SidebarItem[] = [
 export function SystemLayout(): ReactElement {
   const location = useLocation();
 
-  // 登录页 / 改密页：整屏（AuthShell 自带整页背景），不套后台外壳。
+  // 登录页：整屏（AuthShell 自带整页背景），不套后台外壳。
+  if (location.pathname === '/system/login') {
+    return <Outlet />;
+  }
+
   // ⚠️ system 用户**没有** must_change_password 标志（`system_users` 表里没这列），
   //    所以这里不存在「强制改密」—— 平台方账号由平台自己管。
-  if (location.pathname === '/system/login' || location.pathname === '/system/change-password') {
-    return <Outlet />;
+  //
+  // 改密页**仍然要过 RequireAuth**（2026-10-27 修）：
+  // 以前这里是 `return <Outlet />` 直接放行 → 没登录的人能进改密页，
+  // 提交后拿到 401，又因为「所有 change-password 的 401 都豁免」而被显示成
+  // 「原密码不正确」→ 用户彻底懵。
+  if (location.pathname === '/system/change-password') {
+    return (
+      <RequireAuth
+        role="system"
+        loginPath="/system/login"
+        changePasswordPath="/system/change-password"
+      >
+        <Outlet />
+      </RequireAuth>
+    );
   }
 
   return (

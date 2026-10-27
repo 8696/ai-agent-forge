@@ -322,7 +322,7 @@ export function CustomerMemoriesPage(): ReactElement {
           {row.status === 'active' ? (
             <Popconfirm
               title="确认删除这条记忆？"
-              description="删除后 AI 不会再记得它。删错了可以在「已归档」里恢复。"
+              description="删除后 AI 不会再记得它。删错了可以在「已删除」里恢复。"
               okText="确认"
               cancelText="取消"
               okButtonProps={{ danger: true }}
@@ -419,26 +419,30 @@ export function CustomerMemoriesPage(): ReactElement {
               { value: 'all', label: '全部' },
             ]}
           />
-          {statusFilter !== 'archived' && activeCount > 0 && (
-            <>
-              <Popconfirm
-                title="确认清空全部记忆？"
-                description="所有记忆条目都会被删除，AI 将不再记得关于你的任何信息。删错了还能在「已归档」里恢复。"
-                okText="确认清空"
-                cancelText="取消"
-                okButtonProps={{ danger: true }}
-                onConfirm={() => void onClearAll()}
-              >
-                <Button danger size="small">
-                  清空全部
-                </Button>
-              </Popconfirm>
-              {/* 彻底删除 = 物理删，不可恢复。跟上面的「清空全部」分开，避免误点 */}
-              <Button type="link" size="small" danger onClick={confirmPurgeAll}>
-                彻底删除全部
-              </Button>
-            </>
-          )}
+          {/* ⚠️ 这两个按钮**一直可见** —— 以前外面套了
+              `statusFilter !== 'archived' && activeCount > 0`，
+              切到「已删除」筛选时它们整个消失，用户以为没有这些操作了。
+              现在改成：按筛选器调整**作用范围 / 文案**，按钮本身一直在。 */}
+          <Popconfirm
+            title="确认清空全部记忆？"
+            description={
+              statusFilter === 'archived'
+                ? '「清空全部」是把**生效中**的记忆归档（可恢复）—— 当前筛选是「已删除」，这里没有可归档的条目。要真正删掉它们，请用「彻底删除全部」。'
+                : '所有**生效中**的记忆都会被删除（归档），AI 将不再记得关于你的任何信息。删错了还能在「已删除」里恢复。'
+            }
+            okText="确认清空"
+            cancelText="取消"
+            okButtonProps={{ danger: true }}
+            onConfirm={() => void onClearAll()}
+          >
+            <Button danger size="small" disabled={activeCount === 0}>
+              清空全部
+            </Button>
+          </Popconfirm>
+          {/* 彻底删除 = 物理删，不可恢复。跟上面的「清空全部」分开，避免误点 */}
+          <Button type="link" size="small" danger onClick={confirmPurgeAll}>
+            彻底删除全部
+          </Button>
         </Space>
 
         <Table

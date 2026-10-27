@@ -117,6 +117,15 @@ adminKnowledgeRouter.get('/knowledge', async (ctx) => {
       total_pages: Math.ceil(count / input.page_size),
     },
     stats: {
+      /**
+       * 本租户**全部**文档数 —— **不受 keyword / status 筛选影响**。
+       *
+       * ⚠️ 为什么单独给一个字段（2026-10-27 修）：
+       *    `pagination.total` 是**筛选后**的条数，前端拿它当「文档总数」卡片，
+       *    一按「索引失败」筛选，卡片就变成 3 —— 卡片说的是「我一共管了多少文档」，
+       *    不该跟着筛选变。
+       */
+      total_documents: await countTenantDocuments(u.tenant_id),
       /** 本租户已 ready 的文档块数合计 */
       chunk_total: await sumReadyChunks(u.tenant_id),
       /** 本租户索引里的块数（BM25 内存索引；重启后会从 Qdrant 重建） */
@@ -652,6 +661,11 @@ async function sumReadyChunks(tenantId: string): Promise<number> {
     attributes: ['chunk_count'],
   });
   return rows.reduce((sum, d) => sum + d.chunk_count, 0);
+}
+
+/** 本租户的全部文档数（不分状态、不分关键词） */
+async function countTenantDocuments(tenantId: string): Promise<number> {
+  return Document.count({ where: { tenant_id: tenantId } });
 }
 
 function firstFile(

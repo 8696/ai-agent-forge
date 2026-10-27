@@ -1,4 +1,5 @@
 import { adminApi } from './adminApi';
+import { apiErrorMessage } from './apiError';
 
 /**
  * admin 知识库 API 客户端 —— 对应 src/gateway/admin/knowledge-routes.ts
@@ -27,6 +28,12 @@ export interface KnowledgePagination {
 }
 
 export interface KnowledgeStats {
+  /**
+   * 本租户**全部**文档数 —— **不受 keyword / status 筛选影响**。
+   *
+   * ⚠️ 「文档总数」卡片必须用这个，不能用 `pagination.total`（那是筛选后的条数）。
+   */
+  total_documents: number;
   /** 本租户 ready 文档的块数合计 */
   chunk_total: number;
   /** BM25 内存索引里的块数 */
@@ -257,19 +264,15 @@ export async function resetChunk(
 
 /**
  * 从 axios 错误里取出后端返回的可读消息。
- * 后端错误体是 { code, message, details }（src/gateway/error-handler.ts）。
- */export function errorMessage(err: unknown, fallback: string): string {
-  const e = err as {
-    response?: { status?: number; data?: { message?: string } };
-    message?: string;
-  };
-  const status = e.response?.status;
-  const serverMessage = e.response?.data?.message;
-  if (status !== undefined && serverMessage !== undefined) {
-    return serverMessage;
-  }
-  if (status !== undefined) {
-    return `${fallback}（HTTP ${status}）`;
-  }
-  return e.message ?? fallback;
-}
+ *
+ * ⚠️ **统一走 `apiErrorMessage`**（docs/04-d §8.4）——
+ *    2026-10-27 之前这里自己抄了一份「只区分有没有服务器消息」的旧实现，
+ *    结果 403 显示成英文 `'Forbidden'`、500 显示成「服务器内部错误」，
+ *    而规格要求的是「没有权限」/「服务异常，已记录」。
+ *
+ * 这个别名保留下来只为兼容还没改 import 的调用方
+ * （`web/pages/admin/KnowledgeSearchPage.tsx`）—— 它跟 `apiErrorMessage` 是同一个函数。
+ *
+ * @deprecated 新代码直接用 `apiErrorMessage`（`web/lib/apiError.ts`）
+ */
+export const errorMessage = apiErrorMessage;

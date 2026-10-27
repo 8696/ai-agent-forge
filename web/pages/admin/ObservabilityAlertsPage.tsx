@@ -1,5 +1,5 @@
 import type { ReactElement } from 'react';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Alert,
   Button,
@@ -75,17 +75,28 @@ export function ObservabilityAlertsPage(): ReactElement {
   const [savingKey, setSavingKey] = useState<string | null>(null);
   const [errMsg, setErrMsg] = useState<string | null>(null);
 
+  /** 组件还活着吗 —— 避免卸载后 setState */
+  const aliveRef = useRef(true);
+  useEffect(() => {
+    aliveRef.current = true;
+    return () => {
+      aliveRef.current = false;
+    };
+  }, []);
+
   const load = useCallback(async (): Promise<void> => {
     setLoading(true);
     setErrMsg(null);
     try {
       const [r, a] = await Promise.all([fetchAlertRules(), fetchAlerts()]);
+      if (!aliveRef.current) return;
       setRules(r);
       setAlerts(a);
     } catch (err: unknown) {
+      if (!aliveRef.current) return;
       setErrMsg(err instanceof Error ? err.message : '加载告警规则失败');
     } finally {
-      setLoading(false);
+      if (aliveRef.current) setLoading(false);
     }
   }, []);
 
@@ -207,9 +218,13 @@ export function ObservabilityAlertsPage(): ReactElement {
                           max={meta.max}
                           step={meta.step}
                           precision={meta.decimals}
-                          addonAfter={meta.suffix}
+                          // ⚠️ antd v6 里 `addonAfter` 已废弃（运行时刷
+                          //    "[antd: InputNumber] 'addonAfter' is deprecated"），
+                          //    单位用 `suffix`（v6 新增，渲染在输入框内）。
+                          suffix={meta.suffix}
                           disabled={!enabled}
-                          style={{ width: 150 }}
+                          // ⚠️ 单位现在在输入框**内部**（`suffix`），要留出位置
+                          style={{ width: 180 }}
                           onChange={(v) => {
                             if (v === null) {
                               void saveThreshold(rule, null);

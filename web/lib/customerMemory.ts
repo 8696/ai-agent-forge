@@ -1,4 +1,5 @@
 import { customerApi } from './customerApi';
+import { apiErrorMessage } from './apiError';
 import type { MemoryCategory, MemoryStatus, UserMemoryItem } from '@shared/types/memory';
 
 /**
@@ -96,21 +97,10 @@ export async function purgeMyMemory(id: string): Promise<void> {
 }
 
 /**
- * 从 axios 错误里取出后端返回的可读消息。
- * 与 customerChat.ts 的同名函数同构（后端错误体 { code, message, details }）。
+ * 从 axios 错误里取出该给用户看的话。
+ *
+ * ⚠️ **唯一实现在 `web/lib/apiError.ts`** —— 这里只是兼容别名。
+ *    旧版各抄一份的实现把 403 → 「没有权限」、500 → 「服务异常，已记录」
+ *    这两条规格文案丢了（详见 web/lib/apiError.ts 的说明）。
  */
-export function errorMessage(err: unknown, fallback: string): string {
-  const e = err as {
-    response?: { status?: number; data?: { message?: string } };
-    message?: string;
-  };
-  const status = e.response?.status;
-  const serverMessage = e.response?.data?.message;
-  if (status !== undefined && serverMessage !== undefined) {
-    return serverMessage;
-  }
-  if (status !== undefined) {
-    return `${fallback}（HTTP ${status}）`;
-  }
-  return e.message ?? fallback;
-}
+export const errorMessage = apiErrorMessage;

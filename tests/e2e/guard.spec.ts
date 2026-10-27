@@ -49,6 +49,6 @@ test.describe('路由守卫（未登录 → 弹到本子系统的登录页）', 
     await clearAuth(page);
     await page.goto('/admin/login');
     await expect(page).toHaveURL(/\/admin\/login/);
-    await expect(page.getByRole('heading', { name: '租户后台登录' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: '登录到 AI 助手' })).toBeVisible();
   });
 });

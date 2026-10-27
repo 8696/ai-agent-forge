@@ -37,12 +37,19 @@
 
 | Token          | 值         | 用途                |
 | -------------- | ---------- | ------------------- |
-| `colorPrimary` | `#1677ff`  | 主题蓝（AntD 默认） |
+| `colorPrimary` | `#2f54eb`  | 主题蓝（AntD 极客蓝） |
 | `colorSuccess` | `#52c41a`  | 成功 / 已索引       |
 | `colorWarning` | `#faad14`  | 警告 / 索引中       |
-| `colorError`   | `#ff4d4ef` | 错误 / 失败         |
-| `borderRadius` | `6`        | 通用圆角            |
+| `colorError`   | `#ff4d4f`  | 错误 / 失败         |
+| `borderRadius` | `8`        | 通用圆角            |
 | `fontSize`     | `14`       | 基础字号            |
+
+> ⚠️ **2026-10-27 订正：这张表以前跟代码对不上**（写的还是 AntD 默认值
+> `#1677ff` / `borderRadius: 6`）。**代码是刻意这么选的，不是笔误** ——
+> 主色选了更沉稳的极客蓝 `#2f54eb`（比 AntD 默认蓝压得住深色侧栏），
+> 圆角选了 8（跟 §1.3「圆角 8」一致）。
+> **唯一真源是 `web/theme.ts` 的 `brandToken`**，改设计先改那里
+> （docs/04-b §4.2 也确认「theme 才是真理来源」）。
 
 - **支持深色模式**（AntD `theme.darkAlgorithm`），右上角切换
 - 浅色为默认
@@ -51,7 +58,7 @@
 
 | 场景         | 不要                   | 改用                                                                                  |
 | ------------ | ---------------------- | ------------------------------------------------------------------------------------- |
-| 公司 Logo    | `image: 'logo.png'`    | `<Avatar shape="circle" style={{ background: '#1677ff' }}><RobotOutlined /></Avatar>` |
+| 公司 Logo    | `image: 'logo.png'`    | `<Avatar shape="circle" style={{ background: token.colorPrimary }}><RobotOutlined /></Avatar>`（实现见 `web/components/shell/BrandMark.tsx`，背景是 `colorPrimary` → `colorPrimaryHover` 的渐变） |
 | 用户头像     | `image: avatar.png`    | `<Avatar icon={<UserOutlined />} />`（无头像时）                                      |
 | 文件类型图标 | `image: file-icon.png` | `<FilePdfOutlined />` / `<FileTextOutlined />`（按扩展名选）                          |
 | 占位插画     | `image: empty.png`     | AntD `<Empty />`（自带 SVG）                                                          |

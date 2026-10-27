@@ -129,6 +129,10 @@ function escapeLike(input: string): string {
  * ⚠️ **状态筛选是按「能不能用」算的**，不是只看 `tenants.status`：
  *    已到期（expires_at <= 现在）的租户在页面上要能筛出来单独看，
  *    否则「哪些租户快到期了 / 已经到期了」根本查不出来。
+ *
+ * ⚠️ **分页是可选的**（2026-10-27 加）：
+ *    不传 `page` / `page_size` = **全量返回**（跟以前一模一样，向后兼容）；
+ *    传了才分页。老调用方（脚本 / 测试）不受影响。
  */
 const tenantListQuerySchema = z.object({
   /** 搜索：租户号或名称 */
@@ -137,29 +141,82 @@ const tenantListQuerySchema = z.object({
   plan: z.enum(['free', 'pro', 'enterprise']).optional(),
   /** 状态筛选：active=正常 / disabled=已禁用 / expired=已到期 */
   status: z.enum(['active', 'disabled', 'expired']).optional(),
+  /** 页码（1 起）；不传 = 不分页（全量） */
+  page: z.coerce.number().int().min(1).optional(),
+  /** 每页条数（上限 100）；不传 = 不分页（全量） */
+  page_size: z.coerce.number().int().min(1).max(100).optional(),
 });
+
+/**
+ * 状态筛选的 where 片段。
+ *
+ * ⚠️ **口径跟页面上「状态」列的三态一致**：
+ *   - `expired`  → 到期时间过了（**不论启停**）：「已到期又禁用」的租户也在这一档
+ *   - `active` / `disabled` → **没到期**的才算（到期的一律归到「已到期」）
+ *
+ * 以前这段逻辑是在 JS 层对全量结果 filter 的（`t.status === s && !t.expired`），
+ * 现在下推到 SQL —— 分页才正确（先分页再筛会漏数据）。
+ */
+function tenantStatusFilter(
+  status: 'active' | 'disabled' | 'expired' | undefined,
+  now: Date,
+): WhereOptions<Tenant> | null {
+  if (status === undefined) {
+    return null;
+  }
+  if (status === 'expired') {
+    return {
+      [Op.and]: [{ expires_at: { [Op.ne]: null } }, { expires_at: { [Op.lte]: now } }],
+    };
+  }
+  return {
+    status,
+    // 没到期（expires_at 为空 = 永不过期）
+    [Op.or]: [{ expires_at: { [Op.eq]: null } }, { expires_at: { [Op.gt]: now } }],
+  };
+}
 
 systemTenantRouter.get('/tenants', jwtAuth, requireSystemUser, async (ctx) => {
   const input = tenantListQuerySchema.parse(ctx.request.query ?? {});
-  const now = Date.now();
+  const now = new Date();
 
-  // ⚠️ where 要**合成一个** —— 分两次 spread 会后者覆盖前者（筛选就只剩套餐了）
-  const where: WhereOptions<Tenant> = {
-    ...(input.keyword !== undefined && input.keyword !== ''
-      ? {
-          [Op.or]: [
-            { code: { [Op.like]: `%${escapeLike(input.keyword)}%` } },
-            { name: { [Op.like]: `%${escapeLike(input.keyword)}%` } },
-          ],
-        }
-      : {}),
-    ...(input.plan !== undefined ? { plan: input.plan } : {}),
-  };
+  // ⚠️ where 要**合成一个** —— 分两次 spread 会后者覆盖前者（筛选就只剩套餐了）。
+  //    所有条件塞进一个 Op.and 数组里：多个 Op.or / Op.and 平铺在同一个 where 对象上
+  //    会互相覆盖（后一个把前一个顶掉）。
+  const conditions: WhereOptions<Tenant>[] = [];
+  if (input.plan !== undefined) {
+    conditions.push({ plan: input.plan });
+  }
+  if (input.keyword !== undefined && input.keyword !== '') {
+    conditions.push({
+      [Op.or]: [
+        { code: { [Op.like]: `%${escapeLike(input.keyword)}%` } },
+        { name: { [Op.like]: `%${escapeLike(input.keyword)}%` } },
+      ],
+    });
+  }
+  const statusCondition = tenantStatusFilter(input.status, now);
+  if (statusCondition !== null) {
+    conditions.push(statusCondition);
+  }
+  const where: WhereOptions<Tenant> =
+    conditions.length > 0 ? { [Op.and]: conditions } : {};
 
-  const tenants = await Tenant.findAll({
-    where,
-    order: [['created_at', 'DESC']],
-  });
+  // 分页只在**传了 page / page_size** 时启用；不传 = 全量（向后兼容）
+  const paged = input.page !== undefined || input.page_size !== undefined;
+  const page = input.page ?? 1;
+  const pageSize = input.page_size ?? 20;
+
+  const found = paged
+    ? await Tenant.findAndCountAll({
+        where,
+        order: [['created_at', 'DESC']],
+        limit: pageSize,
+        offset: (page - 1) * pageSize,
+      })
+    : { rows: await Tenant.findAll({ where, order: [['created_at', 'DESC']] }), count: 0 };
+
+  const tenants = found.rows;
 
   const data = await Promise.all(
     tenants.map(async (t) => {
@@ -171,7 +228,7 @@ systemTenantRouter.get('/tenants', jwtAuth, requireSystemUser, async (ctx) => {
       // 用户数（04-d §6.1 列表里有一列「用户数」）
       const userCount = await User.count({ where: { tenant_id: t.id } });
       const expired =
-        t.expires_at !== null && t.expires_at.getTime() <= now;
+        t.expires_at !== null && t.expires_at.getTime() <= now.getTime();
       return {
         id: t.id,
         code: t.code,
@@ -192,15 +249,20 @@ systemTenantRouter.get('/tenants', jwtAuth, requireSystemUser, async (ctx) => {
     }),
   );
 
-  // 状态筛选在 JS 层做 —— 「已到期」是算出来的，不是列上的枚举值
-  const filtered =
-    input.status === undefined
-      ? data
-      : data.filter((t) =>
-          input.status === 'expired' ? t.expired : t.status === input.status && !t.expired,
-        );
-
-  ctx.body = { tenants: filtered };
+  // ⚠️ **响应结构保持向后兼容**：
+  //    不传分页参数时只有 `{ tenants }`（老调用方拿到的东西一模一样），
+  //    传了分页参数才多一个 `pagination`。
+  ctx.body = paged
+    ? {
+        tenants: data,
+        pagination: {
+          page,
+          page_size: pageSize,
+          total: found.count,
+          total_pages: Math.ceil(found.count / pageSize),
+        },
+      }
+    : { tenants: data };
 });
 
 // ----- F1：单租户详情（F2：补 status / expires_at）-----
@@ -232,6 +294,8 @@ systemTenantRouter.get('/tenants/:id', jwtAuth, requireSystemUser, async (ctx) =
     settings: tenant.settings,
     status: tenant.status, // F2
     expires_at: tenant.expires_at, // F2
+    /** 已到期（时间过了）—— 跟列表页同一个口径，前端不用自己算（2026-10-27 加） */
+    expired: tenant.expires_at !== null && tenant.expires_at.getTime() <= Date.now(),
     created_at: tenant.created_at,
     updated_at: tenant.updated_at,
     /** 该租户的规模统计 */

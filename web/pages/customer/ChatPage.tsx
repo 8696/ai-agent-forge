@@ -19,6 +19,8 @@ import {
   theme,
 } from 'antd';
 import {
+  BookFilled,
+  BookOutlined,
   CopyOutlined,
   DeleteOutlined,
   EditOutlined,
@@ -27,6 +29,8 @@ import {
   DislikeFilled,
   DislikeOutlined,
   LoadingOutlined,
+  MenuFoldOutlined,
+  MenuUnfoldOutlined,
   MessageOutlined,
   PlusOutlined,
   ReloadOutlined,
@@ -46,9 +50,12 @@ import {
   errorMessage,
   fetchSessionMessages,
   fetchSessions,
-  setSessionFavorite,
+  formatFullTime,
+  messageMeta,
   renameSession,
   sendFeedback,
+  setMessageFavorite,
+  setSessionFavorite,
   streamErrorMessage,
 } from '../../lib/customerChat';
 import { PageHeader } from '../../components/shell';
@@ -111,6 +118,35 @@ function thinkingOf(m: ChatUIMessage): string {
 }
 
 /**
+ * 从历史消息里还原 👍/👎 状态。
+ *
+ * 后端 `rowToUiMessage` 把 `messages.feedback` 放在 `metadata.feedback` 里
+ * （见 src/services/chat.ts）—— 刷新后要能还原成「已选中」，
+ * 不然再点一次是「又赞一次」而不是取消。
+ */
+function feedbackOf(messages: ChatUIMessage[]): Record<string, 1 | -1> {
+  const map: Record<string, 1 | -1> = {};
+  for (const m of messages) {
+    const fb = messageMeta(m).feedback;
+    if (fb === 1 || fb === -1) {
+      map[m.id] = fb;
+    }
+  }
+  return map;
+}
+
+/** 从历史消息里还原 📌 收藏状态（同上，后端放在 `metadata.favorite`） */
+function favoritesOf(messages: ChatUIMessage[]): Record<string, boolean> {
+  const map: Record<string, boolean> = {};
+  for (const m of messages) {
+    if (messageMeta(m).favorite === true) {
+      map[m.id] = true;
+    }
+  }
+  return map;
+}
+
+/**
  * 输出审核结果（D4）—— 后端判定这条回答没过审时会下发 data-moderation part。
  *
  * ⚠️ SSE 的固有约束：正文已经流到浏览器了，收不回来。
@@ -145,11 +181,24 @@ export function ChatPage(): ReactElement {
   const [searchParams, setSearchParams] = useSearchParams();
   const [sessions, setSessions] = useState<SessionListItem[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  /**
+   * 右侧聊天面板的加载闸门 —— **只在首次进入时**为 true。
+   *
+   * ⚠️ 以前这里只有一个 `loading`，侧栏刷新和右侧面板共用 ——
+   *    切「只看收藏」→ identity 变 → effect 重跑 → setLoading(true)
+   *    → 右侧的 `SessionLoader` 被**整个卸载**（useChat cleanup 调 `chat.stop()`
+   *    掐断正在流式的回答）→ 重新挂载 → 自动发送的问题**又发一遍**（多花一次 LLM 调用）。
+   *    现在侧栏的加载闸门是 `sessionsLoading`，两边彻底分开。
+   */
+  const [initialLoading, setInitialLoading] = useState(true);
+  /** 侧栏会话列表的加载闸门（跟右侧面板**分开**） */
+  const [sessionsLoading, setSessionsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [renaming, setRenaming] = useState<SessionListItem | null>(null);
   /** 只看收藏的会话（12-e 裁定表 #7） */
   const [favoriteOnly, setFavoriteOnly] = useState(false);
+  /** 侧栏收起 / 展开（docs/04-b §4.5「可隐藏侧栏」） */
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [renameValue, setRenameValue] = useState('');
   /**
    * 待自动发出的问题（首页点「推荐问题 / 资料」跳过来时带 ?q=）。
@@ -161,20 +210,24 @@ export function ChatPage(): ReactElement {
   const bootstrappedRef = useRef(false);
 
   const reloadSessions = useCallback(async (): Promise<void> => {
+    setSessionsLoading(true);
     try {
       const data = await fetchSessions(1, 50, favoriteOnly);
       setSessions(data.sessions);
       setError(null);
     } catch (err: unknown) {
       setError(errorMessage(err, '加载会话列表失败'));
+    } finally {
+      setSessionsLoading(false);
     }
   }, [favoriteOnly]);
 
   useEffect(() => {
     void (async () => {
-      setLoading(true);
       await reloadSessions();
-      setLoading(false);
+      // ⚠️ 只在**首次**加载后放开右侧面板 —— 后续 reloadSessions（切「只看收藏」等）
+      //    绝不能把面板重新变成 loading，否则 SessionLoader 会被卸载（见上面的注释）。
+      setInitialLoading(false);
     })();
   }, [reloadSessions]);
 
@@ -236,6 +289,17 @@ export function ChatPage(): ReactElement {
     }
   }, [reloadSessions, setSearchParams]);
 
+  /**
+   * 自动发送完成 → 清掉「待发问题」。
+   *
+   * ⚠️ **必须清** —— `pendingQuestion` 以前从发送完成后就**再没被清过**
+   *    （只在 selectSession / onNewSession 里清）。任何原因导致聊天面板重挂，
+   *    `autoSentRef` 会归零 → 同一个问题**再自动发一遍**，多花一次 LLM 调用。
+   */
+  const onAutoSent = useCallback((): void => {
+    setPendingQuestion(null);
+  }, []);
+
   /** 收藏 / 取消收藏（12-e 裁定表 #7） */
   const onToggleFavorite = useCallback(
     async (s: SessionListItem): Promise<void> => {
@@ -280,15 +344,30 @@ export function ChatPage(): ReactElement {
 
   const sidebar = (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-      <Button type="primary" icon={<PlusOutlined />} block onClick={() => void onNewSession()}>
-        新对话
-      </Button>
+      <Flex gap={8} align="center">
+        <Button type="primary" icon={<PlusOutlined />} block onClick={() => void onNewSession()}>
+          新对话
+        </Button>
+        {/* 收起侧栏（docs/04-b §4.5「可隐藏侧栏」）。
+            ⚠️ 收起**只影响侧栏自己** —— 右侧的 SessionLoader 绝不能被卸载
+               （那会掐断正在流式的回答）。 */}
+        <Tooltip title="收起会话列表">
+          <Button
+            type="text"
+            icon={<MenuFoldOutlined />}
+            onClick={() => setSidebarCollapsed(true)}
+          />
+        </Tooltip>
+      </Flex>
       <Flex align="center" justify="space-between" style={{ marginTop: 8 }}>
         <Text type="secondary" style={{ fontSize: 12 }}>
           {favoriteOnly ? '只看收藏' : '全部会话'}
         </Text>
         <Switch
           size="small"
+          // 侧栏自己的加载态 —— 切「只看收藏」时这里转个圈，
+          // **右侧聊天面板不受影响**（正在流式的回答不会被掐断）。
+          loading={sessionsLoading}
           checked={favoriteOnly}
           onChange={(v) => {
             setFavoriteOnly(v);
@@ -297,7 +376,16 @@ export function ChatPage(): ReactElement {
       </Flex>
       <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', marginTop: 8 }}>
         {sessions.length === 0 ? (
-          <Empty description="还没有会话" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+          sessionsLoading ? (
+            <Flex align="center" justify="center" style={{ padding: 16 }}>
+              <Spin size="small" />
+            </Flex>
+          ) : (
+            <Empty
+              description={favoriteOnly ? '还没有收藏的会话' : '还没有对话记录，开始聊天吧'}
+              image={Empty.PRESENTED_IMAGE_SIMPLE}
+            />
+          )
         ) : (
           <Space orientation="vertical" size={4} style={{ width: '100%' }}>
             {sessions.map((s) => (
@@ -309,18 +397,20 @@ export function ChatPage(): ReactElement {
                   padding: '6px 8px',
                   borderRadius: 6,
                   cursor: 'pointer',
-                  background: s.id === activeId ? 'rgba(47, 84, 235, 0.08)' : undefined,
+                  background: s.id === activeId ? token.colorFillQuaternary : undefined,
                 }}
                 onClick={() => selectSession(s.id)}
               >
                 <MessageOutlined style={{ color: token.colorTextQuaternary }} />
-                <Text
-                  ellipsis
-                  style={{ flex: 1, minWidth: 0 }}
-                  title={s.title ?? '未命名会话'}
-                >
-                  {s.title ?? '未命名会话'}
-                </Text>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <Text ellipsis style={{ display: 'block' }} title={s.title ?? '未命名会话'}>
+                    {s.title ?? '未命名会话'}
+                  </Text>
+                  {/* 最后消息时间（docs/04-b §4.5）—— 跟气泡上的时间戳同一种格式 */}
+                  <Text type="secondary" style={{ fontSize: 11 }}>
+                    {formatMessageTime(s.last_message_at ?? undefined) ?? ''}
+                  </Text>
+                </div>
                 <Tooltip title={s.favorite ? '取消收藏' : '收藏'}>
                   <Button
                     type="text"
@@ -371,32 +461,40 @@ export function ChatPage(): ReactElement {
   );
 
   return (
-    <div>
+    // ⚠️ 高度不再写死 `calc(100vh - 190px)` —— 那个魔法数是「视口 - 顶栏 - 页脚 -
+    //    Content 内边距 - 页面头」硬凑出来的，改一次布局就错。
+    //    现在整页是一列 flex：`height: 100%` 跟 SharedShellLayout 的 Content 对齐，
+    //    聊天区自己 `flex: 1 + minHeight: 0` 吃掉剩余空间（消息区内部滚动）。
+    <div style={{ height: '100%', minHeight: 0, display: 'flex', flexDirection: 'column' }}>
       <PageHeader
         title="智能问答"
         subtitle="基于本租户知识库回答，答案会标注引用来源。"
-        extra={
-          <Button
-            icon={<PlusOutlined />}
-            onClick={() => void onNewSession()}
-            style={{ display: 'none' }}
-          />
-        }
       />
 
       {error !== null && (
         <Alert type="error" showIcon title={error} style={{ marginBottom: 16 }} />
       )}
 
-      <Flex gap={16} style={{ height: 'calc(100vh - 190px)', minHeight: 420 }}>
-        {/* 会话侧栏 */}
-        <Card
-          size="small"
-          style={{ width: 260, flexShrink: 0 }}
-          styles={{ body: { height: '100%', padding: 12, display: 'flex', flexDirection: 'column' } }}
-        >
-          {sidebar}
-        </Card>
+      <Flex gap={16} style={{ flex: 1, minHeight: 0 }}>
+        {/* 会话侧栏（可收起） */}
+        {sidebarCollapsed ? (
+          <Tooltip title="展开会话列表" placement="right">
+            <Button
+              type="text"
+              icon={<MenuUnfoldOutlined />}
+              onClick={() => setSidebarCollapsed(false)}
+              style={{ flexShrink: 0, alignSelf: 'flex-start' }}
+            />
+          </Tooltip>
+        ) : (
+          <Card
+            size="small"
+            style={{ width: 260, flexShrink: 0 }}
+            styles={{ body: { height: '100%', padding: 12, display: 'flex', flexDirection: 'column' } }}
+          >
+            {sidebar}
+          </Card>
+        )}
 
         <div
           style={{
@@ -410,7 +508,7 @@ export function ChatPage(): ReactElement {
             overflow: 'hidden',
           }}
         >
-          {loading ? (
+          {initialLoading ? (
             <Flex align="center" justify="center" style={{ flex: 1 }}>
               <Spin />
             </Flex>
@@ -427,6 +525,7 @@ export function ChatPage(): ReactElement {
               key={activeId}
               sessionId={activeId}
               autoSend={pendingQuestion?.sessionId === activeId ? pendingQuestion.text : undefined}
+              onAutoSent={onAutoSent}
               onSessionsChanged={() => void reloadSessions()}
             />
           )}
@@ -447,11 +546,14 @@ export function ChatPage(): ReactElement {
 function SessionLoader({
   sessionId,
   autoSend,
+  onAutoSent,
   onSessionsChanged,
 }: {
   sessionId: string;
   /** 挂上之后自动发出去的问题（首页 ?q= 跳过来时才有） */
   autoSend?: string | undefined;
+  /** 自动发送完成后回调（父组件据此清掉「待发问题」，避免重挂后重复发送） */
+  onAutoSent: () => void;
   onSessionsChanged: () => void;
 }): ReactElement {
   const [initial, setInitial] = useState<ChatUIMessage[] | null>(null);
@@ -495,6 +597,7 @@ function SessionLoader({
       sessionId={sessionId}
       initialMessages={initial}
       autoSend={autoSend}
+      onAutoSent={onAutoSent}
       onSessionsChanged={onSessionsChanged}
     />
   );
@@ -504,22 +607,44 @@ function ChatPanel({
   sessionId,
   initialMessages,
   autoSend,
+  onAutoSent,
   onSessionsChanged,
 }: {
   sessionId: string;
   initialMessages: ChatUIMessage[];
   autoSend?: string | undefined;
+  onAutoSent: () => void;
   onSessionsChanged: () => void;
 }): ReactElement {
   const { token } = theme.useToken();
   const [input, setInput] = useState('');
   const [phase, setPhase] = useState<Phase>('idle');
   const [notice, setNotice] = useState<string | null>(null);
-  const [feedbackMap, setFeedbackMap] = useState<Record<string, 1 | -1>>({});
+  /**
+   * 👍/👎 反馈状态 —— **初值来自后端**（历史消息的 `metadata.feedback`）。
+   *
+   * ⚠️ 以前是纯前端 state，刷新后归零 → 图标回到未选中，
+   *    再点一次是「又赞一次」而不是「取消」（反馈再也取消不了）。
+   */
+  const [feedbackMap, setFeedbackMap] = useState<Record<string, 1 | -1>>(() =>
+    feedbackOf(initialMessages),
+  );
+  /** 📌 消息级收藏状态（初值来自后端的 `metadata.favorite`） */
+  const [favoriteMap, setFavoriteMap] = useState<Record<string, boolean>>(() =>
+    favoritesOf(initialMessages),
+  );
   /** 正在确认中的那次工具调用（B3 HITL） */
   const [approvingToolId, setApprovingToolId] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
+  /**
+   * 用户是不是「贴着底部」。
+   *
+   * ⚠️ 以前每有一条消息就无条件 `scrollIntoView` —— 用户往上翻历史时
+   *    会被**硬拽回底部**（想看上一条的回答根本看不住）。
+   *    现在离底部 > 80px 就认为用户在上翻，不再自动滚。
+   */
+  const stickToBottomRef = useRef(true);
 
   // 「思考模式」开关（docs/04-b §4.4）：本轮要不要让模型先推理再回答。
   // 用 ref 传给 transport —— transport 只在 sessionId 变化时重建，
@@ -560,6 +685,16 @@ function ChatPanel({
 
   const busy = status === 'submitted' || status === 'streaming';
   const lastUserText = useMemo(() => lastUserTextOf(messages), [messages]);
+  /**
+   * 用户消息已经发出、但 assistant 消息**还没建出来**的那段窗口
+   * （检索 + 查询改写 + 重排那几秒）。
+   *
+   * ⚠️ 后端的 `data-status` part 是 transient 的 —— transient part **不建消息**
+   *    （SDK 的 processUIMessageStream：transient 直接 break，不 write），
+   *    所以这段时间消息区里只有用户气泡，没有任何加载指示。
+   *    规格 §4.8.5 要求这里就有「✍ 思考中...」+ `<Spin />`。
+   */
+  const waitingForAssistant = busy && messages[messages.length - 1]?.role === 'user';
 
   /**
    * 自动发出带过来的问题（首页点「推荐问题 / 资料」跳过来）。
@@ -579,21 +714,43 @@ function ChatPanel({
     autoSentRef.current = true;
     setPhase('retrieving');
     const timer = window.setTimeout(() => {
+      // ⚠️ **先清「待发问题」再发** —— 父组件据此把 `pendingQuestion` 置空。
+      //    不清的话：任何原因导致面板重挂（`autoSentRef` 归零），
+      //    同一个问题会**再自动发一遍**，多花一次 LLM 调用。
+      onAutoSent();
       void sendMessage({ text: autoSend });
     }, 0);
     // ⚠️ 故意**不** clearTimeout：cleanup 里清掉就等于又踩回上面那个坑
     //    （StrictMode 的 cleanup 正好跑在 timer 之前）。
     //    用户在同一个 tick 里切走会话的概率极低，代价只是白发一次请求。
-  }, [autoSend, sendMessage]);
+  }, [autoSend, onAutoSent, sendMessage]);
 
-  // 消息增长时滚到底
+  // 消息增长时滚到底 —— 但**用户已经往上翻**的时候别把他拽回来
+  const onScroll = useCallback((): void => {
+    const el = scrollRef.current;
+    if (el === null) {
+      return;
+    }
+    const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
+    stickToBottomRef.current = distance <= 80;
+  }, []);
+
   useEffect(() => {
+    if (!stickToBottomRef.current) {
+      return;
+    }
     bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
   }, [messages]);
 
   const onSend = useCallback((): void => {
     const text = input.trim();
-    if (text === '' || busy) {
+    if (text === '') {
+      return;
+    }
+    if (busy) {
+      // ⚠️ 流式中按 Enter：以前**静默无效**（用户毫无反馈，还以为页面卡了）
+      //    → 给一句明确提示（停止按钮就在旁边）
+      message.info('正在回答中…等这一轮结束再发下一条');
       return;
     }
     setInput('');
@@ -601,6 +758,42 @@ function ChatPanel({
     setPhase('retrieving');
     void sendMessage({ text });
   }, [busy, input, sendMessage]);
+
+  /**
+   * 断流后的「重试」—— **重跑这一轮**，不是再问一遍。
+   *
+   * ⚠️ 以前是 `sendMessage({text: lastUserText})` → **追加一条新的用户消息**，
+   *    页面上出现「同一个问题问了两遍」，DB 里也多一行。
+   *    现在按消息角色分两种情况：
+   *      - 已经有 assistant 行（多半是半截的）→ 重新生成它（覆盖同一行）
+   *      - 还没有 assistant 行（请求根本没发出去）→ 重跑那个用户问题
+   *        （用户行已经在库里，后端不会重复插）
+   */
+  const onRetry = useCallback((): void => {
+    if (busy) {
+      return;
+    }
+    let userIdx = -1;
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      if (messages[i]?.role === 'user') {
+        userIdx = i;
+        break;
+      }
+    }
+    const userMsg = userIdx < 0 ? undefined : messages[userIdx];
+    if (userMsg === undefined) {
+      return;
+    }
+    // 这条用户消息**之后**的 assistant（多半是失败 / 半截的）就是被重跑的那一条
+    const assistant = messages[userIdx + 1];
+    setNotice(null);
+    setPhase('retrieving');
+    if (assistant !== undefined && assistant.role === 'assistant') {
+      void regenerate({ messageId: assistant.id });
+    } else {
+      void regenerate({ messageId: userMsg.id });
+    }
+  }, [busy, messages, regenerate]);
 
   /**
    * 确认一次敏感工具调用（B3 HITL）。
@@ -673,6 +866,25 @@ function ChatPanel({
     [feedbackMap],
   );
 
+  /**
+   * 📌 消息级收藏（docs/04-b §4.2 的操作行）
+   *
+   * 跟会话收藏是两回事：会话收藏是「这一段对话重要」，消息收藏是「这一条回答值得留着」。
+   * ⚠️ 挂件页**没有**这个按钮 —— 挂件是匿名会话，收藏没有持久归属语义。
+   */
+  const onToggleMessageFavorite = useCallback(
+    async (messageId: string): Promise<void> => {
+      const next = favoriteMap[messageId] !== true;
+      try {
+        await setMessageFavorite(messageId, next);
+        setFavoriteMap((prev) => ({ ...prev, [messageId]: next }));
+      } catch (err: unknown) {
+        message.error(errorMessage(err, '操作失败'));
+      }
+    },
+    [favoriteMap],
+  );
+
   const onCopy = useCallback(async (text: string): Promise<void> => {
     try {
       await navigator.clipboard.writeText(text);
@@ -693,6 +905,7 @@ function ChatPanel({
     <>
       <div
         ref={scrollRef}
+        onScroll={onScroll}
         style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: 16, display: 'flex', flexDirection: 'column', gap: 16 }}
       >
         {messages.length === 0 ? (
@@ -710,11 +923,18 @@ function ChatPanel({
                 message={m}
                 busy={busy}
                 feedback={feedbackMap[m.id]}
+                favorite={favoriteMap[m.id] === true}
                 onFeedback={(v) => void onFeedback(m.id, v)}
+                onToggleFavorite={() => void onToggleMessageFavorite(m.id)}
                 onCopy={() => void onCopy(textOf(m))}
                 onRegenerate={() => {
                   setNotice(null);
-                  regenerate();
+                  setPhase('retrieving');
+                  // ⚠️ **必须传 messageId** —— 不传的话 SDK 会重新生成
+                  //    **最后一条** assistant 消息（ai/dist/index.d.ts:6151：
+                  //    "If no message id is provided, the last assistant message
+                  //    will be regenerated."），点哪条都作用在最后一条上。
+                  void regenerate({ messageId: m.id });
                 }}
                 onApproveTool={(call) => void onApproveTool(call)}
                 onRejectTool={(call) => void onRejectTool(call)}
@@ -722,6 +942,15 @@ function ChatPanel({
               />
             ),
           )
+        )}
+        {/* 检索 / 改写 / 重排那几秒：用户消息已经发出去了，但 assistant 消息
+            还没建出来（后端的 data-status 是 transient part，不建消息）——
+            这里补一个「✍ 思考中…」指示（docs/04-b §4.8.5）。 */}
+        {waitingForAssistant && (
+          <Space>
+            <Spin size="small" />
+            <Text type="secondary">✍ 思考中…</Text>
+          </Space>
         )}
         <div ref={bottomRef} />
       </div>
@@ -743,11 +972,12 @@ function ChatPanel({
             showIcon
             title={streamErrorMessage(error, '请求失败，请稍后重试')}
             action={
-              // 断流后的「重试」：把刚才那条问题重发一遍。
+              // 断流后的「重试」：**重跑这一轮**，不是再问一遍
+              // （以前 sendMessage 会追加一条重复的用户消息）。
               // ⚠️ 不做**自动**重试 —— 流断的时候上游可能已经算过 token 了，
               //    自动重发等于悄悄多花一次钱。让人点一下更保险。
               lastUserText !== null ? (
-                <Button size="small" onClick={() => void sendMessage({ text: lastUserText })}>
+                <Button size="small" onClick={onRetry}>
                   重试
                 </Button>
               ) : undefined
@@ -755,10 +985,18 @@ function ChatPanel({
             style={{ marginBottom: 8 }}
           />
         )}
-        <Flex gap={12} align="center" style={{ marginBottom: 8 }}>
+        <Flex gap={12} align="center" style={{ marginBottom: 8 }} wrap>
           <Checkbox checked={thinking} onChange={(e) => setThinking(e.target.checked)}>
             思考模式
           </Checkbox>
+          {/* 「联网」是 v1 占位（docs/04-b §4.3）—— 联网搜索要接外部 API，
+              按裁定表属于「跨系统」不做。这里只画一个**禁用**的开关，
+              ⚠️ **不接进请求体**（后端不认这个字段）。 */}
+          <Tooltip title="联网搜索（暂未开放）">
+            <span>
+              <Checkbox disabled>联网</Checkbox>
+            </span>
+          </Tooltip>
           <Text type="secondary" style={{ fontSize: 12 }}>
             开启后 AI 先推理再回答（折叠在「思考过程」里）
           </Text>
@@ -807,11 +1045,16 @@ function UserBubble({ message }: { message: ChatUIMessage }): ReactElement {
   // 右上角小时间戳（docs/04-b §4.2）——
   // 历史消息带 created_at（后端从 messages.created_at 带出来）；
   // 实时流式的新消息没有，用本地时间兜底。
-  const stamp = formatMessageTime(message.metadata?.created_at) ?? formatMessageTime(new Date().toISOString());
+  const createdAt = message.metadata?.created_at;
+  const stamp = formatMessageTime(createdAt) ?? formatMessageTime(new Date().toISOString());
+  // hover 显示**完整**时间（小时间戳只到分钟）
+  const fullStamp = createdAt === undefined ? '' : formatFullTime(createdAt);
 
   return (
     <Flex justify="flex-end" vertical align="flex-end" gap={2}>
-      <span style={{ fontSize: 11, color: token.colorTextTertiary, lineHeight: 1 }}>{stamp}</span>
+      <Tooltip title={fullStamp === '' ? stamp : fullStamp}>
+        <span style={{ fontSize: 11, color: token.colorTextTertiary, lineHeight: 1 }}>{stamp}</span>
+      </Tooltip>
       <div
         style={{
           maxWidth: '76%',
@@ -819,7 +1062,8 @@ function UserBubble({ message }: { message: ChatUIMessage }): ReactElement {
           borderRadius: 12,
           borderBottomRightRadius: 4,
           background: token.colorPrimary,
-          color: '#fff',
+          // 主色底上的文字走 token（colorTextLightSolid = 实心背景上的文字色）
+          color: token.colorTextLightSolid,
           whiteSpace: 'pre-wrap',
           wordBreak: 'break-word',
         }}
@@ -834,7 +1078,9 @@ function AssistantBubble({
   message: msg,
   busy,
   feedback,
+  favorite,
   onFeedback,
+  onToggleFavorite,
   onCopy,
   onRegenerate,
   onApproveTool,
@@ -844,7 +1090,10 @@ function AssistantBubble({
   message: ChatUIMessage;
   busy: boolean;
   feedback: 1 | -1 | undefined;
+  /** 📌 是否已收藏 */
+  favorite: boolean;
   onFeedback: (value: 1 | -1) => void;
+  onToggleFavorite: () => void;
   onCopy: () => void;
   onRegenerate: () => void;
   /** 确认一次敏感工具调用（B3 HITL） */
@@ -865,7 +1114,11 @@ function AssistantBubble({
   const isStreaming = busy && text === '';
 
   return (
-    <Flex vertical gap={8} style={{ maxWidth: '100%' }}>
+    // ⚠️ `alignSelf: 'flex-start'` + `maxWidth` —— 外层是 `<Flex vertical>`，
+    //    antd v6 在 vertical 且没显式传 align 时会加 `align-items: stretch`
+    //    （antd/es/flex/utils.js:24）→ AI 回答被拉成一条**满宽的灰带**，
+    //    跟右边 76% 的用户气泡完全不对称。加上这两个就是「气泡」了。
+    <Flex vertical gap={8} style={{ maxWidth: '88%', alignSelf: 'flex-start' }}>
       {thinking !== '' &&
         // 流式期间直接摊开（边生成边看），跑完换成折叠的 <details>。
         // 用「两种元素」而不是受控的 open 属性 —— 受控 open 会覆盖用户手动展开/收起的意图。
@@ -970,6 +1223,17 @@ function AssistantBubble({
           <Tooltip title="重新生成">
             <Button type="text" size="small" icon={<ReloadOutlined />} onClick={onRegenerate} />
           </Tooltip>
+          {/* 📌 消息级收藏（docs/04-b §4.2）—— 收藏的是「这一条回答」，
+              跟侧栏的会话收藏是两回事。 */}
+          <Tooltip title={favorite ? '取消收藏' : '收藏这条回答'}>
+            <Button
+              type="text"
+              size="small"
+              icon={favorite ? <BookFilled /> : <BookOutlined />}
+              style={favorite ? { color: token.colorWarning } : undefined}
+              onClick={onToggleFavorite}
+            />
+          </Tooltip>
         </Space>
       )}
     </Flex>
@@ -989,7 +1253,7 @@ function CitationList({ hits }: { hits: CitationHit[] }): ReactElement {
           key={`${h.doc_id}-${h.chunk_index}`}
           size="small"
           style={{
-            borderLeft: `3px solid ${h.sources.length > 1 ? '#52c41a' : token.colorBorder}`,
+            borderLeft: `3px solid ${h.sources.length > 1 ? token.colorSuccess : token.colorBorder}`,
             background: token.colorFillQuaternary,
           }}
           styles={{ body: { padding: 10 } }}

@@ -25,12 +25,18 @@ test.describe('三套登录页', () => {
   test('admin 登录页渲染出三个字段 + 记住我 + 忘记密码留位', async ({ page }) => {
     await page.goto('/admin/login');
 
-    await expect(page.getByRole('heading', { name: '租户后台登录' })).toBeVisible();
+    // 标题统一是「登录到 AI 助手」（docs/04-b §3.4），
+    // 各子系统的身份信息放在**副标题**里
+    await expect(page.getByRole('heading', { name: '登录到 AI 助手' })).toBeVisible();
+    await expect(page.getByText('租户后台登录')).toBeVisible();
     await expect(page.getByText('租户号由你的 SaaS 服务方提供')).toBeVisible();
     await expect(page.getByLabel('租户号')).toBeVisible();
     await expect(page.getByLabel('邮箱')).toBeVisible();
     await expect(page.getByLabel('密码')).toBeVisible();
-    await expect(page.getByRole('checkbox', { name: '记住我' })).toBeChecked();
+    // ⚠️ 默认**不勾** —— 不勾时 token 存 sessionStorage（本次浏览器会话），
+    //    勾了才存 localStorage（跨浏览器重启保留 7 天）。
+    //    默认不勾 = 用户没明确表态就不把凭证长期留在磁盘上。
+    await expect(page.getByRole('checkbox', { name: '记住我' })).not.toBeChecked();
     // 「忘记密码」是 v1 不实现的 UI 留位：灰色禁用 + tooltip
     await expect(page.getByRole('button', { name: '忘记密码？' })).toBeDisabled();
   });
@@ -38,19 +44,33 @@ test.describe('三套登录页', () => {
   test('customer 登录页渲染（无租户后台的「记住我」）', async ({ page }) => {
     await page.goto('/customer/login');
 
-    await expect(page.getByRole('heading', { name: '用户登录' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: '登录到 AI 助手' })).toBeVisible();
+    await expect(page.getByText('用户登录')).toBeVisible();
     await expect(page.getByLabel('租户号')).toBeVisible();
     await expect(page.getByLabel('邮箱')).toBeVisible();
     await expect(page.getByLabel('密码')).toBeVisible();
+    // 租户前台没有「记住我」
+    await expect(page.getByRole('checkbox', { name: '记住我' })).toHaveCount(0);
   });
 
   test('system 登录页只有邮箱 + 密码（平台方不挂租户号）', async ({ page }) => {
     await page.goto('/system/login');
 
-    await expect(page.getByRole('heading', { name: '平台管理登录' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: '登录到 AI 助手' })).toBeVisible();
+    await expect(page.getByText('SaaS 平台方登录')).toBeVisible();
     await expect(page.getByLabel('邮箱')).toBeVisible();
     await expect(page.getByLabel('密码')).toBeVisible();
     await expect(page.getByLabel('租户号')).toHaveCount(0);
+  });
+
+  test('system 登录页：密码少于 8 位 → 前端就地拦（docs/04-b §3.1）', async ({ page }) => {
+    await page.goto('/system/login');
+    await page.getByLabel('邮箱').fill(SYSTEM.email);
+    await page.getByLabel('密码').fill('Ab1!x');
+    await page.getByRole('button', { name: /登\s*录/ }).click();
+
+    await expect(page.getByText(/至少 8|不少于 8|8 个字符/)).toBeVisible();
+    await expect(page).toHaveURL(/\/system\/login/);
   });
 
   test('密码错 → 提示「邮箱或密码错误」，且**不跳走**', async ({ page }) => {
@@ -84,9 +104,24 @@ test.describe('三套登录页', () => {
     await page.getByRole('button', { name: /登\s*录/ }).click();
 
     await expect(page).toHaveURL(/\/admin\/?$/);
-    // 登录后拿到的 token 落在 localStorage（勾了「记住我」）
-    const token = await page.evaluate(() => localStorage.getItem('agent_platform_token'));
-    expect(token).toBeTruthy();
+    // 默认不勾「记住我」→ token 存 sessionStorage（本次浏览器会话）
+    const sessionToken = await page.evaluate(() => sessionStorage.getItem('agent_platform_token'));
+    expect(sessionToken).toBeTruthy();
+    const localToken = await page.evaluate(() => localStorage.getItem('agent_platform_token'));
+    expect(localToken).toBeNull();
+  });
+
+  test('勾了「记住我」→ token 落 localStorage', async ({ page }) => {
+    await page.goto('/admin/login');
+    await page.getByLabel('租户号').fill(ADMIN.tenant);
+    await page.getByLabel('邮箱').fill(ADMIN.email);
+    await page.getByLabel('密码').fill(ADMIN.password);
+    await page.getByRole('checkbox', { name: '记住我' }).check();
+    await page.getByRole('button', { name: /登\s*录/ }).click();
+
+    await expect(page).toHaveURL(/\/admin\/?$/);
+    const localToken = await page.evaluate(() => localStorage.getItem('agent_platform_token'));
+    expect(localToken).toBeTruthy();
   });
 
   test('customer 登录成功 → 跳到 /customer 前台首页', async ({ page }) => {

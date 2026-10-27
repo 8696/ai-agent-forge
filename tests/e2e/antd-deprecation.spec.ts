@@ -39,13 +39,20 @@ function collectAntWarnings(page: import('@playwright/test').Page): string[] {
 const ADMIN = { tenant: 'acme', email: 'admin@acme.test', password: 'AcmeAdmin-123!' };
 const SYSTEM = { email: 'platform-admin@local.test', password: 'PlatformAdmin-123!' };
 
-/** 租户后台的全部页面（web/routes.tsx 的 /admin 分支） */
+/**
+ * 租户后台的全部页面（web/routes.tsx 的 /admin 分支）
+ *
+ * ⚠️ **加新页面时必须同步加到这里** —— 这个 spec 的价值全在「新页面也会被打开」，
+ *    漏一个页面就等于那个页面上的废弃警告没人守。
+ *    （2026-10-27 加「切片浏览」页时就漏过一次。）
+ */
 const ADMIN_PAGES = [
   '/admin',
   '/admin/users',
   '/admin/memories',
   '/admin/knowledge/documents',
   '/admin/knowledge/test',
+  '/admin/knowledge/chunks',
   '/admin/models',
   '/admin/prompts',
   '/admin/settings',
@@ -59,10 +66,21 @@ const ADMIN_PAGES = [
   '/admin/api-keys',
   '/admin/tools',
   '/admin/tool-logs',
+  '/admin/change-password',
 ];
 
 /** 平台方后台的全部页面 */
-const SYSTEM_PAGES = ['/system', '/system/tenants', '/system/audit'];
+const SYSTEM_PAGES = ['/system', '/system/tenants', '/system/audit', '/system/change-password'];
+
+/** 前台（租户用户）的全部页面 —— 聊天页是产品最核心的 UI，同样要守 */
+const CUSTOMER_PAGES = [
+  '/customer',
+  '/customer/chat',
+  '/customer/memories',
+  '/customer/change-password',
+];
+
+const CUSTOMER = { tenant: 'acme', email: 'alice@acme.test', password: 'AcmeCustomer-123!' };
 
 async function loginAsAdmin(page: import('@playwright/test').Page): Promise<void> {
   await page.goto('/admin/login');
@@ -79,6 +97,15 @@ async function loginAsSystem(page: import('@playwright/test').Page): Promise<voi
   await page.getByLabel('密码').fill(SYSTEM.password);
   await page.getByRole('button', { name: /登\s*录/ }).click();
   await page.waitForURL(/\/system(\/|$)/);
+}
+
+async function loginAsCustomer(page: import('@playwright/test').Page): Promise<void> {
+  await page.goto('/customer/login');
+  await page.getByLabel('租户号').fill(CUSTOMER.tenant);
+  await page.getByLabel('邮箱').fill(CUSTOMER.email);
+  await page.getByLabel('密码').fill(CUSTOMER.password);
+  await page.getByRole('button', { name: /登\s*录/ }).click();
+  await page.waitForURL(/\/customer(\/|$)/);
 }
 
 test.describe('antd v6 废弃 API', () => {
@@ -100,6 +127,18 @@ test.describe('antd v6 废弃 API', () => {
     await loginAsSystem(page);
 
     for (const path of SYSTEM_PAGES) {
+      await page.goto(path);
+      await page.waitForLoadState('networkidle').catch(() => undefined);
+    }
+
+    expect(warnings, '控制台出现了 antd 废弃 API 警告').toEqual([]);
+  });
+
+  test('租户前台（客户）的每个页面都不刷 antd 废弃警告', async ({ page }) => {
+    const warnings = collectAntWarnings(page);
+    await loginAsCustomer(page);
+
+    for (const path of CUSTOMER_PAGES) {
       await page.goto(path);
       await page.waitForLoadState('networkidle').catch(() => undefined);
     }

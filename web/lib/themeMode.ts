@@ -19,6 +19,19 @@ export type ThemeMode = 'light' | 'dark';
 
 const STORAGE_KEY = 'agentforge:theme-mode';
 
+/**
+ * 把模式写到 `<html data-theme>` 上。
+ *
+ * ⚠️ **必须在 React 渲染之前同步写一次**（不只是在 useEffect 里）：
+ * body 的背景色是注入的静态 CSS（main.tsx），靠 `html[data-theme='dark']` 选择器切换。
+ * 如果等 useEffect 才设属性，**首帧 body 没有任何背景规则** → 深色模式下会先闪一下白底
+ * （`createRoot().render()` 是并发渲染，浏览器可能在 React 提交前就画了第一帧）。
+ */
+function applyThemeModeToDom(next: ThemeMode): void {
+  if (typeof document === 'undefined') return;
+  document.documentElement.dataset.theme = next;
+}
+
 type Listener = () => void;
 
 const listeners = new Set<Listener>();
@@ -42,6 +55,9 @@ function systemPrefersDark(): boolean {
 /** 当前模式（模块级状态，读起来是同步的） */
 let mode: ThemeMode = readStored() ?? (systemPrefersDark() ? 'dark' : 'light');
 
+// 首帧就写上，别等 React —— 见 applyThemeModeToDom 的注释
+applyThemeModeToDom(mode);
+
 export function getThemeMode(): ThemeMode {
   return mode;
 }
@@ -49,6 +65,8 @@ export function getThemeMode(): ThemeMode {
 export function setThemeMode(next: ThemeMode): void {
   if (next === mode) return;
   mode = next;
+  // 同步写 DOM：顶栏按钮点下去的那一刻背景色就该跟着变，不能等一个 React effect
+  applyThemeModeToDom(next);
   if (typeof window !== 'undefined') {
     try {
       window.localStorage.setItem(STORAGE_KEY, next);

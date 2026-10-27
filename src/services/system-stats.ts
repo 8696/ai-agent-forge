@@ -19,10 +19,32 @@ import { utcWallClock } from '../lib/sql-datetime';
 
 export interface SystemTenantStats {
   total: number;
+  /**
+   * 启用中：`status='active'` **且没过期**。
+   *
+   * ⚠️ **口径跟租户列表的 `?status=active` 筛选完全一致**（2026-10-27 修）——
+   *    以前这里是 `status != 'disabled'`（把已到期的也算进「启用」），
+   *    而列表筛选是 `status='active' && !expired` —— 两处对不上，
+   *    页面上「启用 N」跟列表里筛出来的条数能差出一大截。
+   */
   active: number;
+  /** 已禁用：`status='disabled'`（含「已到期但仍处于禁用状态」的） */
   disabled: number;
-  /** 已过期的租户（expires_at < now），其中一部分可能也是 disabled */
+  /**
+   * 已到期（且仍是启用状态）：`status='active'` 且 `expires_at <= now`。
+   *
+   * ⚠️ **跟 disabled 互不重叠** → `active + disabled + expired === total`，
+   *    三个数能直接相加（页面上的说明文案就写这个）。
+   *    「已到期又被禁用」的租户算在 disabled 里 —— 见 `expired_total`。
+   */
   expired: number;
+  /**
+   * 全部已到期的租户（含已禁用的）—— `expired` 的父集。
+   *
+   * 用途：页面上标一句「另有 N 个已禁用的租户也已到期」，
+   * 免得运营对「租户列表里筛『已到期』比这个数多」这件事没有解释。
+   */
+  expired_total: number;
   plans: Array<{ plan: string; count: number }>;
 }
 
@@ -30,7 +52,13 @@ export interface SystemOverBudgetTenant {
   tenant_id: string;
   code: string;
   name: string;
+  /**
+   * ⚠️ **单位是 token，不是钱** —— 这里比的是 `monthly_token_budget`
+   *    （月度量化预算，token 数），不是美元预算。
+   *    页面上的列名必须写清楚「token」，否则运营会把 1200000 读成 $1.2M。
+   */
   used: number;
+  /** 月度 token 预算（token 数；0 = 不限） */
   limit: number;
 }
 
@@ -61,18 +89,33 @@ export async function getSystemStats(now: Date = new Date()): Promise<SystemStat
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
 
   // ---- 租户 / 用户：这两张表从 Step 2 就有，一定存在 ----
-  const [statusRows, planRows, expiredRow, userRow, systemUserRow] = await Promise.all([
-    sequelize.query<{ status: string; count: string | number }>(
-      `SELECT status, COUNT(*) AS count FROM tenants GROUP BY status`,
-      { type: QueryTypes.SELECT },
+  //
+  // ⚠️ **租户状态的口径（2026-10-27 统一）**：
+  //    启用中 = status='active' 且没过期；已禁用 = status='disabled'；
+  //    已到期 = status='active' 且过期（**不跟已禁用重叠** → 三个数相加 = 总数）。
+  //    「已到期又被禁用」的租户算在 disabled 里，`expired_total` 是它的父集。
+  const [tenantRows, planRows, userRow, systemUserRow] = await Promise.all([
+    sequelize.query<{
+      total: string | number;
+      active: string | number;
+      disabled: string | number;
+      expired: string | number;
+      expired_total: string | number;
+    }>(
+      `SELECT COUNT(*) AS total,
+              COALESCE(SUM(CASE WHEN status = 'active' AND (expires_at IS NULL OR expires_at > ?) THEN 1 ELSE 0 END), 0) AS active,
+              COALESCE(SUM(CASE WHEN status = 'disabled' THEN 1 ELSE 0 END), 0) AS disabled,
+              COALESCE(SUM(CASE WHEN status = 'active' AND expires_at IS NOT NULL AND expires_at <= ? THEN 1 ELSE 0 END), 0) AS expired,
+              COALESCE(SUM(CASE WHEN expires_at IS NOT NULL AND expires_at <= ? THEN 1 ELSE 0 END), 0) AS expired_total
+         FROM tenants`,
+      {
+        replacements: [utcWallClock(now), utcWallClock(now), utcWallClock(now)],
+        type: QueryTypes.SELECT,
+      },
     ),
     sequelize.query<{ plan: string; count: string | number }>(
       `SELECT plan, COUNT(*) AS count FROM tenants GROUP BY plan`,
       { type: QueryTypes.SELECT },
-    ),
-    sequelize.query<{ count: string | number }>(
-      `SELECT COUNT(*) AS count FROM tenants WHERE expires_at IS NOT NULL AND expires_at < ?`,
-      { replacements: [utcWallClock(now)], type: QueryTypes.SELECT },
     ),
     sequelize.query<{ count: string | number }>(
       `SELECT COUNT(*) AS count FROM users`,
@@ -84,22 +127,15 @@ export async function getSystemStats(now: Date = new Date()): Promise<SystemStat
     ),
   ]);
 
+  const t = tenantRows[0];
   const tenants: SystemTenantStats = {
-    total: 0,
-    active: 0,
-    disabled: 0,
-    expired: toNum(expiredRow[0]?.count),
+    total: toNum(t?.total),
+    active: toNum(t?.active),
+    disabled: toNum(t?.disabled),
+    expired: toNum(t?.expired),
+    expired_total: toNum(t?.expired_total),
     plans: planRows.map((r) => ({ plan: String(r.plan), count: toNum(r.count) })),
   };
-  for (const r of statusRows) {
-    const n = toNum(r.count);
-    tenants.total += n;
-    if (r.status === 'disabled') {
-      tenants.disabled += n;
-    } else {
-      tenants.active += n;
-    }
-  }
 
   const users = {
     tenant_users: toNum(userRow[0]?.count),

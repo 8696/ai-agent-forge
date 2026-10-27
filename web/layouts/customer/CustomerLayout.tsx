@@ -19,12 +19,28 @@ const SIDEBAR: SidebarItem[] = [
 export function CustomerLayout(): ReactElement {
   const location = useLocation();
 
-  // 登录页 / 改密页：整屏（AuthShell 自带整页背景），不套前台外壳
-  if (
-    location.pathname === '/customer/login' ||
-    location.pathname === '/customer/change-password'
-  ) {
+  // 登录页：整屏（AuthShell 自带整页背景），不套前台外壳
+  if (location.pathname === '/customer/login') {
     return <Outlet />;
+  }
+
+  // ⚠️ 改密页**仍然要过 RequireAuth**（2026-10-27 修）：
+  // 以前这里是 `return <Outlet />` 直接放行 → 没登录的人能进改密页，
+  // 提交后拿到 401，又因为「所有 change-password 的 401 都豁免」而被显示成
+  // 「原密码不正确」→ 用户彻底懵。
+  //
+  // 「强制改密」不会死循环：RequireAuth 只在 `location.pathname !== changePasswordPath`
+  // 时才跳改密页（改密页自己不在跳转条件里）。
+  if (location.pathname === '/customer/change-password') {
+    return (
+      <RequireAuth
+        role="customer"
+        loginPath="/customer/login"
+        changePasswordPath="/customer/change-password"
+      >
+        <Outlet />
+      </RequireAuth>
+    );
   }
 
   return (

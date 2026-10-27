@@ -6,6 +6,7 @@ import {
   Button,
   Card,
   Checkbox,
+  ConfigProvider,
   Drawer,
   Dropdown,
   Empty,
@@ -36,8 +37,10 @@ import { useChat } from '@ai-sdk/react';
 import { DefaultChatTransport } from 'ai';
 import type { ChatUIMessage, CitationHit } from '@shared/types/chat';
 import { Markdown } from '../../components/Markdown';
+import { BrandMark } from '../../components/shell';
 import { ToolCallList, toolCallsOf, type ToolCallRecord } from '../../components/ToolCallList';
 import { formatMessageTime } from '../../lib/datetime';
+import { formatFullTime } from '../../lib/customerChat';
 import { WidgetCollapsed, WidgetLayout } from '../../layouts/widget/WidgetLayout';
 import {
   approveWidgetToolCall,
@@ -69,6 +72,20 @@ import {
 const { Text, Paragraph } = Typography;
 
 type Phase = 'idle' | 'retrieving' | 'generating';
+
+/**
+ * 挂件的「紧凑模式」（docs/04-a §1.2）—— 边距更小、字号略小、控件更矮。
+ *
+ * 规格要求「AntD 主题 token 临时覆盖」—— 这里用一层 `ConfigProvider` 把
+ * 整个挂件内容区（页头 / 消息区 / 输入区）都套上。
+ */
+const COMPACT_TOKEN = {
+  fontSize: 13,
+  controlHeight: 30,
+  paddingXS: 6,
+  paddingSM: 8,
+  borderRadius: 8,
+} as const;
 
 /** 从一条 assistant 消息的 parts 里取出引用片段 */
 function citationsOf(m: ChatUIMessage): CitationHit[] | null {
@@ -208,24 +225,31 @@ export function WidgetPage(): ReactElement {
   }
 
   if (!open) {
-    return <WidgetCollapsed onOpen={() => setOpen(true)} />;
+    return (
+      <ConfigProvider theme={{ token: COMPACT_TOKEN }}>
+        <WidgetCollapsed onOpen={() => setOpen(true)} />
+      </ConfigProvider>
+    );
   }
 
   return (
-    <WidgetLayout>
-      {initialMessages === null ? (
-        <Flex align="center" justify="center" style={{ flex: 1 }}>
-          <Spin />
-        </Flex>
-      ) : (
-        <WidgetChat
-          tenantCode={tenantCode}
-          tenantName={tenantName}
-          initialMessages={initialMessages}
-          onClose={() => setOpen(false)}
-        />
-      )}
-    </WidgetLayout>
+    // 紧凑模式（docs/04-a §1.2）：整个挂件内容区（页头 / 消息区 / 输入区）都套上紧凑 token
+    <ConfigProvider theme={{ token: COMPACT_TOKEN }}>
+      <WidgetLayout>
+        {initialMessages === null ? (
+          <Flex align="center" justify="center" style={{ flex: 1 }}>
+            <Spin />
+          </Flex>
+        ) : (
+          <WidgetChat
+            tenantCode={tenantCode}
+            tenantName={tenantName}
+            initialMessages={initialMessages}
+            onClose={() => setOpen(false)}
+          />
+        )}
+      </WidgetLayout>
+    </ConfigProvider>
   );
 }
 
@@ -251,6 +275,8 @@ function WidgetChat({
   const [phase, setPhase] = useState<Phase>('idle');
   const [notice, setNotice] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
+  /** 消息区滚动容器（用来判断用户是不是已经往上翻了） */
+  const scrollRef = useRef<HTMLDivElement | null>(null);
   /** 当前匿名会话的 token（null = 还没建会话） */
   const tokenRef = useRef<string | null>(null);
   /** 正在确认 / 取消中的那次工具调用 */
@@ -357,14 +383,41 @@ function WidgetChat({
 
   const busy = status === 'submitted' || status === 'streaming';
   const lastUserText = useMemo(() => lastUserTextOf(messages), [messages]);
+  /**
+   * 用户是不是「贴着底部」——
+   * 往上翻历史时不要被硬拽回底部（见下面的 onScroll）。
+   */
+  const stickToBottomRef = useRef(true);
+  /**
+   * 用户消息已经发出、但 assistant 消息**还没建出来**的那段窗口
+   * （检索 + 查询改写 + 重排那几秒）—— 那段时间消息区里只有用户气泡。
+   */
+  const waitingForAssistant = busy && messages[messages.length - 1]?.role === 'user';
+
+  const onScroll = useCallback((): void => {
+    const el = scrollRef.current;
+    if (el === null) {
+      return;
+    }
+    const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
+    stickToBottomRef.current = distance <= 80;
+  }, []);
 
   useEffect(() => {
+    if (!stickToBottomRef.current) {
+      return;
+    }
     bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
   }, [messages]);
 
   const onSend = useCallback((): void => {
     const text = input.trim();
-    if (text === '' || busy) {
+    if (text === '') {
+      return;
+    }
+    if (busy) {
+      // 流式中按 Enter：以前**静默无效** → 给一句明确提示
+      message.info('正在回答中…等这一轮结束再发下一条');
       return;
     }
     setInput('');
@@ -372,6 +425,36 @@ function WidgetChat({
     setPhase('retrieving');
     void sendMessage({ text });
   }, [busy, input, sendMessage]);
+
+  /**
+   * 断流后的「重试」—— **重跑这一轮**，不是再问一遍。
+   *
+   * ⚠️ 以前是 `sendMessage({text})` → 追加一条**重复**的用户消息。
+   */
+  const onRetry = useCallback((): void => {
+    if (busy) {
+      return;
+    }
+    let userIdx = -1;
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      if (messages[i]?.role === 'user') {
+        userIdx = i;
+        break;
+      }
+    }
+    const userMsg = userIdx < 0 ? undefined : messages[userIdx];
+    if (userMsg === undefined) {
+      return;
+    }
+    const assistant = messages[userIdx + 1];
+    setNotice(null);
+    setPhase('retrieving');
+    if (assistant !== undefined && assistant.role === 'assistant') {
+      void regenerate({ messageId: assistant.id });
+    } else {
+      void regenerate({ messageId: userMsg.id });
+    }
+  }, [busy, messages, regenerate]);
 
   const onNewConversation = useCallback((): void => {
     // 丢掉本地的匿名会话凭证 + 清空气泡；下一条消息会触发新建会话
@@ -385,8 +468,10 @@ function WidgetChat({
   const onCopy = useCallback(async (text: string): Promise<void> => {
     try {
       await navigator.clipboard.writeText(text);
+      message.success('已复制');
     } catch {
-      // 剪贴板不可用（http / 无权限）——静默失败，不打断对话
+      // 剪贴板不可用（http / 无权限）—— 提示一下，不打断对话
+      message.warning('复制失败，请手动选择文本');
     }
   }, []);
 
@@ -431,21 +516,23 @@ function WidgetChat({
 
   return (
     <>
-      {/* ===== 页头（docs/04-b §4.1）==== */}
+      {/* ===== 页头（docs/04-b §4.1 / docs/04-a §1.2）==== */}
       <div
         style={{
           flexShrink: 0,
-          height: 52,
+          // ⚠️ 规格 §1.2 写的是 **40px**（以前写死 52px，跟规格对不上）
+          height: 40,
           display: 'flex',
           alignItems: 'center',
           gap: 8,
-          padding: '0 12px 0 16px',
+          padding: '0 12px 0 12px',
           borderBottom: `1px solid ${uiToken.colorBorder}`,
           background: uiToken.colorBgContainer,
         }}
       >
-        <Text style={{ fontSize: 16 }}>🏢</Text>
-        <Text strong ellipsis style={{ maxWidth: 320 }}>
+        {/* 公司 Logo —— 用平台统一的 BrandMark，不再是 🏢 emoji */}
+        <BrandMark size="sm" text="" />
+        <Text strong ellipsis style={{ maxWidth: 320, fontSize: 14 }}>
           {tenantName === '' ? '在线客服' : `${tenantName} 客服`}
         </Text>
         <Tag color="green" style={{ marginInlineEnd: 0 }}>
@@ -462,13 +549,17 @@ function WidgetChat({
             <Button type="text" size="small" icon={<UserOutlined />} />
           </Tooltip>
         </Dropdown>
-        <Tooltip title="收起">
+        {/* ⚠️ 这个 × 不是「关掉页面」—— 它把挂件**收起**成右下角那个悬浮圆钮，
+            点圆钮能再展开。文案要说清楚，否则用户以为页面被关掉了。 */}
+        <Tooltip title="收起挂件">
           <Button type="text" size="small" icon={<CloseOutlined />} onClick={onClose} />
         </Tooltip>
       </div>
 
       {/* ===== 消息区 ===== */}
       <div
+        ref={scrollRef}
+        onScroll={onScroll}
         style={{
           flex: 1,
           minHeight: 0,
@@ -500,17 +591,29 @@ function WidgetChat({
                 approvingToolId={approvingToolId}
                 onRegenerate={() => {
                   setNotice(null);
-                  regenerate();
+                  setPhase('retrieving');
+                  // ⚠️ **必须传 messageId** —— 不传的话 SDK 重新生成的是
+                  //    **最后一条** assistant 消息（点哪条都作用在最后一条上）。
+                  void regenerate({ messageId: m.id });
                 }}
               />
             ),
           )
         )}
+        {/* 检索 / 改写 / 重排那几秒：assistant 消息还没建出来 */}
+        {waitingForAssistant && (
+          <Space>
+            <Spin size="small" />
+            <Text type="secondary">✍ 思考中…</Text>
+          </Space>
+        )}
         <div ref={bottomRef} />
       </div>
 
       {/* ===== 输入区（docs/04-b §4.3）==== */}
-      <div style={{ flexShrink: 0, borderTop: '1px solid rgba(5,5,5,0.06)', padding: 12 }}>
+      {/* ⚠️ 上边框原来写死 `rgba(5,5,5,0.06)` —— 写死的浅色在深色模式下几乎看不见，
+          一律走 token。 */}
+      <div style={{ flexShrink: 0, borderTop: `1px solid ${uiToken.colorBorder}`, padding: 12 }}>
         {notice !== null && (
           <Alert
             type="info"
@@ -527,9 +630,10 @@ function WidgetChat({
             showIcon
             title={widgetErrorMessage(error, '请求失败，请稍后重试')}
             action={
-              // 断流后的「重试」—— 不做自动重试（上游可能已经算过 token 了）
+              // 断流后的「重试」—— **重跑这一轮**，不是再问一遍
+              // ⚠️ 不做自动重试（上游可能已经算过 token 了）
               lastUserText !== null ? (
-                <Button size="small" onClick={() => void sendMessage({ text: lastUserText })}>
+                <Button size="small" onClick={onRetry}>
                   重试
                 </Button>
               ) : undefined
@@ -604,7 +708,7 @@ function WidgetChat({
         styles={{ body: { padding: 16 } }}
       >
         {messages.length === 0 ? (
-          <Empty description="还没有对话记录" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+          <Empty description="还没有对话记录，开始聊天吧" image={Empty.PRESENTED_IMAGE_SIMPLE} />
         ) : (
           <Flex vertical gap={16}>
             {messages.map((m) =>
@@ -615,7 +719,8 @@ function WidgetChat({
                   key={m.id}
                   message={m}
                   busy={false}
-                  onCopy={() => undefined}
+                  // ⚠️ 以前这里是 `onCopy={() => undefined}` —— 点了**没反应**
+                  onCopy={() => void onCopy(textOf(m))}
                   onRegenerate={() => undefined}
                   onApproveTool={() => undefined}
                   onRejectTool={() => undefined}
@@ -637,12 +742,17 @@ function UserBubble({ message }: { message: ChatUIMessage }): ReactElement {
   // 右上角小时间戳（docs/04-b §4.2）——
   // 历史消息带 created_at（后端从 messages.created_at 带出来）；
   // 实时流式的新消息没有，用本地时间兜底。
+  const createdAt = message.metadata?.created_at;
   const stamp =
-    formatMessageTime(message.metadata?.created_at) ?? formatMessageTime(new Date().toISOString());
+    formatMessageTime(createdAt) ?? formatMessageTime(new Date().toISOString());
+  // hover 显示**完整**时间（小时间戳只到分钟）
+  const fullStamp = createdAt === undefined ? '' : formatFullTime(createdAt);
 
   return (
     <Flex justify="flex-end" vertical align="flex-end" gap={2}>
-      <span style={{ fontSize: 11, color: uiToken.colorTextTertiary, lineHeight: 1 }}>{stamp}</span>
+      <Tooltip title={fullStamp === '' ? stamp : fullStamp}>
+        <span style={{ fontSize: 11, color: uiToken.colorTextTertiary, lineHeight: 1 }}>{stamp}</span>
+      </Tooltip>
       <div
         style={{
           maxWidth: '76%',
@@ -650,7 +760,8 @@ function UserBubble({ message }: { message: ChatUIMessage }): ReactElement {
           borderRadius: 12,
           borderBottomRightRadius: 4,
           background: uiToken.colorPrimary,
-          color: '#fff',
+          // 主色底上的文字走 token（colorTextLightSolid = 实心背景上的文字色）
+          color: uiToken.colorTextLightSolid,
           whiteSpace: 'pre-wrap',
           wordBreak: 'break-word',
         }}
@@ -694,7 +805,10 @@ function AssistantBubble({
   const isStreaming = busy && text === '';
 
   return (
-    <Flex vertical gap={8} style={{ maxWidth: '100%' }}>
+    // ⚠️ `alignSelf: 'flex-start'` + `maxWidth` —— 外层是 `<Flex vertical>`，
+    //    antd v6 在 vertical 且没显式传 align 时会加 `align-items: stretch`
+    //    → AI 回答被拉成一条满宽的灰带，跟右边 76% 的用户气泡不对称。
+    <Flex vertical gap={8} style={{ maxWidth: '88%', alignSelf: 'flex-start' }}>
       {thinking !== '' &&
         // 流式期间直接摊开（边生成边看），跑完换成折叠的 <details>
         (busy ? (

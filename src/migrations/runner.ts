@@ -38,6 +38,7 @@ import * as m033 from './033-evaluation-run-trigger';
 import * as m034 from './034-add-api-key-sha256';
 import * as m035 from './035-user-memory-embedding';
 import * as m036 from './036-create-document-chunks';
+import * as m037 from './037-add-message-favorite';
 
 /**
  * umzug 迁移 runner（详见 docs/03-b-技术栈-后端栈.md §B.2）
@@ -237,6 +238,11 @@ export function buildMigrator(): Umzug<QueryInterface> {
         name: '036-create-document-chunks',
         up: (params) => m036.up(params),
         down: (params) => m036.down(params),
+      },
+      {
+        name: '037-add-message-favorite',
+        up: (params) => m037.up(params),
+        down: (params) => m037.down(params),
       },
     ],
   });

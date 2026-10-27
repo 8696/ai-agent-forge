@@ -1,6 +1,6 @@
 import type { ReactElement, ReactNode } from 'react';
 import { useEffect, useMemo, useState } from 'react';
-import { Layout, Menu, Dropdown, Avatar, Space, Typography } from 'antd';
+import { Layout, Menu, Dropdown, Avatar, Drawer, Space, Typography, theme } from 'antd';
 import type { MenuProps } from 'antd';
 import {
   KeyOutlined,
@@ -61,6 +61,8 @@ export function SharedShellLayout(props: SharedShellLayoutProps): ReactElement {
   const location = useLocation();
   const navigate = useNavigate();
   const user = getCurrentUser();
+  // 颜色走 antd token —— 写死浅色的话，深色模式下几乎看不见
+  const { token } = theme.useToken();
   const storageKey = props.storageKey ?? `sider:${props.role}:collapsed`;
   const [collapsed, setCollapsed] = useState<boolean>(() => {
     if (typeof window === 'undefined') return false;
@@ -74,6 +76,15 @@ export function SharedShellLayout(props: SharedShellLayoutProps): ReactElement {
     if (typeof window === 'undefined') return false;
     return window.matchMedia('(max-width: 992px)').matches;
   });
+  /**
+   * 窄屏时侧栏是**浮层抽屉**的开关（2026-10-27 修）。
+   *
+   * ⚠️ 以前窄屏时 `effectiveCollapsed` 恒为 true，而折叠按钮只翻转 `collapsed`
+   *    → 点了纹丝不动（实测 900px 宽下 sider 宽度 64 → 64）。
+   *    现在窄屏点按钮是**打开抽屉**（浮层 + 遮罩 + 点遮罩关闭），
+   *    宽屏（≥992px）行为不变（折叠/展开插在内容区左侧）。
+   */
+  const [drawerOpen, setDrawerOpen] = useState(false);
 
   useEffect(() => {
     if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return;
@@ -84,8 +95,24 @@ export function SharedShellLayout(props: SharedShellLayoutProps): ReactElement {
     return () => mq.removeEventListener('change', onChange);
   }, []);
 
-  /** 实际折叠状态 = 用户手动折叠 OR 窄屏强制折叠 */
-  const effectiveCollapsed = collapsed || isNarrow;
+  // 切回宽屏 → 抽屉收起来（别留一个浮层挡着内容）
+  useEffect(() => {
+    if (!isNarrow) setDrawerOpen(false);
+  }, [isNarrow]);
+
+  // 窄屏下抽屉里选了菜单 → 关掉抽屉（否则盖着新页面）
+  useEffect(() => {
+    setDrawerOpen(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.pathname]);
+
+  /**
+   * 实际折叠状态。
+   *
+   * ⚠️ **窄屏时恒为 false** —— 窄屏的侧栏是浮层抽屉，抽屉里永远是展开的
+   *    （折叠成 64px 的图标条在浮层里没法点）。
+   */
+  const effectiveCollapsed = isNarrow ? false : collapsed;
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -197,29 +224,66 @@ export function SharedShellLayout(props: SharedShellLayoutProps): ReactElement {
     </div>
   );
 
+  const siderContent = (
+    <>
+      {logoBlock}
+      <Menu
+        theme="dark"
+        mode="inline"
+        selectedKeys={selectedKeys}
+        items={menuItems}
+        onClick={() => {
+          // 窄屏：抽屉里选了菜单 → 关掉抽屉（否则浮层盖着新页面）
+          if (isNarrow) setDrawerOpen(false);
+        }}
+        style={{ borderRight: 0, paddingTop: 8 }}
+      />
+    </>
+  );
+
   return (
     <Layout style={{ height: '100vh', overflow: 'hidden' }}>
-      <Sider
-        theme="dark"
-        collapsible
-        collapsed={effectiveCollapsed}
-        trigger={null}
-        width={240}
-        collapsedWidth={64}
-        style={{
-          height: '100vh',
-          overflow: 'auto',
-        }}
-      >
-        {logoBlock}
-        <Menu
+      {isNarrow ? (
+        /* 窄屏：侧栏是**浮层抽屉**（docs/04-d §9.2「后台在 < 992px 自动折叠 Sider」）。
+           以前这里是把侧栏插在内容区左边再压成 64px 的图标条 ——
+           折叠按钮点了没反应，用户根本打不开菜单。
+           浮层抽屉的体验才对：点按钮 → 抽屉从左边滑出来 + 遮罩，
+           点遮罩关闭，抽屉打开时锁定 body 滚动（antd Drawer 自带）。 */
+        <Drawer
+          placement="left"
+          open={drawerOpen}
+          onClose={() => setDrawerOpen(false)}
+          closable={false}
+          size={240}
+          mask={{ closable: true }}
+          styles={{ body: { padding: 0, background: token.colorBgContainer } }}
+        >
+          <Sider
+            theme="dark"
+            collapsed={false}
+            trigger={null}
+            width={240}
+            style={{ height: '100%', overflow: 'auto' }}
+          >
+            {siderContent}
+          </Sider>
+        </Drawer>
+      ) : (
+        <Sider
           theme="dark"
-          mode="inline"
-          selectedKeys={selectedKeys}
-          items={menuItems}
-          style={{ borderRight: 0, paddingTop: 8 }}
-        />
-      </Sider>
+          collapsible
+          collapsed={effectiveCollapsed}
+          trigger={null}
+          width={240}
+          collapsedWidth={64}
+          style={{
+            height: '100vh',
+            overflow: 'auto',
+          }}
+        >
+          {siderContent}
+        </Sider>
+      )}
       <Layout style={{ minWidth: 0, height: '100vh', overflow: 'hidden' }}>
         <Header
           style={{
@@ -234,11 +298,26 @@ export function SharedShellLayout(props: SharedShellLayoutProps): ReactElement {
           <Space size={12} align="center">
             <button
               type="button"
-              onClick={() => setCollapsed((v) => !v)}
-              aria-label={effectiveCollapsed ? '展开侧栏' : '折叠侧栏'}
+              // 窄屏 → 开关浮层抽屉；宽屏 → 折叠/展开插在内容区左侧
+              onClick={() => {
+                if (isNarrow) {
+                  setDrawerOpen((v) => !v);
+                } else {
+                  setCollapsed((v) => !v);
+                }
+              }}
+              aria-label={
+                isNarrow
+                  ? drawerOpen
+                    ? '关闭侧栏'
+                    : '打开侧栏'
+                  : effectiveCollapsed
+                    ? '展开侧栏'
+                    : '折叠侧栏'
+              }
               style={iconBtnStyle}
             >
-              {effectiveCollapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
+              {isNarrow || effectiveCollapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
             </button>
             <Text style={{ color: 'rgba(255,255,255,0.65)', fontSize: 13 }}>
               {props.roleHint}

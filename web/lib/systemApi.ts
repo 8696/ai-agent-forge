@@ -15,10 +15,22 @@ export const systemApi = createApi('/api/v1/system');
 export interface SystemStats {
   tenants: {
     total: number;
+    /**
+     * 启用中 = status='active' 且**没到期**（跟租户列表的「启用中」筛选同一口径）
+     */
     active: number;
+    /** 已禁用 = status='disabled' */
     disabled: number;
-    /** 已过期的租户数 */
+    /**
+     * 已到期 = expires_at <= now（**不论启停**）
+     *
+     * ⚠️ 跟 active / disabled **有重叠** —— 一个「已禁用且已到期」的租户
+     *    同时计入 disabled 和 expired。所以这三个数**相加不等于** total，
+     *    `expired_total` 才是「全部已到期（含已禁用的）」。
+     */
     expired: number;
+    /** 全部已到期租户数（含已禁用的） */
+    expired_total?: number;
     plans: Array<{ plan: string; count: number }>;
   };
   users: { tenant_users: number; system_users: number };

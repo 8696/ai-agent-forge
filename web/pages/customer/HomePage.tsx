@@ -134,11 +134,21 @@ export function HomePage(): ReactElement {
   );
 
   const tenantName = profile?.tenant.name ?? '';
+  /**
+   * 欢迎语兜底**要带租户名**（docs/04-b §4.10「没配就按租户名兜底出一句默认文案」）。
+   * 以前兜底文案是「这里可以基于本租户的知识库提问…」—— 租户名一个字都没有。
+   */
   const welcomeMessage =
     profile?.home.welcome_message !== undefined && profile.home.welcome_message !== ''
       ? profile.home.welcome_message
-      : '这里可以基于本租户的知识库提问，回答会标注引用来源。';
-  const suggested = profile?.home.suggested_questions ?? [];
+      : tenantName === ''
+        ? '这里可以基于知识库提问，回答会标注引用来源。'
+        : `欢迎来到${tenantName}，这里可以基于本租户的知识库提问，回答会标注引用来源。`;
+  /**
+   * 推荐问题**最多 8 条**（docs/04-b §4.10「3~8 条」）——
+   * 租户配了 20 条就渲染 20 条会把首页撑爆。
+   */
+  const suggested = (profile?.home.suggested_questions ?? []).slice(0, 8);
 
   return (
     <div>
@@ -146,7 +156,20 @@ export function HomePage(): ReactElement {
         title={tenantName === '' ? '用户中心' : tenantName}
         subtitle="基于本租户知识库的问答工作台"
         extra={
-          <Button type="primary" icon={<PlusOutlined />} onClick={() => navigate('/customer/chat')}>
+          <Button
+            type="primary"
+            icon={<PlusOutlined />}
+            onClick={() => {
+              // ⚠️ 带上**第一个推荐问题** —— 以前跳到 /customer/chat（不带 ?q=），
+              //    右栏是空态，用户还得再点一次「新对话」才能开始。
+              const first = suggested[0];
+              if (first !== undefined && first !== '') {
+                navigate(`/customer/chat?q=${encodeURIComponent(first)}`);
+                return;
+              }
+              navigate('/customer/chat');
+            }}
+          >
             开始新的提问
           </Button>
         }
@@ -237,7 +260,7 @@ export function HomePage(): ReactElement {
                   </Flex>
                 ) : sessions.length === 0 ? (
                   <Empty
-                    description="还没有对话记录"
+                    description="还没有对话记录，开始聊天吧"
                     image={Empty.PRESENTED_IMAGE_SIMPLE}
                     style={{ margin: '24px 0' }}
                   >

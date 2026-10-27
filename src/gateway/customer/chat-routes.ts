@@ -16,12 +16,15 @@ import {
   deleteSession,
   insertAssistantPlaceholder,
   insertUserMessage,
+  isMessageFavoriteSupported,
   listSessions,
   loadHistoryRows,
   loadOwnedSession,
   loadSessionUiMessages,
   parseChatRequest,
   renameSession,
+  resolveRegenerateTarget,
+  setMessageFavorite,
   setSessionFavorite,
   type ChatRequestBody,
   type ParsedRequest,
@@ -56,6 +59,7 @@ import { buildWorkflowHint } from '../../workflows/engine';
  *   GET    /sessions/:id/messages   历史消息（useChat 可直接吃）
  *   POST   /sessions/:id/messages   ★ 流式发消息（SSE）
  *   POST   /messages/:id/feedback   👍 / 👎 反馈
+ *   PATCH  /messages/:id/favorite   📌 消息级收藏（迁移 037）
  *
  * 跨租户隔离：会话一律按 (id, tenant_id, user_id) 三元组查，
  * 别人的会话按「不存在」处理（404 而不是 403），不泄露这个 id 是否存在。
@@ -321,22 +325,32 @@ export async function runChatTurn(options: ChatTurnOptions): Promise<ChatTurnRes
     }
     const safeUserText = guard.text;
 
+    // 5.5) 「重新生成」的目标行（开流之前查好）。
+    //      角色决定语义：
+    //        - assistant → **覆盖**这条回答（复用同一行，不多插一行）
+    //        - user     → **重跑**这个提问（用户行已经在库里，不重复插；回答另起一行）
+    const target =
+      parsed.regenerateTargetId === null
+        ? null
+        : await resolveRegenerateTarget(session.id, session.tenant_id, parsed.regenerateTargetId);
+
     // 6) 落库 user 行。「重新生成」时不再重复插 —— 那条已经在库里了
-    if (!parsed.isRegenerate) {
+    if (target === null) {
       await insertUserMessage(session, safeUserText);
     }
 
     // 7) 落库 assistant 占位行。重新生成时复用原行 id，
     //    配合 createUIMessageStream 的 generateId 实现「覆盖同一条」而不是多插一行
-    const assistantRowId = await insertAssistantPlaceholder(
-      session,
-      parsed.regenerateTargetId ?? undefined,
-    );
+    const reuseAssistantId =
+      target !== null && target.role === 'assistant' ? target.id : undefined;
+    const assistantRowId = await insertAssistantPlaceholder(session, reuseAssistantId);
 
     // 8) 读历史（开流之前查完：DB 挂了还能正常返 500）
+    //    ⚠️ 覆盖老回答时要把那条老回答**排除**（模型不该看到自己上一版答案）；
+    //    「重跑某个提问」时**要留着**那条用户消息 —— 它就是本轮的问题。
     const historyRows = await loadHistoryRows(
       session.id,
-      parsed.regenerateTargetId === null ? [] : [parsed.regenerateTargetId],
+      reuseAssistantId === undefined ? [] : [reuseAssistantId],
     );
 
     // 8.5) 用户长期记忆（B4）。同样在开流之前查好 ——
@@ -577,4 +591,49 @@ customerChatRouter.post('/messages/:id/feedback', async (ctx) => {
     { where: { id: message.id } },
   );
   ctx.body = { id: message.id, feedback: input.feedback };
+});
+
+// ===== 消息级收藏（docs/04-b §4.2「📌 收藏」）=====
+
+const messageFavoriteBodySchema = z.object({
+  favorite: z.boolean(),
+});
+
+/**
+ * PATCH /messages/:id/favorite —— 收藏 / 取消收藏一条 AI 回答
+ *
+ * ⚠️ **归属校验跟反馈端点同一套**：消息 → 会话 → (tenant_id, user_id)。
+ *    跨租户 / 跨用户一律 404（不泄露这个 id 是否存在）。
+ *
+ * ⚠️ **不写审计** —— 消息收藏是**用户自己的数据**，跟会话收藏（sessions.favorite）一致。
+ */
+customerChatRouter.patch('/messages/:id/favorite', async (ctx) => {
+  const user = currentUser(ctx);
+  const input = messageFavoriteBodySchema.parse(ctx.request.body ?? {});
+
+  // 迁移 037 没跑 → 这一列不存在，功能不可用（但聊天本身照常）
+  if (!isMessageFavoriteSupported()) {
+    throw new AppError(
+      '消息收藏功能暂不可用，请联系平台管理员执行数据库迁移',
+      'FEATURE_UNAVAILABLE',
+      503,
+    );
+  }
+
+  const message = await Message.findOne({
+    where: { id: ctx.params.id ?? '', tenant_id: user.tenant_id },
+  });
+  if (message === null) {
+    throw new NotFoundError('消息');
+  }
+  const session = await Session.findOne({
+    where: { id: message.session_id, tenant_id: user.tenant_id, user_id: user.sub },
+    attributes: ['id'],
+  });
+  if (session === null) {
+    throw new NotFoundError('消息');
+  }
+
+  const favorite = await setMessageFavorite(message.id, user.tenant_id, input.favorite);
+  ctx.body = { id: message.id, favorite };
 });

@@ -52,6 +52,18 @@ export function SettingsPage(): ReactElement {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [form] = Form.useForm();
+  /**
+   * 「恢复默认」标记掉的 key —— 保存时这些项提交 `null`（清除覆盖、回落平台默认）。
+   *
+   * ⚠️ **boolean 为什么需要它**（docs/04-c §5.9）：
+   *    规格写的是「清空输入框再保存 = 清除覆盖」—— 数字 / 字符串有「空」态，
+   *    boolean 是个 `<Switch>`，**没有第三态**。把开关拨回平台默认值只会提交一个
+   *    **显式**的同值覆盖 → `overridden` 还是 true，「已覆盖」标签消不掉，
+   *    永远清不掉覆盖。
+   *    ⚠️ 不给 Switch 造第三态（UI 会误导：看着像「没设置」，其实是「设置为 false」）。
+   *    改成一个显式的小按钮 —— 只在**该项确实被覆盖过**时才出现。
+   */
+  const [clearedKeys, setClearedKeys] = useState<Set<string>>(new Set());
 
   const reload = useCallback(async (): Promise<void> => {
     try {
@@ -64,6 +76,7 @@ export function SettingsPage(): ReactElement {
         initial[s.key] = s.value;
       }
       form.setFieldsValue(initial);
+      setClearedKeys(new Set());
     } catch (err: unknown) {
       message.error(configErrorMessage(err, '加载配置失败'));
     } finally {
@@ -94,6 +107,11 @@ export function SettingsPage(): ReactElement {
       const payload: Record<string, unknown> = {};
       for (const s of settings) {
         const next = values[s.key];
+        // ⚠️ 「恢复默认」标记过的项：**无条件**提交 null（哪怕开关已经拨回平台默认值）
+        if (clearedKeys.has(s.key)) {
+          payload[s.key] = null;
+          continue;
+        }
         if (next === s.value) {
           continue;
         }
@@ -111,13 +129,40 @@ export function SettingsPage(): ReactElement {
         initial[s.key] = s.value;
       }
       form.setFieldsValue(initial);
+      setClearedKeys(new Set());
       message.success('已保存，下一轮对话立即生效');
     } catch (err: unknown) {
       message.error(configErrorMessage(err, '保存失败'));
     } finally {
       setSaving(false);
     }
-  }, [form, settings]);
+  }, [form, settings, clearedKeys]);
+
+  /** 「恢复默认」：标记清除覆盖，并把开关拨回平台默认值（保存后生效） */
+  const onRestoreDefault = useCallback(
+    (s: SettingItem): void => {
+      setClearedKeys((prev) => {
+        const next = new Set(prev);
+        next.add(s.key);
+        return next;
+      });
+      form.setFieldValue(s.key, s.fallback);
+      message.info(`「${s.label}」保存后将回落平台默认（${String(s.fallback)}）`);
+    },
+    [form],
+  );
+
+  /** 手动拨了开关 → 取消「恢复默认」标记（显式的新值优先） */
+  const onToggleBoolean = useCallback((key: string): void => {
+    setClearedKeys((prev) => {
+      if (!prev.has(key)) {
+        return prev;
+      }
+      const next = new Set(prev);
+      next.delete(key);
+      return next;
+    });
+  }, []);
 
   const onReset = useCallback((): void => {
     void reload();
@@ -209,11 +254,29 @@ export function SettingsPage(): ReactElement {
                           {s.overridden && <Tag color="blue">已覆盖</Tag>}
                         </Space>
                       }
-                      extra={<SettingHint item={s} />}
+                      extra={
+                        <Space size={8} wrap align="center">
+                          <SettingHint item={s} />
+                          {/* ⚠️ 只给 boolean 加「恢复默认」——
+                              数字 / 字符串本来就能清空输入框（提交 null），
+                              Switch 没有「空」态，只能用这个按钮清除覆盖 */}
+                          {s.type === 'boolean' && s.overridden && (
+                            <Tooltip title="清除本租户的覆盖，这一项回落平台默认">
+                              <Button
+                                type="link"
+                                size="small"
+                                onClick={() => onRestoreDefault(s)}
+                              >
+                                恢复默认
+                              </Button>
+                            </Tooltip>
+                          )}
+                        </Space>
+                      }
                       valuePropName={s.type === 'boolean' ? 'checked' : 'value'}
                     >
                       {s.type === 'boolean' ? (
-                        <Switch />
+                        <Switch onChange={() => onToggleBoolean(s.key)} />
                       ) : s.type === 'number' ? (
                         <InputNumber
                           {...(s.min === undefined ? {} : { min: s.min })}
@@ -246,7 +309,8 @@ export function SettingsPage(): ReactElement {
       </Form>
 
       <Paragraph type="secondary" style={{ fontSize: 12 }}>
-        清空输入框再保存 = 清除这项覆盖，回到平台默认。保存后立即生效，不用重启。
+        清空输入框再保存 = 清除这项覆盖，回到平台默认；开关类（boolean）没有「空」态，
+        用该项旁边的「恢复默认」按钮清除覆盖。保存后立即生效，不用重启。
       </Paragraph>
     </div>
   );

@@ -1,5 +1,5 @@
 import type { CSSProperties, ReactElement } from 'react';
-import { Avatar, Space, Typography } from 'antd';
+import { Avatar, Space, Typography, theme } from 'antd';
 import { RobotOutlined } from '@ant-design/icons';
 
 const { Text } = Typography;
@@ -26,22 +26,30 @@ const SIZE_MAP: Record<
 
 /**
  * 品牌 Logo 占位 —— 见 docs/04-a-ui-总则布局与菜单.md §0.2
- * 用 AntD RobotOutlined + 浅蓝渐变背景，**不**引图片资源。
+ * 用 AntD RobotOutlined + 蓝色渐变背景，**不**引图片资源。
+ *
+ * ⚠️ **形状是 circle**（规格 §0.2 的图标替代表里写的是
+ *    `<Avatar shape="circle" ...>`）—— 以前是 square。
+ * ⚠️ **颜色全部走 antd token** —— 写死 hex 的话换主题 / 切深色就跟不上。
  */
 export function BrandMark(props: BrandMarkProps): ReactElement {
   const size = props.size ?? 'md';
   const variant = props.variant ?? 'dark';
   const m = SIZE_MAP[size];
+  // 颜色走 antd token —— 写死浅色的话，深色模式下几乎看不见
+  const { token } = theme.useToken();
 
-  const textColor = variant === 'dark' ? '#fff' : '#1f2937';
+  // variant=dark = 放在深底上（侧栏 / 顶栏 / 深色登录页）→ 亮字
+  // variant=light = 放在浅底上（浅色登录页）→ 跟主题走
+  const textColor = variant === 'dark' ? token.colorTextLightSolid : token.colorText;
 
   return (
     <Space size={m.gap} align="center" {...(props.style !== undefined ? { style: props.style } : {})}>
       <Avatar
         size={m.avatar}
-        shape="square"
+        shape="circle"
         style={{
-          background: 'linear-gradient(135deg, #2f54eb 0%, #597ef7 100%)',
+          background: `linear-gradient(135deg, ${token.colorPrimary} 0%, ${token.colorPrimaryHover} 100%)`,
           fontSize: m.avatarFontSize,
         }}
         icon={<RobotOutlined />}

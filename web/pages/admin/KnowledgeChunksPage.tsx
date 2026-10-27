@@ -1,5 +1,5 @@
-import type { ReactElement } from 'react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import type { ComponentRef, ReactElement } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   App as AntdApp,
@@ -27,9 +27,9 @@ import {
   UndoOutlined,
 } from '@ant-design/icons';
 import { PageHeader } from '../../components/shell/PageHeader';
+import { apiErrorMessage } from '../../lib/apiError';
 import {
   editChunk,
-  errorMessage,
   fetchDocumentChunks,
   fetchDocuments,
   mergeChunks,
@@ -104,8 +104,25 @@ export function KnowledgeChunksPage(): ReactElement {
   const [editing, setEditing] = useState<EditingTarget | null>(null);
   const [editText, setEditText] = useState('');
   const [editSubmitting, setEditSubmitting] = useState(false);
-  /** 编辑框里的光标位置 —— 「在光标处拆分」要用 */
+  /**
+   * 编辑框的 DOM 引用 —— 「在光标处拆分」要**从 DOM 读真实光标位置**。
+   *
+   * ⚠️ 以前只靠 `cursorPos` state，而它只在 `onSelect` 里更新：
+   *    打开下一块时不会重置 → 直接点「拆分」会拿上一个块的偏移量切开
+   *    （切块是**写库 + 重算向量**的破坏性写，不能静默切错）。
+   */
+  const textAreaRef = useRef<ComponentRef<typeof Input.TextArea> | null>(null);
+  /** 编辑框里的光标位置 —— 只作展示/兜底，拆分以 DOM 为准 */
   const [cursorPos, setCursorPos] = useState(0);
+
+  /** 组件还挂着吗（unmount 后不要再 setState） */
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   /** 勾选要合并的块（按文档分组） */
   const [checked, setChecked] = useState<Record<string, number[]>>({});
@@ -118,6 +135,9 @@ export function KnowledgeChunksPage(): ReactElement {
       page_size: 100,
       ...(keyword !== undefined && keyword !== '' ? { keyword } : {}),
     });
+    if (!mountedRef.current) {
+      return;
+    }
     setOptions(res.documents);
     setKnown((prev) => {
       const next = { ...prev };
@@ -130,7 +150,10 @@ export function KnowledgeChunksPage(): ReactElement {
 
   useEffect(() => {
     void loadDocuments().catch((err: unknown) => {
-      setError(errorMessage(err, '加载文档列表失败'));
+      if (!mountedRef.current) {
+        return;
+      }
+      setError(apiErrorMessage(err, '加载文档列表失败'));
     });
   }, [loadDocuments]);
 
@@ -150,10 +173,13 @@ export function KnowledgeChunksPage(): ReactElement {
           });
           return { id, ok: true as const, res };
         } catch (err: unknown) {
-          return { id, ok: false as const, message: errorMessage(err, '加载切片失败') };
+          return { id, ok: false as const, message: apiErrorMessage(err, '加载切片失败') };
         }
       }),
     );
+    if (!mountedRef.current) {
+      return;
+    }
     setData((prev) => {
       const next = { ...prev };
       for (const r of results) {
@@ -194,7 +220,7 @@ export function KnowledgeChunksPage(): ReactElement {
             });
             return { id, ok: true as const, res };
           } catch (err: unknown) {
-            return { id, ok: false as const, message: errorMessage(err, '加载切片失败') };
+            return { id, ok: false as const, message: apiErrorMessage(err, '加载切片失败') };
           }
         }),
       );
@@ -223,7 +249,10 @@ export function KnowledgeChunksPage(): ReactElement {
   const onSearchDocuments = useCallback(
     (keyword: string): void => {
       void loadDocuments(keyword).catch((err: unknown) => {
-        setError(errorMessage(err, '搜索文档失败'));
+        if (!mountedRef.current) {
+          return;
+        }
+        setError(apiErrorMessage(err, '搜索文档失败'));
       });
     },
     [loadDocuments],
@@ -268,6 +297,9 @@ export function KnowledgeChunksPage(): ReactElement {
   const openEditor = useCallback((docId: string, chunk: DocumentChunk): void => {
     setEditing({ docId, chunk });
     setEditText(chunk.text);
+    // ⚠️ **光标位置必须重置** —— 不重置的话，上一块拆完关掉、
+    //    打开下一块直接点「在光标处拆成两块」，会拿上一块的偏移量把新块切错
+    setCursorPos(0);
   }, []);
 
   const closeEditor = useCallback((): void => {
@@ -291,19 +323,30 @@ export function KnowledgeChunksPage(): ReactElement {
       closeEditor();
       await reload([editing.docId]);
     } catch (err: unknown) {
-      message.error(errorMessage(err, '保存失败'));
+      message.error(apiErrorMessage(err, '保存失败'));
     } finally {
       setEditSubmitting(false);
     }
   }, [editing, editText, closeEditor, reload]);
 
-  /** 在光标处把这一块拆成两块 */
+  /**
+   * 在光标处把这一块拆成两块。
+   *
+   * ⚠️ **位置从 DOM 读，不从 state 读** ——
+   *    `cursorPos` 只在 `onSelect` 里更新，可能已经过期（换块、程序化设值、
+   *    用户点按钮时焦点不在输入框）。拆分是**写库 + 重算向量**的破坏性写，
+   *    位置错了就是把块切坏 —— 宁可报错让用户重摆光标，也不能静默切错。
+   */
   const splitAtCursor = useCallback(async (): Promise<void> => {
     if (editing === null) {
       return;
     }
-    const at = cursorPos;
-    if (at <= 0 || at >= editText.length) {
+    const ref = textAreaRef.current;
+    const node =
+      ref?.resizableTextArea?.textArea ??
+      (ref?.nativeElement instanceof HTMLTextAreaElement ? ref.nativeElement : null);
+    const at = node === null ? null : node.selectionStart;
+    if (at === null || at <= 0 || at >= editText.length) {
       message.error('把光标放到要拆分的位置（不能是最开头或最末尾）');
       return;
     }
@@ -314,11 +357,11 @@ export function KnowledgeChunksPage(): ReactElement {
       closeEditor();
       await reload([editing.docId]);
     } catch (err: unknown) {
-      message.error(errorMessage(err, '拆分失败'));
+      message.error(apiErrorMessage(err, '拆分失败'));
     } finally {
       setEditSubmitting(false);
     }
-  }, [editing, editText, cursorPos, closeEditor, reload]);
+  }, [editing, editText, closeEditor, reload]);
 
   const doReset = useCallback(
     async (docId: string, chunk: DocumentChunk): Promise<void> => {
@@ -327,7 +370,7 @@ export function KnowledgeChunksPage(): ReactElement {
         message.success(`已还原 · 总块数 ${res.chunk_count}`);
         await reload([docId]);
       } catch (err: unknown) {
-        message.error(errorMessage(err, '还原失败'));
+        message.error(apiErrorMessage(err, '还原失败'));
       }
     },
     [reload],
@@ -350,7 +393,7 @@ export function KnowledgeChunksPage(): ReactElement {
         setChecked((prev) => ({ ...prev, [docId]: [] }));
         await reload([docId]);
       } catch (err: unknown) {
-        message.error(errorMessage(err, '合并失败'));
+        message.error(apiErrorMessage(err, '合并失败'));
       } finally {
         setMerging(false);
       }
@@ -551,6 +594,7 @@ export function KnowledgeChunksPage(): ReactElement {
               description="第一行是标题路径面包屑 —— 它会跟着块一起进向量。想换章节归属的话，改这一行。"
             />
             <Input.TextArea
+              ref={textAreaRef}
               value={editText}
               onChange={(e: { target: { value: string } }) => setEditText(e.target.value)}
               onSelect={(e) =>
@@ -582,6 +626,9 @@ export function KnowledgeChunksPage(): ReactElement {
             </Space>
             <Text type="secondary" style={{ fontSize: 12 }}>
               「在光标处拆成两块」：把光标放到要断开的位置再点 —— 拆出来的两块都带同样的面包屑。
+              {cursorPos > 0 && cursorPos < editText.length && (
+                <> （当前光标在第 {cursorPos + 1} 字）</>
+              )}
             </Text>
           </Space>
         )}

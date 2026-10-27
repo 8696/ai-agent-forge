@@ -151,6 +151,19 @@ export class Message extends Model {
   @Column({ type: DataType.DATE(6), allowNull: true })
   declare feedback_at: Date | null;
 
+  /**
+   * 是否收藏（用户标记的重要回答）—— **消息级收藏**（docs/04-b §4.2）
+   *
+   * 跟会话级收藏（`sessions.favorite`，迁移 031）一样是**用户自己的数据**，
+   * 所以**不写审计**。
+   *
+   * ⚠️ 迁移 037 没跑时这一列不存在 —— 启动时会探一次并把属性摘掉
+   *    （见 src/services/chat.ts 的 probeMessageFavoriteColumn），
+   *    免得**每一次**对 messages 的查询都报「Unknown column 'favorite'」。
+   */
+  @Column({ type: DataType.BOOLEAN, allowNull: false, defaultValue: false })
+  declare favorite: boolean;
+
   /** 关联 traces 表（D2 观测）；本期 trace 还没建，先留空 */
   @Index({ name: 'idx_messages_trace' })
   @Column({ type: DataType.STRING(36), allowNull: true })

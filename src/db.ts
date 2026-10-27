@@ -31,6 +31,7 @@ import { installTenantScopeHooks } from './lib/tenant-scope';
 import { probeApiKeySha256Column } from './lib/api-key-auth';
 import { probeUserMemoryEmbeddingColumns } from './services/memory-relevance';
 import { probeDocumentChunksTable } from './services/document-chunks';
+import { probeMessageFavoriteColumn } from './services/chat';
 
 /**
  * Sequelize 实例（单例）。
@@ -137,6 +138,12 @@ export async function initDatabase(): Promise<void> {
   //    表不在时**索引 / 检索照常工作**（只写 Qdrant），只是编辑功能不可用 ——
   //    不因为一张附属表缺了就把整个知识库搞挂。
   await probeDocumentChunksTable();
+
+  // ⚠️ **迁移 037（messages.favorite）跑了没** —— 同理：
+  //    列不存在时**每一次**对 messages 的查询都会报「Unknown column 'favorite'」
+  //    （历史消息 / 检索 / 上下文重建 全挂）。
+  //    探一次、把列摘掉，历史照常能读，只是「消息级收藏」不可用（端点返 503）。
+  await probeMessageFavoriteColumn();
 }
 
 // 重导出 DataTypes / Sequelize 类型，给后续 migration 用

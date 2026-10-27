@@ -1,4 +1,5 @@
 import { adminApi } from './adminApi';
+import { apiErrorMessage } from './apiError';
 import type {
   AdminMemoryItem,
   MemoryCategory,
@@ -90,20 +91,14 @@ export async function deleteMemoryForever(id: string): Promise<void> {
 
 /**
  * 从 axios 错误里取出后端返回的可读消息。
- * 与 adminKnowledge.ts / customerChat.ts 的同名函数同构（后端错误体 { code, message, details }）。
+ *
+ * ⚠️ **统一走 `apiErrorMessage`**（docs/04-d §8.4）——
+ *    这里原来自己抄了一份旧实现，403 会显示成英文 `'Forbidden'`、
+ *    500 显示成「服务器内部错误」，不是规格要求的「没有权限」/「服务异常，已记录」。
+ *
+ * 别名保留下来只为兼容还没改 import 的调用方
+ * （`web/pages/admin/MemoriesPage.tsx`）—— 它跟 `apiErrorMessage` 是同一个函数。
+ *
+ * @deprecated 新代码直接用 `apiErrorMessage`（`web/lib/apiError.ts`）
  */
-export function errorMessage(err: unknown, fallback: string): string {
-  const e = err as {
-    response?: { status?: number; data?: { message?: string } };
-    message?: string;
-  };
-  const status = e.response?.status;
-  const serverMessage = e.response?.data?.message;
-  if (status !== undefined && serverMessage !== undefined) {
-    return serverMessage;
-  }
-  if (status !== undefined) {
-    return `${fallback}（HTTP ${status}）`;
-  }
-  return e.message ?? fallback;
-}
+export const errorMessage = apiErrorMessage;

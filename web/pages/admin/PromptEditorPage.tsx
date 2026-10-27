@@ -13,8 +13,10 @@ import {
   Row,
   Space,
   Tag,
+  Tooltip,
   Typography,
   message,
+  theme,
 } from 'antd';
 import { CopyOutlined, PlusOutlined, RollbackOutlined, UploadOutlined } from '@ant-design/icons';
 import { PageHeader } from '../../components/shell';
@@ -50,6 +52,8 @@ const STATUS_META: Record<PromptStatus, { label: string; color: string }> = {
 };
 
 export function PromptEditorPage(): ReactElement {
+  // 选中底色走 token —— 写死 rgba(47,84,235,0.08) 在深色模式下几乎看不见
+  const { token } = theme.useToken();
   const [versions, setVersions] = useState<PromptVersionItem[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [content, setContent] = useState('');
@@ -235,7 +239,7 @@ export function PromptEditorPage(): ReactElement {
                       padding: '8px 10px',
                       borderRadius: 6,
                       cursor: 'pointer',
-                      background: v.version === selected ? 'rgba(47,84,235,0.08)' : undefined,
+                      background: v.version === selected ? token.colorPrimaryBg : undefined,
                     }}
                     onClick={() => void selectVersion(v.version)}
                   >
@@ -330,15 +334,34 @@ export function PromptEditorPage(): ReactElement {
               )}
             </Space>
 
-            {versions.length > 1 && selected !== null && (
+            {/* ⚠️ 底部操作条的三个按钮**各自独立判断**（2026-10-27 修）——
+                以前整块包在 `versions.length > 1` 里，租户只有 1 个版本时
+                「删除该版本」和「以此新建草稿」全都不出现 —— 唯一那个版本删不掉。 */}
+            {selected !== null && (
               <Space style={{ marginTop: 12 }} wrap>
-                <Button
-                  icon={<RollbackOutlined />}
-                  disabled={selectedMeta?.status === 'production'}
-                  onClick={() => void onRollback(selected)}
-                >
-                  回滚到 {selected}
-                </Button>
+                {/* 回滚 = 把这个历史版本重新发布一次 —— 只对「已在生产里待过的版本」有意义，
+                    草稿从来没生效过，「回滚到草稿」是无意义的操作 */}
+                {(selectedMeta?.status === 'production' ||
+                  selectedMeta?.status === 'archived') && (
+                  <Tooltip
+                    title={
+                      selectedMeta?.status === 'production'
+                        ? '这个版本已经是当前生效的版本了'
+                        : `把 ${selected} 重新发布成生产版本（当前生效的会转成归档）`
+                    }
+                  >
+                    {/* ⚠️ disabled 的按钮要包一层 span —— 否则鼠标事件不触发，Tooltip 出不来 */}
+                    <span>
+                      <Button
+                        icon={<RollbackOutlined />}
+                        disabled={selectedMeta?.status === 'production'}
+                        onClick={() => void onRollback(selected)}
+                      >
+                        回滚到 {selected}
+                      </Button>
+                    </span>
+                  </Tooltip>
+                )}
                 <Button
                   icon={<CopyOutlined />}
                   onClick={() => {
@@ -351,11 +374,10 @@ export function PromptEditorPage(): ReactElement {
                 </Button>
                 <Popconfirm
                   title={`删除版本 ${selected}？`}
-                  description="删掉后不能恢复。生产中的版本不能删。"
+                  description="删掉后不能恢复。生产中的版本删不掉（后端会拒）—— 先把别的版本发布上去。"
                   okText="删除"
                   cancelText="取消"
                   okButtonProps={{ danger: true }}
-                  disabled={selectedMeta?.status === 'production'}
                   onConfirm={() => {
                     void (async () => {
                       try {

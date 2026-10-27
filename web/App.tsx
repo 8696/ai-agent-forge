@@ -1,5 +1,4 @@
 import type { ReactElement } from 'react';
-import { useEffect } from 'react';
 import { App as AntdApp, ConfigProvider } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
 import { RouterProvider } from 'react-router-dom';
@@ -26,11 +25,10 @@ import { useThemeMode } from './lib/themeMode';
 export function App(): ReactElement {
   const mode = useThemeMode();
 
-  // body 背景是注入的静态 CSS（main.tsx），它没法自己知道当前模式 ——
-  // 所以把模式写到 <html data-theme> 上，让 CSS 按属性切换。
-  useEffect(() => {
-    document.documentElement.dataset.theme = mode;
-  }, [mode]);
+  // ⚠️ `<html data-theme>` **不在这里设** —— body 背景是注入的静态 CSS（main.tsx），
+  //    靠 `html[data-theme='dark']` 选择器切换，等 useEffect 才设会先闪一下白底。
+  //    属性由 `web/lib/themeMode.ts` 在**模块加载时**同步写一次、切换时同步写，
+  //    这里只负责把 mode 喂给 ConfigProvider。
 
   return (
     <ConfigProvider locale={zhCN} theme={mode === 'dark' ? darkTheme : lightTheme}>

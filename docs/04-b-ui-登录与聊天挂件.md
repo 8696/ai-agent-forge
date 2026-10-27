@@ -116,7 +116,13 @@
 - 右对齐，**主题色 `colorPrimary`（`#2f54eb`）**背景，白字
   > 2026-10-21 校正：原规格写死 AntD 默认蓝 `#1677ff`，但本项目 `web/theme.ts` 的
   > `colorPrimary` 是刻意选的极客蓝 `#2f54eb`，**theme 才是真理来源**，气泡跟主题走。
-- 圆角 12px（左下 4px，其他 12px）
+- 圆角 12px（右下 4px，其他 12px）
+  > 2026-10-27 校正：原规格写的是「左下 4px」，跟代码反了 ——
+  > 气泡的小圆角是「尾巴」，**指向说话的一方**（用户气泡在右 → 尾巴在右下；
+  > AI 气泡在左 → 尾巴在左下）。本项目代码一直按行业惯例实现，
+  > 这次改**文档**不改代码（`web/pages/customer/ChatPage.tsx` /
+  > `web/pages/widget/WidgetPage.tsx` 的 `borderBottomRightRadius` /
+  > `borderBottomLeftRadius`）。
 - 右上角小时间戳（hover 显示完整时间）
   —— ✅ 2026-10-25 落地：后端在历史消息的 `metadata.created_at` 里带出
   `messages.created_at`，前端用 `web/lib/datetime.ts` 的 `formatMessageTime` 渲染
@@ -126,7 +132,9 @@
 #### AI 消息
 
 - 左对齐，浅灰背景 `#f5f7fa`（`colorBgLayout`），深字
-- 圆角 12px（右下 4px，其他 12px）
+- 圆角 12px（左下 4px，其他 12px）
+  > 2026-10-27 校正：原规格写的是「右下 4px」—— 跟上面「用户消息」那条对调了。
+  > 尾巴指向说话方：AI 气泡在**左** → 小圆角在**左下**（跟代码一致）。
 - 内容：Markdown 渲染（含 GFM 表格 / 任务列表 / 代码高亮）
 - **思考模式**：上半部分可折叠 `<details>` 「💭 思考过程」（默认折叠）
 - **引用片段卡片**：气泡上方的文档名 + 段号 + 相关度 + 召回标签（语义 / 关键词），

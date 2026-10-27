@@ -51,6 +51,8 @@ const DEPRECATED_PROPS: Record<string, string[]> = {
     'width',
     'height',
   ],
+  Input: ['addonAfter', 'addonBefore'],
+  InputNumber: ['addonAfter', 'addonBefore'],
   Modal: [
     'bodyStyle',
     'maskStyle',

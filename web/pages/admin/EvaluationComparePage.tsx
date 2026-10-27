@@ -1,5 +1,5 @@
 import type { ReactElement, ReactNode } from 'react';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Button,
@@ -83,11 +83,22 @@ export function EvaluationComparePage(): ReactElement {
   // 图表 / 标签的配色走 antd token —— 写死 hex 的话暗色模式下对不上
   const { token } = theme.useToken();
 
+  /** 组件还活着吗 —— 避免卸载后 setState */
+  const aliveRef = useRef(true);
+  useEffect(() => {
+    aliveRef.current = true;
+    return () => {
+      aliveRef.current = false;
+    };
+  }, []);
+
   const loadRuns = async (): Promise<void> => {
     try {
       const res = await fetchRuns({ page: 1, page_size: 100 });
+      if (!aliveRef.current) return;
       setRuns(res.runs);
     } catch (err: unknown) {
+      if (!aliveRef.current) return;
       setRuns(null);
       setErrMsg(evaluationErrorMessage(err, '加载跑批列表失败'));
     }
@@ -96,6 +107,19 @@ export function EvaluationComparePage(): ReactElement {
   useEffect(() => {
     void loadRuns();
   }, []);
+
+  /**
+   * URL → state 的回写。
+   *
+   * ⚠️ 以前只写不读：URL 里的 `?a=&b=` 选了之后**不回写** ——
+   *    用户按浏览器后退时 URL 变了但对比内容不变（state 还是旧的）。
+   */
+  useEffect(() => {
+    const nextA = searchParams.get('a') ?? '';
+    const nextB = searchParams.get('b') ?? '';
+    setAId((prev) => (prev === nextA ? prev : nextA));
+    setBId((prev) => (prev === nextB ? prev : nextB));
+  }, [searchParams]);
 
   // 选了两次跑批才拉对比 —— 没选满不该发请求
   useEffect(() => {
@@ -130,7 +154,9 @@ export function EvaluationComparePage(): ReactElement {
     const b = which === 'b' ? value : bId;
     if (a !== '') next['a'] = a;
     if (b !== '') next['b'] = b;
-    setSearchParams(next);
+    // ⚠️ `replace: true` —— 每次换下拉都 push 一条历史记录的话，
+    //    用户按「后退」要按十几次才能回到进来之前。
+    setSearchParams(next, { replace: true });
     if (which === 'a') setAId(value);
     else setBId(value);
   };

@@ -4,7 +4,11 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Alert, Button, Form, Input, Tag, theme } from 'antd';
 import { LockOutlined, MailOutlined, UserOutlined } from '@ant-design/icons';
 import { customerApi } from '../../lib/customerApi';
-import { setToken } from '../../lib/apiFactory';
+import {
+  EXPIRED_REASON_PARAM,
+  EXPIRED_REASON_VALUE,
+  setToken,
+} from '../../lib/apiFactory';
 import { AuthShell } from '../../components/shell/AuthShell';
 import { TENANT_CODE_PATTERN, TENANT_CODE_HINT } from '@shared/validation/tenant-code';
 
@@ -22,6 +26,9 @@ export function CustomerLoginPage(): ReactElement {
   // 租户号预填（?tenant_code=xxx）—— 公开挂件的「登录」按钮会带过来，
   // 访客不用自己猜租户号（docs/04-a §2.3「用户头像菜单：登录」）
   const [searchParams] = useSearchParams();
+  // 「登录已过期」是从别处跳过来的（token 过期被踢回来）—— 提示一下，
+  // 不然用户不知道为什么要重新登一遍
+  const expired = searchParams.get(EXPIRED_REASON_PARAM) === EXPIRED_REASON_VALUE;
   const [loading, setLoading] = useState(false);
   const [errMsg, setErrMsg] = useState<string | null>(null);
   // 颜色走 antd token —— 写死浅色的话，深色模式下几乎看不见
@@ -54,8 +61,11 @@ export function CustomerLoginPage(): ReactElement {
   return (
     <AuthShell
       roleLabel="customer 子系统 · 租户前台"
-      title="用户登录"
-      description="没有账号？联系你的租户管理员"
+      title="登录到 AI 助手"
+      description="用户登录"
+      // 租户用户没有「租户管理员」这个身份（他就是租户的用户）—— 提示要跟着改
+      forgotPasswordHint="没有账号？联系你的租户管理员"
+      loading={loading}
       badge={
         <Tag color="blue" style={{ margin: 0, fontWeight: 500 }}>
           <UserOutlined style={{ marginRight: 4 }} />
@@ -63,6 +73,14 @@ export function CustomerLoginPage(): ReactElement {
         </Tag>
       }
     >
+      {expired && (
+        <Alert
+          type="warning"
+          showIcon
+          title="登录已过期，请重新登录"
+          style={{ marginBottom: 18 }}
+        />
+      )}
       {errMsg !== null && (
         <Alert
           type="error"

@@ -14,11 +14,12 @@ import {
   type ToolSet,
   type UIMessageStreamWriterWithOutcome,
 } from 'ai';
-import type { ChatDataTypes, ChatUIMessage } from '@shared/types/chat';
+import type { ChatDataTypes, ChatMessageMetadata, ChatUIMessage } from '@shared/types/chat';
 import { Session, Message } from '../models';
-import type { MessageStatus, MessageParts, MessageUsage } from '../models';
+import type { MessageStatus, MessageParts, MessageUsage, MessageRole } from '../models';
 import type { DataPartShape } from '../models/Message';
 import { NotFoundError, ValidationError } from '../lib/errors';
+import { isMissingColumnError } from '../lib/sql-errors';
 import { getBreaker, CircuitOpenError } from '../lib/circuit-breaker';
 import { logger } from '../logger';
 import { config, getLlm } from '../config';
@@ -280,6 +281,40 @@ export async function insertUserMessage(
 }
 
 /**
+ * 「重新生成」的目标行 —— 连同它的角色。
+ *
+ * 角色决定了两件不同的事：
+ *  - `assistant` → **覆盖**这条回答（重新生成时复用同一行，不新插）
+ *  - `user`     → **重跑**这个提问（用户行已经在库里，不重复插；回答另起一行）
+ */
+export interface RegenerateTarget {
+  id: string;
+  role: MessageRole;
+}
+
+/**
+ * 解析「重新生成」的目标行。
+ *
+ * ⚠️ **必须按 (id, session_id, tenant_id) 三元组查** ——
+ *    客户端传的 messageId 是不可信输入：别人会话里的 id 传过来，
+ *    按「不存在」处理（404），不泄露这个 id 是否存在。
+ */
+export async function resolveRegenerateTarget(
+  sessionId: string,
+  tenantId: string,
+  messageId: string,
+): Promise<RegenerateTarget> {
+  const row = await Message.findOne({
+    where: { id: messageId, session_id: sessionId, tenant_id: tenantId },
+    attributes: ['id', 'role'],
+  });
+  if (row === null) {
+    throw new NotFoundError('消息');
+  }
+  return { id: row.id, role: row.role };
+}
+
+/**
  * 建 assistant 占位行（status='streaming'、正文为空），返回 id。
  *
  * 为什么先建行再开流：进程被 kill / OOM 时这行会永远停在 streaming，
@@ -301,6 +336,18 @@ export async function insertAssistantPlaceholder(
     });
     if (existing === null) {
       throw new NotFoundError('消息');
+    }
+    if (existing.role !== 'assistant') {
+      // 目标是一条**用户消息** → 这是「重跑这一轮」而不是「覆盖某条回答」。
+      // 用户行已经在库里（不重复插），回答另起一行。
+      const created = await Message.create({
+        session_id: session.id,
+        tenant_id: session.tenant_id,
+        role: 'assistant',
+        content: '',
+        status: 'streaming',
+      });
+      return created.id;
     }
     existing.content = '';
     existing.thinking_content = null;
@@ -346,6 +393,79 @@ export async function finalizeAssistantMessage(id: string, patch: FinalizePatch)
     },
     { where: { id } },
   );
+}
+
+// ============================================================
+// 消息级收藏（迁移 037 · docs/04-b §4.2「📌 收藏」）
+// ============================================================
+
+/**
+ * messages.favorite 列现在能不能用。
+ *
+ * ⚠️ **迁移 037 没跑时这一列不存在** —— Sequelize 的 SELECT 列清单来自
+ *    **模型定义**，列不存在时**每一次**对 messages 的查询都会报
+ *    `Unknown column 'favorite' in 'field list'`（历史消息全挂）。
+ *    所以启动时探一次、列不在就把属性摘掉（见 probeMessageFavoriteColumn）。
+ */
+let messageFavoriteSupport: 'unknown' | 'available' | 'missing' = 'unknown';
+
+export function isMessageFavoriteSupported(): boolean {
+  return messageFavoriteSupport !== 'missing';
+}
+
+/**
+ * 启动时探一次：`messages.favorite` 列在不在（迁移 037 跑了没）。
+ *
+ * 列不在 → 把这一列**从模型里摘掉**（`Model.removeAttribute`），
+ * 所有对 messages 的查询立刻不再引用它 —— 历史消息照常能读，
+ * 只是「消息级收藏」这个功能不可用（端点返 503）。
+ */
+export async function probeMessageFavoriteColumn(): Promise<boolean> {
+  try {
+    await Message.findOne({ where: { favorite: false }, attributes: ['id'] });
+    messageFavoriteSupport = 'available';
+    return true;
+  } catch (err: unknown) {
+    if (!isMissingColumnError(err)) {
+      // 探针失败（DB 抖了一下之类）≠ 列不存在 —— 不降级
+      logger.warn(
+        { err: err instanceof Error ? err.message : String(err) },
+        '探测 messages.favorite 列失败（不降级，按存在处理）',
+      );
+      return messageFavoriteSupport !== 'missing';
+    }
+    messageFavoriteSupport = 'missing';
+    try {
+      Message.removeAttribute('favorite');
+    } catch (removeErr: unknown) {
+      logger.debug(
+        { err: removeErr instanceof Error ? removeErr.message : String(removeErr) },
+        '摘掉 Message 的 favorite 属性失败',
+      );
+    }
+    logger.warn(
+      { reason: err instanceof Error ? err.message : String(err) },
+      'messages.favorite 列不存在（迁移 037 没跑？），已降级：消息级收藏不可用',
+    );
+    return false;
+  }
+}
+
+/**
+ * 收藏 / 取消收藏一条消息。
+ *
+ * ⚠️ **归属校验在路由层做**（消息 → 会话 → (tenant_id, user_id)），
+ *    这里只负责写 —— 跟会话级收藏（setSessionFavorite）的分工一致。
+ *
+ * 消息收藏是**用户自己的数据**，跟会话收藏一样**不写审计**。
+ */
+export async function setMessageFavorite(
+  messageId: string,
+  tenantId: string,
+  favorite: boolean,
+): Promise<boolean> {
+  await Message.update({ favorite }, { where: { id: messageId, tenant_id: tenantId } });
+  return favorite;
 }
 
 /** 僵尸 streaming 行：进程崩了 / 被 kill 留下的。读历史时就地降级，顺手自愈。 */
@@ -429,7 +549,20 @@ export function extractDataParts(parts: ChatUIMessage['parts']): DataPartShape[]
  * 一行 DB 记录 → 一个前端可渲染的 UIMessage。
  *
  * 渲染顺序：引用片段（data part）在前、正文在后 —— 前端角标区在气泡上方更自然。
+ *
+ * ⚠️ `metadata` 里比 shared 的 `ChatMessageMetadata` 多两个字段
+ *    （`feedback` / `favorite`）—— 它们是**消息级**的用户标记，
+ *    前端要用它们把 👍👎 和 📌 的状态还原出来（刷新后不丢）。
+ *    类型定义放在本文件里（`ChatRowMetadata`），shared 那份是跨包的公共契约，
+ *    改动面要小 —— 前端在 `web/lib/customerChat.ts` 有一份等价的读取助手。
  */
+export interface ChatRowMetadata extends ChatMessageMetadata {
+  /** 👍 / 👎；null = 没反馈过 */
+  feedback?: 1 | -1 | null;
+  /** 是否被用户收藏（消息级） */
+  favorite?: boolean;
+}
+
 export function rowToUiMessage(row: Message): ChatUIMessage {
   const parts: ChatUIMessage['parts'] = [];
 
@@ -442,12 +575,19 @@ export function rowToUiMessage(row: Message): ChatUIMessage {
   if (row.content !== null && row.content !== '') {
     parts.push({ type: 'text', text: row.content, state: 'done' });
   }
+  const metadata: ChatRowMetadata = {
+    // 消息创建时间 —— 前端在气泡右上角显示小时间戳（docs/04-b §4.2）
+    created_at: row.created_at.toISOString(),
+    // 反馈状态 —— 前端靠它把 👍👎 还原成「已选中」（不然刷新后又「取消不了」了）
+    feedback: row.feedback === null || row.feedback === undefined ? null : row.feedback > 0 ? 1 : -1,
+    // 消息级收藏状态（迁移 037；列不存在时是 undefined → 当作没收藏）
+    favorite: row.favorite === true,
+  };
   return {
     id: row.id,
     role: row.role === 'assistant' ? 'assistant' : 'user',
     parts,
-    // 消息创建时间 —— 前端在气泡右上角显示小时间戳（docs/04-b §4.2）
-    metadata: { created_at: row.created_at.toISOString() },
+    metadata,
   };
 }
 
@@ -705,11 +845,30 @@ export function parseChatRequest(body: ChatRequestBody, maxInputChars?: number):
     throw new ValidationError('请求体缺少 messages');
   }
 
-  const isRegenerate = last.role === 'assistant';
-  const target = isRegenerate ? messages[messages.length - 2] : last;
+  // 末条是不是 assistant —— 决定「本轮的用户输入」从哪一条取
+  // （注意：这只跟**取哪条 user 消息**有关，跟「是不是重新生成」是两件事）
+  const lastIsAssistant = last.role === 'assistant';
+  const target = lastIsAssistant ? messages[messages.length - 2] : last;
   if (target === undefined || target.role !== 'user') {
     throw new ValidationError('最后一条消息必须是用户消息（或「用户 + 助手」成对出现）');
   }
+
+  /**
+   * 「重新生成」的目标 id。
+   *
+   * ⚠️ **不能只看「末条是不是 assistant」** —— AI SDK v7 的 `regenerate({messageId})`
+   *    在发请求**之前**就把那条 assistant 从本地 messages 里砍掉了，
+   *    发到后端的消息数组**末条是 user**。所以真正的判断依据是请求体里的
+   *    `messageId`（SDK 的 regenerate 会带上），拿不到时才回落到「末条是 assistant」
+   *    （老协议 / 集成测试的写法）。
+   *
+   * 拿不到目标 id 时**一律当普通提问处理**（isRegenerate=false）——
+   * 「重新生成」但不知道要覆盖哪条的话，宁可多插一行用户消息，
+   * 也不能让这一轮的用户输入**根本没落库**（模型会看不到这个问题）。
+   */
+  const bodyMessageId =
+    typeof body.messageId === 'string' && body.messageId !== '' ? body.messageId : null;
+  const regenerateTargetId = bodyMessageId ?? (lastIsAssistant ? last.id : null);
 
   const userText = textOfUiMessage(target);
   if (userText.trim() === '') {
@@ -723,8 +882,8 @@ export function parseChatRequest(body: ChatRequestBody, maxInputChars?: number):
 
   return {
     userText,
-    isRegenerate,
-    regenerateTargetId: isRegenerate ? last.id : null,
+    isRegenerate: regenerateTargetId !== null,
+    regenerateTargetId,
     // 思考模式开关（docs/04-b §4.4）：只有严格的 true 才算开
     thinking: body.thinking === true,
   };

@@ -1,5 +1,5 @@
 import type { ReactElement } from 'react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Button,
@@ -29,9 +29,9 @@ import {
   SyncOutlined,
 } from '@ant-design/icons';
 import { PageHeader } from '../../components/shell/PageHeader';
+import { apiErrorMessage } from '../../lib/apiError';
 import {
   deleteDocument,
-  errorMessage,
   fetchDocuments,
   reindexDocument,
   uploadDocument,
@@ -65,6 +65,15 @@ const FILE_TYPE_LABEL: Record<string, string> = {
 const PAGE_SIZE = 20;
 
 /**
+ * 单文件大小上限（50 MB）—— docs/04-c §5.2「支持 PDF / Markdown / TXT，≤ 50 MB」。
+ *
+ * ⚠️ 前端先拦一道：不然用户要等 koa-body 把整个文件收完、再被拒，
+ *    白等一趟（上传是同步的，大文件传完才发现超限最亏）。
+ *    后端 `config.MAX_UPLOAD_BYTES` 是硬闸，前端这道只是提前告知。
+ */
+const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
+
+/**
  * /admin/knowledge/documents —— 知识库文档管理
  *
  * 后端 4 个端点（src/gateway/admin/knowledge-routes.ts）：
@@ -96,6 +105,15 @@ export function KnowledgeDocumentsPage(): ReactElement {
   const [busyDocId, setBusyDocId] = useState<string | null>(null);
   const [detail, setDetail] = useState<KnowledgeDocument | null>(null);
 
+  /** 组件还挂着吗（unmount 后不要再 setState） */
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
   const load = useCallback(async (): Promise<void> => {
     setLoading(true);
     setLoadError(null);
@@ -106,13 +124,21 @@ export function KnowledgeDocumentsPage(): ReactElement {
         ...(statusFilter === 'all' ? {} : { status: statusFilter }),
         ...(appliedKeyword === '' ? {} : { keyword: appliedKeyword }),
       });
+      if (!mountedRef.current) {
+        return;
+      }
       setRows(result.documents);
       setTotal(result.pagination.total);
       setStats(result.stats);
     } catch (err: unknown) {
-      setLoadError(errorMessage(err, '文档列表加载失败'));
+      if (!mountedRef.current) {
+        return;
+      }
+      setLoadError(apiErrorMessage(err, '文档列表加载失败'));
     } finally {
-      setLoading(false);
+      if (mountedRef.current) {
+        setLoading(false);
+      }
     }
   }, [page, statusFilter, appliedKeyword]);
 
@@ -124,6 +150,13 @@ export function KnowledgeDocumentsPage(): ReactElement {
     if (!hasAcceptedExtension(file.name)) {
       message.error(
         `「${file.name}」格式不支持，只接受 ${ACCEPTED_UPLOAD_EXTENSIONS.join(' / ')}`,
+      );
+      return;
+    }
+    // ⚠️ 50 MB 前端预检（docs/04-c §5.2）—— 别等后端 koa-body 拒
+    if (file.size > MAX_UPLOAD_BYTES) {
+      message.error(
+        `「${file.name}」有 ${formatBytes(file.size)}，超过 50 MB 上限，请先拆分或压缩`,
       );
       return;
     }
@@ -144,43 +177,49 @@ export function KnowledgeDocumentsPage(): ReactElement {
       setPage(1);
       await load();
     } catch (err: unknown) {
-      message.error(errorMessage(err, '上传失败'));
+      message.error(apiErrorMessage(err, '上传失败'));
     } finally {
       setUploading(false);
     }
   };
 
-  const onReindex = async (row: KnowledgeDocument): Promise<void> => {
-    setBusyDocId(row.id);
-    try {
-      const result = await reindexDocument(row.id);
-      if (result.status === 'ready') {
-        message.success(`《${row.title}》重新索引完成：${result.chunk_count} 块`);
-      } else {
-        message.error(`重新索引失败：${result.error ?? '未知错误'}`);
+  const onReindex = useCallback(
+    async (row: KnowledgeDocument): Promise<void> => {
+      setBusyDocId(row.id);
+      try {
+        const result = await reindexDocument(row.id);
+        if (result.status === 'ready') {
+          message.success(`《${row.title}》重新索引完成：${result.chunk_count} 块`);
+        } else {
+          message.error(`重新索引失败：${result.error ?? '未知错误'}`);
+        }
+        setDetail(null);
+        await load();
+      } catch (err: unknown) {
+        message.error(apiErrorMessage(err, '重新索引失败'));
+      } finally {
+        setBusyDocId(null);
       }
-      setDetail(null);
-      await load();
-    } catch (err: unknown) {
-      message.error(errorMessage(err, '重新索引失败'));
-    } finally {
-      setBusyDocId(null);
-    }
-  };
+    },
+    [load],
+  );
 
-  const onDelete = async (row: KnowledgeDocument): Promise<void> => {
-    setBusyDocId(row.id);
-    try {
-      await deleteDocument(row.id);
-      message.success(`已删除《${row.title}》`);
-      setDetail(null);
-      await load();
-    } catch (err: unknown) {
-      message.error(errorMessage(err, '删除失败'));
-    } finally {
-      setBusyDocId(null);
-    }
-  };
+  const onDelete = useCallback(
+    async (row: KnowledgeDocument): Promise<void> => {
+      setBusyDocId(row.id);
+      try {
+        await deleteDocument(row.id);
+        message.success(`已删除《${row.title}》`);
+        setDetail(null);
+        await load();
+      } catch (err: unknown) {
+        message.error(apiErrorMessage(err, '删除失败'));
+      } finally {
+        setBusyDocId(null);
+      }
+    },
+    [load],
+  );
 
   const columns: TableColumnsType<KnowledgeDocument> = useMemo(
     () => [
@@ -266,7 +305,10 @@ export function KnowledgeDocumentsPage(): ReactElement {
         ),
       },
     ],
-    [busyDocId, token],
+    // ⚠️ `onReindex` / `onDelete` 必须在依赖里 —— 它们闭包捕获了 `load`
+    //    （含当前的页码 / 筛选）。漏了的话：改完筛选后点「删除」，
+    //    刷新出来的还是**旧筛选**的结果。
+    [busyDocId, token, onReindex, onDelete],
   );
 
   return (
@@ -296,12 +338,26 @@ export function KnowledgeDocumentsPage(): ReactElement {
         />
       )}
 
+      {/* 4 张统计卡（docs/04-c §5.2）——
+          ⚠️ **「文档总数」用的是 `stats.total_documents`（不受筛选影响）**，
+             不是 `pagination.total`（那是当前筛选下的条数 —— 一按「索引失败」
+             筛选，卡片就变成 3，看着像「本租户只有 3 篇文档」）。
+          每张卡下面标清口径：哪几个是本租户的、哪个是跨租户参考值。 */}
       <Space size={16} wrap style={{ marginBottom: 16 }}>
-        <Card size="small" style={{ minWidth: 160 }}>
-          <Statistic title="文档总数" value={total} />
+        <Card size="small" style={{ minWidth: 180 }}>
+          {/* ⚠️ 用 `stats.total_documents`（后端新加的、不受筛选影响的总数）。
+              老后端没这个字段时回落到 `pagination.total`（筛选后的条数）——
+              宁可口径退化，也不能显示成 0。 */}
+          <Statistic title="文档总数" value={stats?.total_documents ?? total} />
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            本租户全部文档（不含筛选）
+          </Text>
         </Card>
         <Card size="small" style={{ minWidth: 180 }}>
           <Statistic title="已索引块数" value={stats?.chunk_total ?? 0} />
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            本租户已就绪文档的块数合计
+          </Text>
         </Card>
         <Card size="small" style={{ minWidth: 200 }}>
           <Statistic
@@ -317,6 +373,9 @@ export function KnowledgeDocumentsPage(): ReactElement {
               ) : undefined
             }
           />
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            本租户 · 内存索引，重启后重建
+          </Text>
         </Card>
         <Card size="small" style={{ minWidth: 200 }}>
           <Statistic
@@ -330,6 +389,9 @@ export function KnowledgeDocumentsPage(): ReactElement {
               </Tooltip>
             }
           />
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            跨租户合计 · 运维参考值
+          </Text>
         </Card>
       </Space>
 
@@ -345,7 +407,7 @@ export function KnowledgeDocumentsPage(): ReactElement {
         style={{ marginBottom: 16 }}
       >
         <p style={{ margin: '8px 0' }}>
-          <CloudUploadOutlined style={{ fontSize: 42, color: '#1677ff' }} />
+          <CloudUploadOutlined style={{ fontSize: 42, color: token.colorPrimary }} />
         </p>
         <p style={{ margin: '8px 0 4px', fontSize: 16 }}>点击或拖拽文件到此处上传</p>
         <p style={{ margin: 0, color: token.colorTextTertiary, fontSize: 13 }}>
@@ -474,4 +536,15 @@ export function KnowledgeDocumentsPage(): ReactElement {
 function hasAcceptedExtension(filename: string): boolean {
   const lower = filename.toLowerCase();
   return ACCEPTED_UPLOAD_EXTENSIONS.some((ext) => lower.endsWith(ext));
+}
+
+/** 把字节数说成人话（MB / KB） */
+function formatBytes(bytes: number): string {
+  if (bytes >= 1024 * 1024) {
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  }
+  if (bytes >= 1024) {
+    return `${(bytes / 1024).toFixed(0)} KB`;
+  }
+  return `${bytes} B`;
 }

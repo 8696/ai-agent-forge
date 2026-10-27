@@ -1,10 +1,14 @@
 import type { ReactElement } from 'react';
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Alert, Button, Form, Input, Tag, theme } from 'antd';
 import { LockOutlined, MailOutlined, ControlOutlined } from '@ant-design/icons';
 import { systemApi } from '../../lib/systemApi';
-import { setToken } from '../../lib/apiFactory';
+import {
+  EXPIRED_REASON_PARAM,
+  EXPIRED_REASON_VALUE,
+  setToken,
+} from '../../lib/apiFactory';
 import { AuthShell } from '../../components/shell/AuthShell';
 
 interface FormValues {
@@ -17,6 +21,10 @@ interface FormValues {
  */
 export function SystemLoginPage(): ReactElement {
   const navigate = useNavigate();
+  // 「登录已过期」是从别处跳过来的（token 过期被踢回来）—— 提示一下，
+  // 不然用户不知道为什么要重新登一遍
+  const [searchParams] = useSearchParams();
+  const expired = searchParams.get(EXPIRED_REASON_PARAM) === EXPIRED_REASON_VALUE;
   const [loading, setLoading] = useState(false);
   const [errMsg, setErrMsg] = useState<string | null>(null);
   // 颜色走 antd token —— 写死浅色的话，深色模式下几乎看不见
@@ -40,8 +48,11 @@ export function SystemLoginPage(): ReactElement {
   return (
     <AuthShell
       roleLabel="system 子系统 · SaaS 平台方"
-      title="平台管理登录"
-      description="没有 SaaS 平台方账号？联系系统部署方"
+      title="登录到 AI 助手"
+      description="SaaS 平台方登录"
+      // ⚠️ 平台方**没有**「租户管理员」这个角色 —— 默认文案对它是错的（docs/04-b §3.1）
+      forgotPasswordHint="没有 SaaS 平台方账号？联系系统部署方"
+      loading={loading}
       badge={
         <Tag color="magenta" style={{ margin: 0, fontWeight: 500 }}>
           <ControlOutlined style={{ marginRight: 4 }} />
@@ -49,6 +60,14 @@ export function SystemLoginPage(): ReactElement {
         </Tag>
       }
     >
+      {expired && (
+        <Alert
+          type="warning"
+          showIcon
+          title="登录已过期，请重新登录"
+          style={{ marginBottom: 18 }}
+        />
+      )}
       {errMsg !== null && (
         <Alert
           type="error"
@@ -83,11 +102,16 @@ export function SystemLoginPage(): ReactElement {
         <Form.Item
           name="password"
           label="密码"
-          rules={[{ required: true, message: '请输入密码' }]}
+          rules={[
+            { required: true, message: '请输入密码' },
+            // ⚠️ docs/04-b §3.1：平台方密码 **≥ 8 字符**
+            //    （admin / customer 是「≥ 1 字符」，那两个页面别跟着加这条）
+            { min: 8, message: '密码至少 8 字符' },
+          ]}
         >
           <Input.Password
             prefix={<LockOutlined style={{ color: token.colorTextTertiary }} />}
-            placeholder="密码"
+            placeholder="至少 8 位"
             autoComplete="current-password"
           />
         </Form.Item>

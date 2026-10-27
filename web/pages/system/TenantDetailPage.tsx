@@ -17,8 +17,10 @@ import {
   Space,
   Statistic,
   Tag,
+  Tooltip,
   Typography,
   message,
+  theme,
 } from 'antd';
 import {
   ArrowLeftOutlined,
@@ -30,6 +32,13 @@ import {
 import dayjs, { type Dayjs } from 'dayjs';
 import { systemApi } from '../../lib/systemApi';
 import { PageHeader } from '../../components/shell/PageHeader';
+import {
+  PLAN_COLOR,
+  PLAN_LABEL,
+  PLAN_OPTIONS,
+  TenantStatusTag,
+  formatExpiresAt,
+} from './TenantsPage';
 
 const { Text } = Typography;
 
@@ -41,6 +50,8 @@ interface TenantDetail {
   settings: Record<string, unknown> | null;
   status: 'active' | 'disabled';
   expires_at: string | null;
+  /** 已到期（expires_at <= now）—— 后端算好的，列表页用的是同一个口径 */
+  expired: boolean;
   created_at: string;
   updated_at: string;
   admin: {
@@ -59,31 +70,26 @@ interface TenantDetail {
   };
 }
 
-const PLAN_COLOR: Record<string, string> = {
-  free: 'default',
-  pro: 'blue',
-  enterprise: 'gold',
-};
-
-const PLAN_LABEL: Record<string, string> = {
-  free: 'Free',
-  pro: 'Pro',
-  enterprise: 'Enterprise',
-};
-
 /**
  * /system/tenants/:id —— 单租户详情 + 改基本资料 + 重置 admin 密码 + F2 启停 / 到期
  */
 export function SystemTenantDetailPage(): ReactElement {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const { token } = theme.useToken();
   const [data, setData] = useState<TenantDetail | null>(null);
   const [errMsg, setErrMsg] = useState<string | null>(null);
   const [resetOpen, setResetOpen] = useState(false);
   const [resetForm] = Form.useForm<{ new_password: string }>();
+  const [resetSubmitting, setResetSubmitting] = useState(false);
 
   const [expiresOpen, setExpiresOpen] = useState(false);
   const [expiresForm] = Form.useForm<{ expires_at: Dayjs | null }>();
+  const [expiresSubmitting, setExpiresSubmitting] = useState(false);
+
+  /** 「改基本资料」的表单 —— 受控刷新（antd 的 initialValues 只在挂载时生效） */
+  const [profileForm] = Form.useForm<{ name: string; plan: TenantDetail['plan'] }>();
+  const [profileSubmitting, setProfileSubmitting] = useState(false);
 
   const load = async (): Promise<void> => {
     setErrMsg(null);
@@ -101,6 +107,15 @@ export function SystemTenantDetailPage(): ReactElement {
     // id 变化时清空表单
     expiresForm.resetFields();
   }, [id]);
+
+  // ⚠️ **antd 的 `initialValues` 只在挂载时生效** —— 保存 / 改密之后重新 load()，
+  //    外部刷新出来的 name 不会回填到表单里（用户看到的是旧值）。
+  //    所以改成受控：数据一变就用 setFieldsValue 覆盖。
+  useEffect(() => {
+    if (data !== null) {
+      profileForm.setFieldsValue({ name: data.name, plan: data.plan });
+    }
+  }, [data, profileForm]);
 
   if (errMsg !== null) {
     return (
@@ -124,17 +139,23 @@ export function SystemTenantDetailPage(): ReactElement {
     name?: string;
     plan?: 'free' | 'pro' | 'enterprise';
   }): Promise<void> => {
+    setProfileSubmitting(true);
     try {
       await systemApi.patch(`/tenants/${id ?? ''}`, values);
       message.success('已更新');
       await load();
     } catch {
       message.error('更新失败');
+    } finally {
+      setProfileSubmitting(false);
     }
   };
 
   const onReset = async (): Promise<void> => {
-    const v = await resetForm.validateFields();
+    // ⚠️ 校验失败要 catch 掉 —— 不然是一个 unhandled rejection
+    const v = await resetForm.validateFields().catch(() => null);
+    if (v === null) return;
+    setResetSubmitting(true);
     try {
       await systemApi.post(`/tenants/${id ?? ''}/admin/reset-password`, {
         new_password: v.new_password,
@@ -146,6 +167,8 @@ export function SystemTenantDetailPage(): ReactElement {
     } catch (e) {
       const status = (e as { response?: { status?: number } }).response?.status;
       message.error(status === 404 ? '租户 admin 不存在' : '重置失败');
+    } finally {
+      setResetSubmitting(false);
     }
   };
 
@@ -156,14 +179,18 @@ export function SystemTenantDetailPage(): ReactElement {
       v.expires_at === undefined || v.expires_at === null
         ? null
         : v.expires_at.toDate().toISOString();
+    setExpiresSubmitting(true);
     try {
       await systemApi.patch(`/tenants/${id ?? ''}/expires_at`, { expires_at: iso });
+      // ⚠️ 文案按「这次是不是清空」判断（跟列表页统一）
       message.success(iso === null ? '已清空到期时间（永不过期）' : '已更新到期时间');
       setExpiresOpen(false);
       await load();
     } catch (e) {
       const status = (e as { response?: { status?: number } }).response?.status;
       message.error(status === 400 ? '请求格式不合法' : '保存到期时间失败');
+    } finally {
+      setExpiresSubmitting(false);
     }
   };
 
@@ -183,6 +210,8 @@ export function SystemTenantDetailPage(): ReactElement {
   };
 
   const isSystemTenant = data.code === 'system';
+  const wouldDisable = data.status === 'active';
+  const expires = formatExpiresAt(data.expires_at);
 
   return (
     <div>
@@ -193,12 +222,7 @@ export function SystemTenantDetailPage(): ReactElement {
             <Tag color={PLAN_COLOR[data.plan] ?? 'default'} style={{ fontWeight: 500 }}>
               {PLAN_LABEL[data.plan] ?? data.plan}
             </Tag>
-            <Tag
-              color={data.status === 'active' ? 'success' : 'error'}
-              style={{ fontWeight: 500 }}
-            >
-              {data.status === 'active' ? '启用' : '已禁用'}
-            </Tag>
+            <TenantStatusTag status={data.status} expired={data.expired} />
           </Space>
         }
         subtitle={data.name}
@@ -227,19 +251,18 @@ export function SystemTenantDetailPage(): ReactElement {
                 </Tag>
               </Descriptions.Item>
               <Descriptions.Item label="状态">
-                <Tag
-                  color={data.status === 'active' ? 'success' : 'error'}
-                  style={{ fontWeight: 500 }}
-                >
-                  {data.status === 'active' ? '启用' : '已禁用'}
-                </Tag>
+                {/* ⚠️ 三态（已禁用 / 已到期 / 启用）—— 跟列表页同一个组件 */}
+                <TenantStatusTag status={data.status} expired={data.expired} />
               </Descriptions.Item>
               <Descriptions.Item label="到期时间" span={2}>
-                {data.expires_at === null
-                  ? '永不过期'
-                  : `${dayjs(data.expires_at).format('YYYY-MM-DD HH:mm')}${
-                      dayjs(data.expires_at).isBefore(dayjs()) ? '（已过期）' : ''
-                    }`}
+                {expires.never ? (
+                  <span style={{ color: token.colorTextTertiary }}>永不过期</span>
+                ) : (
+                  <span style={expires.expired ? { color: token.colorError } : undefined}>
+                    {expires.text}
+                    {expires.expired ? '（已过期）' : ''}
+                  </span>
+                )}
               </Descriptions.Item>
               <Descriptions.Item label="创建时间">
                 {new Date(data.created_at).toLocaleString()}
@@ -277,24 +300,18 @@ export function SystemTenantDetailPage(): ReactElement {
         <Col xs={24} lg={10}>
           <Card title="改基本资料" style={{ borderRadius: 12, marginBottom: 16 }}>
             <Form
+              form={profileForm}
               layout="vertical"
-              initialValues={{ name: data.name, plan: data.plan }}
               onFinish={onPatch}
             >
               <Form.Item name="name" label="名称" rules={[{ min: 1, max: 200 }]}>
                 <Input placeholder="租户显示名" />
               </Form.Item>
               <Form.Item name="plan" label="套餐">
-                <Select
-                  options={[
-                    { value: 'free', label: 'Free' },
-                    { value: 'pro', label: 'Pro' },
-                    { value: 'enterprise', label: 'Enterprise' },
-                  ]}
-                />
+                <Select options={PLAN_OPTIONS} />
               </Form.Item>
               <Form.Item style={{ marginBottom: 0 }}>
-                <Button type="primary" htmlType="submit" block>
+                <Button type="primary" htmlType="submit" block loading={profileSubmitting}>
                   保存
                 </Button>
               </Form.Item>
@@ -309,42 +326,48 @@ export function SystemTenantDetailPage(): ReactElement {
                 </Text>
                 <div style={{ marginTop: 8 }}>
                   <Space wrap>
-                    <Tag
-                      color={data.status === 'active' ? 'success' : 'error'}
-                      style={{ fontWeight: 500 }}
-                    >
-                      {data.status === 'active' ? '启用' : '已禁用'}
-                    </Tag>
-                    <Popconfirm
-                      title={
-                        data.status === 'active'
-                          ? `确认禁用租户 ${data.code}？该租户下所有 admin / customer 账号将无法登录`
-                          : `确认启用租户 ${data.code}？`
-                      }
-                      okText="确认"
-                      cancelText="取消"
-                      okButtonProps={data.status === 'active' ? { danger: true } : { type: 'primary' }}
-                      onConfirm={() => void onToggleStatus()}
-                    >
-                      <Button
-                        danger={data.status === 'active'}
-                        type={data.status === 'active' ? 'default' : 'primary'}
-                        icon={
-                          data.status === 'active' ? (
-                            <PauseCircleOutlined />
-                          ) : (
-                            <PlayCircleOutlined />
-                          )
+                    <TenantStatusTag status={data.status} expired={data.expired} />
+                    {isSystemTenant && wouldDisable ? (
+                      // ⚠️ 系统初始租户不能禁用（04-d §6.1）——
+                      //    disabled 的按钮要包一层 span，Tooltip 才触发得出来
+                      <Tooltip title="不能禁用系统初始租户">
+                        <span>
+                          <Button
+                            danger
+                            type="default"
+                            icon={<PauseCircleOutlined />}
+                            disabled
+                          >
+                            禁用
+                          </Button>
+                        </span>
+                      </Tooltip>
+                    ) : (
+                      <Popconfirm
+                        title={
+                          wouldDisable
+                            ? `确认禁用租户 ${data.code}？该租户下所有 admin / customer 账号将无法登录`
+                            : `确认启用租户 ${data.code}？`
                         }
-                        disabled={isSystemTenant}
+                        okText="确认"
+                        cancelText="取消"
+                        okButtonProps={wouldDisable ? { danger: true } : { type: 'primary' }}
+                        onConfirm={() => void onToggleStatus()}
                       >
-                        {data.status === 'active' ? '禁用' : '启用'}
-                      </Button>
-                    </Popconfirm>
-                    {isSystemTenant && (
-                      <Text type="secondary" style={{ fontSize: 12 }}>
-                        系统初始租户禁止禁用
-                      </Text>
+                        <Button
+                          danger={wouldDisable}
+                          type={wouldDisable ? 'default' : 'primary'}
+                          icon={
+                            wouldDisable ? (
+                              <PauseCircleOutlined />
+                            ) : (
+                              <PlayCircleOutlined />
+                            )
+                          }
+                        >
+                          {wouldDisable ? '禁用' : '启用'}
+                        </Button>
+                      </Popconfirm>
                     )}
                   </Space>
                 </div>
@@ -356,13 +379,14 @@ export function SystemTenantDetailPage(): ReactElement {
                 </Text>
                 <div style={{ marginTop: 8 }}>
                   <Space wrap>
-                    <span>
-                      {data.expires_at === null
-                        ? '永不过期'
-                        : `${dayjs(data.expires_at).format('YYYY-MM-DD HH:mm')}${
-                            dayjs(data.expires_at).isBefore(dayjs()) ? '（已过期）' : ''
-                          }`}
-                    </span>
+                    {expires.never ? (
+                      <span style={{ color: token.colorTextTertiary }}>永不过期</span>
+                    ) : (
+                      <span style={expires.expired ? { color: token.colorError } : undefined}>
+                        {expires.text}
+                        {expires.expired ? '（已过期）' : ''}
+                      </span>
+                    )}
                     <Button
                       icon={<CalendarOutlined />}
                       onClick={() => {
@@ -448,7 +472,8 @@ export function SystemTenantDetailPage(): ReactElement {
         title={`重置 ${data.code} 的 admin 密码`}
         okText="重置"
         cancelText="取消"
-        onOk={onReset}
+        confirmLoading={resetSubmitting}
+        onOk={() => void onReset()}
         onCancel={() => {
           resetForm.resetFields();
           setResetOpen(false);
@@ -471,7 +496,8 @@ export function SystemTenantDetailPage(): ReactElement {
         title={`修改 ${data.code} 的到期时间`}
         okText="保存"
         cancelText="取消"
-        onOk={onSubmitExpires}
+        confirmLoading={expiresSubmitting}
+        onOk={() => void onSubmitExpires()}
         onCancel={() => {
           expiresForm.resetFields();
           setExpiresOpen(false);

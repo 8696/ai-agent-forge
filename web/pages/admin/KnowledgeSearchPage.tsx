@@ -12,6 +12,7 @@ import {
   Tooltip,
   Typography,
   message,
+  theme,
 } from 'antd';
 import { SearchOutlined, ThunderboltOutlined } from '@ant-design/icons';
 import { PageHeader } from '../../components/shell/PageHeader';
@@ -158,11 +159,13 @@ export function KnowledgeSearchPage(): ReactElement {
 }
 
 function HitCard({ rank, hit }: { rank: number; hit: SearchHit }): ReactElement {
+  const { token } = theme.useToken();
   const isDual = hit.sources.length > 1;
   return (
     <Card
       size="small"
-      style={{ borderLeft: `3px solid ${isDual ? '#52c41a' : '#d9d9d9'}` }}
+      // 竖条颜色走 antd token —— 写死 `#d9d9d9` 在深色模式下是一条突兀的亮线
+      style={{ borderLeft: `3px solid ${isDual ? token.colorSuccess : token.colorBorder}` }}
       styles={{ body: { padding: 14 } }}
     >
       <Space orientation="vertical" size={6} style={{ width: '100%' }}>

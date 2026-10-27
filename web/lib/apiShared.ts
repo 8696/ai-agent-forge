@@ -28,18 +28,23 @@ export function attachTokenInterceptor(
  *    那是 401 但 token 好得很。清掉 token 会把正在改密的用户白踢回登录页，
  *    让他把邮箱密码重打一遍（而他本来就快改完了）。
  *    所以给 `opts.skip` 一个口子，让调用方把这类端点排除掉。
+ *
+ * ⚠️ **skip 回调拿得到完整的错误对象**（不只是 url）——
+ *    「旧密码不对」和「token 过期」**都是 401**，光看 url / status 分不出来，
+ *    必须看**响应体的 message**（`src/services/change-password.ts` 的
+ *    「原密码不正确」 vs `src/lib/jwt.ts` 的「无效或过期的 token」）。
  */
 export function onUnauthorized(
   instance: AxiosInstance,
   clearToken: () => void,
-  opts?: { skip?: (url: string) => boolean },
+  opts?: { skip?: (url: string, err: unknown) => boolean },
 ): void {
   instance.interceptors.response.use(
     (res) => res,
     (err: unknown) => {
       const status = (err as { response?: { status?: number } }).response?.status;
       const url = (err as { config?: { url?: string } }).config?.url ?? '';
-      if (status === 401 && !(opts?.skip?.(url) ?? false)) {
+      if (status === 401 && !(opts?.skip?.(url, err) ?? false)) {
         clearToken();
       }
       return Promise.reject(err);

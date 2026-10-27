@@ -1,16 +1,21 @@
 import type { ReactElement } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import { Button, Result } from 'antd';
 import { ArrowLeftOutlined } from '@ant-design/icons';
 import { useThemeMode } from '../lib/themeMode';
 import { pageGradient } from '../theme';
+import { homePathFor } from './ErrorPage';
 
 /**
  * 404 —— 全屏 Result + 回首页按钮
+ *
+ * ⚠️ 「回首页」按当前路径所在的子系统走（`/admin/xxx` → `/admin`），
+ *    跟 500 页（`ErrorPage`）用同一个 `homePathFor` —— 两处行为一致。
  */
 export function NotFoundPage(): ReactElement {
   // 整页渐变跟深色模式走（写死浅色的话，暗色下 404 页是一片白）
   const mode = useThemeMode();
+  const location = useLocation();
 
   return (
     <div
@@ -28,7 +33,7 @@ export function NotFoundPage(): ReactElement {
         title="404"
         subTitle="页面不存在，或已被搬走。"
         extra={
-          <Link to="/">
+          <Link to={homePathFor(location.pathname)}>
             <Button type="primary" icon={<ArrowLeftOutlined />}>
               回首页
             </Button>

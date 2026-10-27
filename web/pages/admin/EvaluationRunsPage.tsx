@@ -1,5 +1,5 @@
-import type { ReactElement } from 'react';
-import { useEffect, useMemo, useState } from 'react';
+import type { Key, ReactElement } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Button, Card, Drawer, Empty, Progress, Space, Table, Tag, Tooltip, Typography, message, theme } from 'antd';
 import type { TableColumnsType } from 'antd';
 import { ReloadOutlined, SwapOutlined } from '@ant-design/icons';
@@ -65,21 +65,47 @@ export function EvaluationRunsPage(): ReactElement {
     [token],
   );
 
-  const load = async (): Promise<void> => {
+  /** 组件还活着吗 —— 避免卸载后 setState */
+  const aliveRef = useRef(true);
+  useEffect(() => {
+    aliveRef.current = true;
+    return () => {
+      aliveRef.current = false;
+    };
+  }, []);
+
+  /**
+   * 请求序号 —— 只有**最新一次**请求的结果算数。
+   *
+   * ⚠️ 翻页时旧页的请求可能后到（后发先至），不挡一下就会出现
+   *    「表格是第 3 页、进度环是第 1 页」的错位。
+   */
+  const reqSeqRef = useRef(0);
+
+  /**
+   * 拉列表 —— **依赖 `page`**。
+   *
+   * ⚠️ 以前是普通函数（每次渲染重建、闭包捕获 `page`），轮询 effect 的依赖只有
+   *    `[hasRunning]`（布尔值不变就不重跑 effect）—— 翻到第 3 页后轮询还在拉第 1 页。
+   */
+  const load = useCallback(async (): Promise<void> => {
+    const seq = ++reqSeqRef.current;
     setErrMsg(null);
     try {
       const res = await fetchRuns({ page, page_size: 20 });
+      if (!aliveRef.current || seq !== reqSeqRef.current) return;
       setRows(res.runs);
       setPagination(res.pagination);
     } catch (err: unknown) {
+      if (!aliveRef.current || seq !== reqSeqRef.current) return;
       setRows(null);
       setErrMsg(evaluationErrorMessage(err, '加载评测结果失败'));
     }
-  };
+  }, [page]);
 
   useEffect(() => {
     void load();
-  }, [page]);
+  }, [load]);
 
   // 有跑批在进行中时自动轮询（跑批是后台异步的，页面得自己刷新进度）
   const hasRunning = useMemo(() => (rows ?? []).some((r) => r.status === 'running'), [rows]);
@@ -89,13 +115,15 @@ export function EvaluationRunsPage(): ReactElement {
       void load();
     }, 5000);
     return () => clearInterval(timer);
-  }, [hasRunning]);
+  }, [hasRunning, load]);
 
   const openDetail = async (run: EvaluationRun): Promise<void> => {
     try {
       const res = await fetchRunDetail(run.id, { page: 1, page_size: 100 });
+      if (!aliveRef.current) return;
       setDetail({ run: res.run, results: res.results, stats: res.stats });
     } catch (err: unknown) {
+      if (!aliveRef.current) return;
       setDetail(null);
       message.error(evaluationErrorMessage(err, '加载跑批详情失败'));
     }
@@ -286,13 +314,22 @@ export function EvaluationRunsPage(): ReactElement {
           rowSelection={{
             type: 'checkbox',
             selectedRowKeys: selected,
-            onSelect: (record: EvaluationRun, checked: boolean) => {
-              setSelected((prev) =>
-                checked
-                  ? // 最多选两次 —— 多了就把最早选的那个挤掉
-                    [...prev, record.id].slice(-2)
-                  : prev.filter((id) => id !== record.id),
-              );
+            // ⚠️ antd v6 里 `onSelectAll` 已废弃，**全选走 `onChange`**。
+            //    以前只给了 `onSelect`，表头复选框点了没反应（`checked` 还是 false），
+            //    「对比选中的两次」永远 disabled —— 选不满两条。
+            //    `onSelect` 与 `onChange` 同时存在会两套状态打架，所以只留 `onChange`。
+            onChange: (keys: Key[]) => {
+              const next = keys.map((k) => String(k));
+              setSelected((prev) => {
+                // `prev` 是**点击顺序**（谁先谁后），antd 给的 `next` 是数据源顺序
+                // （这张表按时间倒序）。规格 §5.6.2 要的是「挤掉**最早选的那条**」，
+                // 所以要按点击顺序来，不能直接 `keys.slice(-2)`。
+                const kept = prev.filter((k) => next.includes(k));
+                const added = next.filter((k) => !prev.includes(k));
+                // 一次加多条（表头全选）→ 取数据源顺序的前两条（列表按时间倒序 = 最近两条）
+                const merged = added.length > 1 ? [...kept, ...added.slice(0, 2)] : [...kept, ...added];
+                return merged.slice(-2);
+              });
             },
           }}
           onRow={(row) => ({

@@ -1,10 +1,11 @@
 import type { ReactElement } from 'react';
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Alert, Button, Form, Input, theme } from 'antd';
+import { Alert, Button, Form, Input, Skeleton, theme } from 'antd';
 import { LockOutlined } from '@ant-design/icons';
 import type { AxiosInstance } from 'axios';
-import { setToken } from '../../lib/apiFactory';
+import { expiredLoginUrl, loginPathForBaseUrl, setToken } from '../../lib/apiFactory';
+import { apiErrorMessage, apiServerMessage, isWrongOldPasswordError } from '../../lib/apiError';
 import { AuthShell } from './AuthShell';
 
 interface FormValues {
@@ -63,12 +64,31 @@ export function ChangePasswordCard(props: ChangePasswordCardProps): ReactElement
     } catch (e: unknown) {
       const status = (e as { response?: { status?: number } }).response?.status;
       if (status === 401) {
-        setErrMsg('原密码不正确');
+        // ⚠️ **两种 401 必须分开**（2026-10-27 修）：
+        //    ① 「原密码不正确」（后端 src/services/change-password.ts）
+        //       → token 好得很，就地提示，用户改完再试
+        //    ② 其它 401 = **token 过期 / 无效**（src/lib/jwt.ts 的「无效或过期的 token」）
+        //       → 清 token + 跳本子系统登录页，并提示「登录已过期，请重新登录」
+        //    以前这里**一律**显示「原密码不正确」→ token 过期时用户以为是自己密码错了，
+        //    反复重试永远出不去（改密页还绕过了 RequireAuth，未登录也能进来）。
+        if (isWrongOldPasswordError(e)) {
+          setErrMsg('原密码不正确');
+        } else {
+          setToken(null);
+          setErrMsg('登录已过期，请重新登录');
+          const loginPath = loginPathForBaseUrl(props.api.defaults.baseURL);
+          if (loginPath !== null) {
+            navigate(expiredLoginUrl(loginPath), { replace: true });
+          }
+        }
       } else if (status === 400) {
-        const msg = (e as { response?: { data?: { message?: string } } }).response?.data?.message;
-        setErrMsg(typeof msg === 'string' ? msg : '新密码不符合要求');
+        const msg = apiServerMessage(e);
+        setErrMsg(msg ?? '新密码不符合要求');
       } else {
-        setErrMsg('修改失败，请稍后重试');
+        // 其余（403 / 500 / 网络错误 / 其它）→ **走统一文案**
+        // （web/lib/apiError.ts 是唯一真源：403「没有权限」/ 500「服务异常，已记录」
+        //   / 网络「网络异常，请稍后重试」—— docs/04-d §8.4）
+        setErrMsg(apiErrorMessage(e, '修改失败，请稍后重试'));
       }
     } finally {
       setLoading(false);
@@ -90,69 +110,88 @@ export function ChangePasswordCard(props: ChangePasswordCardProps): ReactElement
         <Alert type="error" showIcon title={errMsg} style={{ marginBottom: 18 }} />
       )}
 
-      <Form<FormValues>
-        layout="vertical"
-        onFinish={onFinish}
-        disabled={loading}
-        requiredMark={false}
-        size="large"
-      >
-        <Form.Item
-          name="old_password"
-          label="当前密码"
-          rules={[{ required: true, message: '请输入当前密码' }]}
+      {/* 局部加载态：`<Skeleton />`（docs/04-d §8.3「局部加载：`<Skeleton />`」）。
+          ⚠️ **骨架是盖在表单上面的，不是替换掉表单** ——
+             提交失败时表单还得留着用户填的内容（替换掉 = 卸载 Form = 字段全清空，
+             用户得从头再填一遍）。 */}
+      <div style={{ position: 'relative' }}>
+        {loading && (
+          <div
+            style={{
+              position: 'absolute',
+              inset: 0,
+              zIndex: 5,
+              padding: 4,
+              background: token.colorBgContainer,
+            }}
+          >
+            <Skeleton active title={false} paragraph={{ rows: 3 }} />
+          </div>
+        )}
+        <Form<FormValues>
+          layout="vertical"
+          onFinish={onFinish}
+          disabled={loading}
+          requiredMark={false}
+          size="large"
         >
-          <Input.Password
-            prefix={<LockOutlined style={{ color: token.colorTextTertiary }} />}
-            placeholder="当前密码"
-            autoComplete="current-password"
-          />
-        </Form.Item>
+          <Form.Item
+            name="old_password"
+            label="当前密码"
+            rules={[{ required: true, message: '请输入当前密码' }]}
+          >
+            <Input.Password
+              prefix={<LockOutlined style={{ color: token.colorTextTertiary }} />}
+              placeholder="当前密码"
+              autoComplete="current-password"
+            />
+          </Form.Item>
 
-        <Form.Item
-          name="new_password"
-          label="新密码"
-          rules={[
-            { required: true, message: '请输入新密码' },
-            { min: 8, message: '新密码至少 8 字符' },
-          ]}
-        >
-          <Input.Password
-            prefix={<LockOutlined style={{ color: token.colorTextTertiary }} />}
-            placeholder="至少 8 位"
-            autoComplete="new-password"
-          />
-        </Form.Item>
+          <Form.Item
+            name="new_password"
+            label="新密码"
+            rules={[
+              { required: true, message: '请输入新密码' },
+              { min: 8, message: '新密码至少 8 字符' },
+            ]}
+          >
+            <Input.Password
+              prefix={<LockOutlined style={{ color: token.colorTextTertiary }} />}
+              placeholder="至少 8 位"
+              autoComplete="new-password"
+            />
+          </Form.Item>
 
-        <Form.Item
-          name="confirm_password"
-          label="确认新密码"
-          dependencies={['new_password']}
-          rules={[
-            { required: true, message: '请再输入一次新密码' },
-            ({ getFieldValue }) => ({
-              validator(_, value: string) {
-                if (!value || getFieldValue('new_password') === value) {
-                  return Promise.resolve();
-                }
-                return Promise.reject(new Error('两次输入的新密码不一致'));
-              },
-            }),
-          ]}
-        >
-          <Input.Password
-            prefix={<LockOutlined style={{ color: token.colorTextTertiary }} />}
-            placeholder="再输入一次"
-            autoComplete="new-password"
-          />
-        </Form.Item>
+          <Form.Item
+            name="confirm_password"
+            label="确认新密码"
+            dependencies={['new_password']}
+            rules={[
+              { required: true, message: '请再输入一次新密码' },
+              ({ getFieldValue }) => ({
+                validator(_, value: string) {
+                  if (!value || getFieldValue('new_password') === value) {
+                    return Promise.resolve();
+                  }
+                  return Promise.reject(new Error('两次输入的新密码不一致'));
+                },
+              }),
+            ]}
+          >
+            <Input.Password
+              prefix={<LockOutlined style={{ color: token.colorTextTertiary }} />}
+              placeholder="再输入一次"
+              autoComplete="new-password"
+            />
+          </Form.Item>
 
-        <Form.Item style={{ marginBottom: 0 }}>
-          <Button type="primary" htmlType="submit" loading={loading} block size="large">
-            修改密码
-          </Button>
-        </Form.Item>
-      </Form>
+          <Form.Item style={{ marginBottom: 0 }}>
+            <Button type="primary" htmlType="submit" loading={loading} block size="large">
+              修改密码
+            </Button>
+          </Form.Item>
+        </Form>
+      </div>
     </AuthShell>
   );
 }

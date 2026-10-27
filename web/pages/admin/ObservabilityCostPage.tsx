@@ -1,6 +1,18 @@
 import type { ReactElement } from 'react';
-import { useEffect, useState } from 'react';
-import { Alert, Button, Card, DatePicker, Empty, Select, Space, Table, Tag, Typography } from 'antd';
+import { useEffect, useRef, useState } from 'react';
+import {
+  Alert,
+  Button,
+  Card,
+  DatePicker,
+  Empty,
+  Select,
+  Space,
+  Table,
+  Tag,
+  Typography,
+  theme,
+} from 'antd';
 import type { TableColumnsType } from 'antd';
 import { ReloadOutlined } from '@ant-design/icons';
 import dayjs, { type Dayjs } from 'dayjs';
@@ -33,23 +45,36 @@ export function ObservabilityCostPage(): ReactElement {
   const [errMsg, setErrMsg] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
+  // 图表配色走 antd token —— 写死 hex 的话跟主题主色对不上
+  const { token } = theme.useToken();
+
+  /** 组件还活着吗 —— 避免卸载后 setState */
+  const aliveRef = useRef(true);
+  useEffect(() => {
+    aliveRef.current = true;
+    return () => {
+      aliveRef.current = false;
+    };
+  }, []);
+
   const load = async (): Promise<void> => {
     setLoading(true);
     setErrMsg(null);
     try {
-      setData(
-        await fetchCostAnalysis({
-          range,
-          group_by: groupBy,
-          from: range === 'custom' ? customRange?.[0].toISOString() : undefined,
-          to: range === 'custom' ? customRange?.[1].toISOString() : undefined,
-        }),
-      );
+      const res = await fetchCostAnalysis({
+        range,
+        group_by: groupBy,
+        from: range === 'custom' ? customRange?.[0].toISOString() : undefined,
+        to: range === 'custom' ? customRange?.[1].toISOString() : undefined,
+      });
+      if (!aliveRef.current) return;
+      setData(res);
     } catch (err: unknown) {
+      if (!aliveRef.current) return;
       setData(null);
       setErrMsg(observabilityErrorMessage(err, '加载成本分析失败'));
     } finally {
-      setLoading(false);
+      if (aliveRef.current) setLoading(false);
     }
   };
 
@@ -118,14 +143,14 @@ export function ObservabilityCostPage(): ReactElement {
         name: '花费',
         type: 'bar',
         data: (data?.series ?? []).map((s) => s.cost),
-        itemStyle: { color: '#1677ff' },
+        itemStyle: { color: token.colorPrimary },
       },
       {
         name: '调用次数',
         type: 'line',
         yAxisIndex: 1,
         data: (data?.series ?? []).map((s) => s.calls),
-        itemStyle: { color: '#52c41a' },
+        itemStyle: { color: token.colorSuccess },
       },
     ],
   };

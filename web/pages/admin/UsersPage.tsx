@@ -1,5 +1,5 @@
 import type { ReactElement } from 'react';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Button,
@@ -44,12 +44,19 @@ interface UserRow {
 /**
  * 从 adminApi 的 token 解出当前 admin 的 user id —— 用来在「删除」按钮上
  * disable 掉自己（前端兜底；后端 src/gateway/admin/user-routes.ts 也防）
+ *
+ * ⚠️ **JWT 用的是 base64url**（`-` / `_` / 无 padding），`atob` 只吃标准 base64：
+ *    不做转换会直接抛错 → `currentAdminId()` 恒为 null →
+ *    「不能删自己」「不能改自己角色」的前端兜底**静默失效**。
  */
 function currentAdminId(): string | null {
   const tok = getToken();
   if (tok === null) return null;
   try {
-    const payload = JSON.parse(atob(tok.split('.')[1] ?? '')) as { sub?: string };
+    const part = tok.split('.')[1] ?? '';
+    const base64 = part.replace(/-/g, '+').replace(/_/g, '/');
+    const padded = base64.padEnd(base64.length + ((4 - (base64.length % 4)) % 4), '=');
+    const payload = JSON.parse(atob(padded)) as { sub?: string };
     return payload.sub ?? null;
   } catch {
     return null;
@@ -72,6 +79,8 @@ export function AdminUsersPage(): ReactElement {
   const { token } = theme.useToken();
   const [rows, setRows] = useState<UserRow[] | null>(null);
   const [errMsg, setErrMsg] = useState<string | null>(null);
+  /** 组件还挂着吗（unmount 后不要再 setState） */
+  const mountedRef = useRef(true);
 
   // client-side 检索 / 筛选（后端 list 端点还没接 filter 参数）
   const [search, setSearch] = useState('');
@@ -93,15 +102,26 @@ export function AdminUsersPage(): ReactElement {
     setErrMsg(null);
     try {
       const res = await adminApi.get<{ users: UserRow[] }>('/users');
+      if (!mountedRef.current) {
+        return;
+      }
       setRows(res.data.users);
     } catch (e: unknown) {
+      if (!mountedRef.current) {
+        return;
+      }
       const status = (e as { response?: { status?: number } }).response?.status;
       setErrMsg(status === 401 ? '鉴权失败（需 admin 角色）' : '加载失败');
     }
   };
 
   useEffect(() => {
+    mountedRef.current = true;
     void load();
+    return () => {
+      mountedRef.current = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // client-side filtered rows
@@ -448,10 +468,26 @@ export function AdminUsersPage(): ReactElement {
           </Form.Item>
           <Form.Item
             name="role"
-            label="角色"
-            extra="admin 走 /admin 入口；customer 走 /customer 入口。改完这个用户要重新登录才生效。"
+            label={
+              <Space size={6}>
+                <span>角色</span>
+                {editing !== null && editing.id === selfId && (
+                  <Tooltip title="不能改自己的角色 —— 把自己降成 customer 就锁在 /admin 门外了（后端也会拒）">
+                    <Tag color="orange" style={{ marginInlineEnd: 0 }}>
+                      不可改
+                    </Tag>
+                  </Tooltip>
+                )}
+              </Space>
+            }
+            extra={
+              editing !== null && editing.id === selfId
+                ? '自己的角色不可修改。admin 走 /admin 入口；customer 走 /customer 入口。'
+                : 'admin 走 /admin 入口；customer 走 /customer 入口。改完这个用户要重新登录才生效。'
+            }
           >
             <Select
+              disabled={editing !== null && editing.id === selfId}
               options={[
                 { value: 'admin', label: '后台管理员' },
                 { value: 'customer', label: '前台用户' },

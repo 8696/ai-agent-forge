@@ -644,6 +644,71 @@
     （key 集合 / 顺序 / 注释结构一致、无死 key、无漏配、secret 行留空）
   - 约束写在 [§4.3](#43-涉及环境变量-env--envexample)
 
+- **UI 全量审计 + 修复（2026-10-27 · 一轮 40+ 处）** —— 不是加功能，是**把已交付的 UI
+  按 `04-a`~`04-d` 四份规格逐条对照代码 + 真浏览器跑一遍**，
+  查出并修掉了一批「文档说一套、代码做另一套」和「代码跑得起来但行为不对」的问题。
+  - **做法**：① 5 个 agent 按规格分块静态对照代码；② 一个 Playwright 巡检脚本
+    真跑 29 个页面 × 深浅两色，收控制台报错 / 失败请求 / 布局溢出 / canvas 像素对比度
+  - **6 条 HIGH（全修）**：
+    - **深色模式下所有 ECharts 图表的坐标轴刻度不可读** —— ECharts 默认 `axisLabel`
+      色是写死的 `neutral70 = #54555a`，深色卡片底 `#1f1f1f` 上**对比度只有 2.22:1**
+      （AA 要 4.5:1），而网格线是浅色的 → 深底上只看得见网格线、看不见刻度。
+      修法：`<Chart>` 组件内部把 antd token 合进 option（`notMerge` 恒开，**不能指望
+      ECharts 自己 merge**）→ 实测对比度 16.48:1
+    - **聊天页「🔄 重新生成」作用在最后一条 AI 消息上** —— 调的是裸 `regenerate()`，
+      SDK 明确「没给 messageId 就重生成最后一条」→ 改成 `regenerate({ messageId: msg.id })`。
+      ⚠️ **顺带暴露一个后端 bug**：AI SDK v7 的 regenerate 发请求前会把那条 assistant
+      从本地数组砍掉，后端收到的末条是 user → 老逻辑靠「末条是 assistant」判断，
+      **永远判错** → 改成按请求体的 `messageId` 定位（`resolveRegenerateTarget`）
+    - **切「只看收藏」会掐断正在流式的回答，并可能把同一个问题再自动发一遍** ——
+      切开关 → `reloadSessions` 换身份 → effect 重跑 → `setLoading(true)` →
+      `SessionLoader` 被整个卸载（`useChat` cleanup → `chat.stop()`）→ 重挂后
+      `autoSentRef` 归零，而 `pendingQuestion` 发完从没清过 → **重复 LLM 调用**
+      → 修法：侧栏 loading 与右侧聊天面板 loading 拆开 + 自动发送前清 `pendingQuestion`
+    - **切片页「在光标处拆成两块」沿用上一个块的光标位置** —— `openEditor()` 没重置
+      `cursorPos`，切块又是写库 + 重算向量的破坏性写 → 改成**从 DOM 读真实 selectionStart**
+    - **403/500 的规格文案在 4 个 lib 模块里被丢掉** —— `adminKnowledge` / `adminMemory` /
+      `customerChat` / `customerMemory` 各抄了一份旧版 `errorMessage`，
+      用户看到的是英文 `'Forbidden'` 和 `'服务器内部错误'`
+      → 全部改成 `apiError.ts` 的唯一实现（`apiErrorMessage`）
+    - **改密页的 401 豁免过宽** —— 按 URL 豁免了**所有** 401，
+      token 过期时用户卡死在改密页、界面一直说「原密码不正确」
+      → 改成**按响应体 message 区分**（「原密码不正确」才豁免），两种 401 分别处理
+  - **16 条 MEDIUM + 一批 LOW（全修）**：表头「全选」死按钮、评测轮询闭包过期、
+    窄屏侧栏折叠按钮无效、告警规则页 `InputNumber.addonAfter` 废弃 API、
+    AI 气泡被拉满整行、操作行缺「📌 收藏」、平台方「启用/禁用/已到期」三个数互相重叠、
+    「成本超预算」表里是 token 不是钱、system 租户禁用按钮缺 Tooltip、
+    提交按钮无 loading、boolean 配置项无法清除覆盖、文档「总数」卡显示筛选后的数、
+    提示词页单版本时底部条不渲染、系统登录页缺 ≥8 校验、
+    「忘记密码」提示对平台方是错的、三个登录页标题未按规格统一、挂件页规格（40px 页头 /
+    圆形 Logo / 紧凑模式）、深色模式首屏闪白底 …
+  - **新功能（规格要求但一直没做）**：
+    - **消息级收藏**（📌）—— 迁移 `037-add-message-favorite`（`messages.favorite` 列 +
+      索引）+ `PATCH /api/v1/customer/messages/:id/favorite`（三重归属校验、跨租户 404、
+      **不写审计** —— 跟会话级收藏一致）
+    - **500 错误页** —— `web/pages/ErrorPage.tsx` + `/500` `/{子系统}/500` 路由
+  - **两处守卫的覆盖漏洞补上**：
+    - `tests/unit/antd-deprecated-props.test.ts` 的清单补了
+      `InputNumber.addonAfter` / `Input.addonAfter`（**运行时真有一条废弃警告**
+      —— 静态清单没这一项，绿灯放过了）
+    - **新增 `tests/unit/e2e-route-coverage.test.ts`** —— 机械核对
+      「e2e 的页面清单 ↔ `web/routes.tsx` 的路由表」，
+      **加路由不加进 e2e 清单（或反过来清单里有、路由里没有）→ 测试红**
+      （以前加「切片浏览」页时 e2e 清单漏了，两层守卫同时漏）
+    - e2e 的 antd 废弃守卫补上 `/admin/knowledge/chunks` + 前台 4 个页面
+  - **⚠️ 一个只有截图检查才能发现的洞**：React Router v7 **自带一层内部错误边界**，
+    比 `web/main.tsx` 外层那个 `<ErrorBoundary>` **更靠近路由组件** ——
+    路由里渲染炸了，用户看到的是 RR 的**默认英文页 + 堆栈**，
+    而 04-d §11.3 承诺的「白屏防护」**根本轮不到出场**。
+    → `web/routes.tsx` 给每条子系统路由挂了 `errorElement: <ErrorPage />`
+  - **回归**：`yarn typecheck` ✅ · `yarn test` **95 文件 / 1107 项通过**（13 跳过）·
+    `yarn test:e2e` **26 项通过**（原来 23 项）·
+    巡检脚本 **29 页 × 深浅两色 = 58 次访问：0 控制台报错 / 0 失败请求 / 0 布局溢出**
+  - ⚠️ **一处有意的产品行为变更**（要改回很容易，说一声就行）：
+    **admin 登录页「记住我」默认改成不勾选** —— 以前默认勾选，
+    用户不碰复选框就把 token 存进 localStorage 留 7 天；
+    现在默认存 sessionStorage，勾了才长期保留
+
 **已知限制**（不主动修，等你派活）：
 
 - **「转人工」已明确移出需求**（2026-10-25，理由见 [01 §1.5](./docs/01-需求与场景.md)）：

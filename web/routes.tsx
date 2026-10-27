@@ -2,6 +2,7 @@ import { createBrowserRouter, type RouteObject } from 'react-router-dom';
 import { RootRedirect } from './components/RootRedirect';
 import { DevProbePage } from './pages/DevProbePage';
 import { NotFoundPage } from './pages/NotFoundPage';
+import { ErrorPage } from './pages/ErrorPage';
 import {
   SystemLoginPage,
   SystemHomePage,
@@ -62,12 +63,16 @@ import { CustomerLayout } from './layouts/customer/CustomerLayout';
  *   /customer/*         租户前台业务页
  */
 const routes: RouteObject[] = [
-  { path: '/', element: <RootRedirect /> },
+  { path: '/', element: <RootRedirect />, errorElement: <ErrorPage /> },
 
   // ===== system 子系统（SaaS 平台方）=====
   {
     path: '/system',
     element: <SystemLayout />,
+    // ⚠️ React Router v7 自带一层内部错误边界，比外层那个 <ErrorBoundary> 更靠近路由组件 ——
+    //    不挂 errorElement 的话，路由里渲染炸了用户看到的是 RR 的**默认英文页 + 堆栈**，
+    //    而 docs/04-d §11.3 承诺的「白屏防护」根本轮不到出场。详见 web/pages/ErrorPage.tsx。
+    errorElement: <ErrorPage />,
     children: [
       { index: true, element: <SystemHomePage /> },
       { path: 'login', element: <SystemLoginPage /> },
@@ -83,6 +88,7 @@ const routes: RouteObject[] = [
   {
     path: '/admin',
     element: <AdminLayout />,
+    errorElement: <ErrorPage />,
     children: [
       { index: true, element: <AdminHomePage /> },
       { path: 'login', element: <AdminLoginPage /> },
@@ -113,6 +119,7 @@ const routes: RouteObject[] = [
   {
     path: '/customer',
     element: <CustomerLayout />,
+    errorElement: <ErrorPage />,
     children: [
       // 首页 = 用户中心工作台（B7）：欢迎语 / 推荐问题 / 最近会话 / 知识库 / 我的记忆
       { index: true, element: <HomePage /> },
@@ -125,10 +132,18 @@ const routes: RouteObject[] = [
 
   // 公开
   // E1 公开聊天挂件：免登录，租户靠 URL 里的 tenantCode 定位
-  { path: '/widget/:tenantCode', element: <WidgetPage /> },
+  { path: '/widget/:tenantCode', element: <WidgetPage />, errorElement: <ErrorPage /> },
   // ⚠️ 调试页**只在 Vite dev 模式下注册** —— 生产构建里这个路由不存在（落到 404）。
   //    以前它对所有人开放，而它挂的 LLM 探活会拿进程级凭据去调模型。
   ...(import.meta.env.DEV ? [{ path: '/dev/probe', element: <DevProbePage /> }] : []),
+  // ===== 500 错误页（docs/04-a §1.3「404 / 500：全屏居中 <Result /> + 按钮」）=====
+  // ⚠️ 以前**只有 404** —— 500 既没有路由也没有页面。
+  // 根级 `/500` 给「不属于任何子系统」的场景；
+  // `/{subsystem}/500` 给子系统内部用（`/admin/500` → 「返回首页」回 `/admin`）。
+  { path: '/500', element: <ErrorPage /> },
+  { path: '/system/500', element: <ErrorPage /> },
+  { path: '/admin/500', element: <ErrorPage /> },
+  { path: '/customer/500', element: <ErrorPage /> },
   { path: '*', element: <NotFoundPage /> },
 ];
 
