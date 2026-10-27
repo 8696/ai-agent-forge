@@ -543,6 +543,19 @@
     `tests/integration/evaluation-compare.test.ts`（三种版本语义 + 400 + 对比接口 + 跨租户）
     —— **全程零 LLM 费用**（`vi.mock` 把 `ai` / 检索 / 凭据都假掉）
 
+- **`.env` / `.env.example` 的结构契约落地**（2026-10-27）：
+  两个文件各漂了半年没人管 —— `.env` 少 6 个 key（2026-10-26 那批功能上线时
+  **只改了 `.env.example`**）、`.env` 还多一个**死 key** `SECURITY_PII_MASK_ENABLED`
+  （脱敏开关 2026-10-26 就从代码里摘掉了，文件里的行还留着）。
+  - **「哪个 key 该存在」的唯一依据 = `src/config.ts` 的 `envSchema`**
+    （例外只有 7 个，清单在 `scripts/env-contract.ts` 的 `OPTIONAL_ENV_KEYS`）
+  - **`scripts/sync-env.ts` 重写**（当年从没被跑过，而且会把 `.env` 独有的 key
+    追加到文件末尾、还把 dev 的远程地址抄进进 git 的模板 —— 现在结构漂移直接报错退出）
+  - **命令**：`yarn env:sync`（同步）/ `yarn env:check`（只校验，漂了退出码 1）
+  - **兜底测试** `tests/unit/env-consistency.test.ts`
+    （key 集合 / 顺序 / 注释结构一致、无死 key、无漏配、secret 行留空）
+  - 约束写在 [§4.3](#43-涉及环境变量-env--envexample)
+
 **已知限制**（不主动修，等你派活）：
 
 - **「转人工」已明确移出需求**（2026-10-25，理由见 [01 §1.5](./docs/01-需求与场景.md)）：
@@ -873,6 +886,63 @@
 - 生产 `yarn start` 不自动跑迁移——DBA 走 `yarn migrate` + 灰度
 - 改了表后报 `Unknown column 'xxx' in 'field list'` → 99% 是没跑 migrate，跑一下就行
 - 加了新 model 但没在 `src/db.ts` 的 `addModels([...])` 注册 → 第一次 `.findAll()` 才崩
+
+### 4.3 涉及环境变量（`.env` / `.env.example`）
+
+这两个文件是**一份东西的两副面孔**：同一组 key、同一顺序、同一段注释，**只有值不同**。
+
+|                             | `.env`（gitignored）               | `.env.example`（进 git）        |
+| ---------------------------- | ---------------------------------- | ------------------------------- |
+| 密钥（`*_API_KEY` / `*_PASSWORD` / `*_SECRET`） | 写真值                  | **留空**                        |
+| 其他配置                     | 本地默认，dev 用远程基础设施时可 override | 本地默认（localhost / 默认 model id） |
+
+**「哪个 key 该存在、哪个该删」的唯一依据是 `src/config.ts` 的 `envSchema`** ——
+只有它读到的变量才算数。判断顺序：
+
+1. `envSchema` 里有 → **两个文件都必须有**（同一个 section、同一位置）
+2. `envSchema` 里没有 → **两个文件都不能有**（那是**死 key**，代码已经不读了 → 删掉）
+3. 例外只有 **7 个**，清单在 `scripts/env-contract.ts` 的 `OPTIONAL_ENV_KEYS`
+   （6 个搬到租户后台的 `CHAT_*` + `QDRANT_COLLECTION`）—— 别往里加东西
+
+**按改动类型处置**：
+
+- 往 `envSchema` 加一个 key → **`.env` 和 `.env.example` 都加**（同一个 section、同一位置）
+- 从 `envSchema` 删一个 key → **两个文件都删**
+- 只改值（换 provider / 换远程地址）→ **只动 `.env`**（`.env` 是本地真值，`.env.example` 保持本地默认）
+
+**改完跑一次同步**（`.env.example` 是结构模板，`.env` 是「模板结构 + 本地真值」）：
+
+```bash
+yarn env:sync
+```
+
+**提交前跑一次校验**（只读不写，有问题退出码 1）：
+
+```bash
+yarn env:check
+```
+
+⚠️ **`yarn env:sync` 只自动修「模板说了算」的那部分**（`.env` 缺 key → 用模板值补；顺序/注释 → 按模板重排）。
+下面三类**只报告不自动改**，因为要人拍板：
+
+- **死 key**（文件里有、`envSchema` 里没有）→ 问「代码是真不要了，还是只是没走 `config.ts`？」
+- **漏配**（`envSchema` 里有、文件里没有）→ 补进 `.env.example` 对应的 section
+- **`.env` 有、模板没有的 key** → 问「是死 key 该删，还是模板漏了这一节该补？」
+
+**兜底**：`tests/unit/env-consistency.test.ts` 守着同一套不变量 —— key 集合 / 顺序 / 注释结构一致、
+两边都不许有 `envSchema` 之外的死 key、`envSchema` 里的 key 不许漏（7 个例外除外）、
+`.env.example` 的 secret 行不许有真值。
+⚠️ **改了 `src/config.ts` 的 `envSchema` 而忘了改这两个文件，这个测试会红** —— 那是它该做的。
+（`.env` 是 gitignored 的本地文件，CI 上不存在 → 涉及 `.env` 的那几条断言在 CI 上自动跳过，
+但 `.env.example` 那几条永远跑。）
+
+⚠️ **踩过的坑（2026-10-27）**：这两个文件各漂了半年没人管 —— `.env` 少 6 个 key
+（`TENANT_SCOPE_ENFORCE` / 熔断三项 / 记忆相关性两项，是 2026-10-26 那批功能上线时
+**只改了 `.env.example` 忘了改 `.env`**），`.env` 还多一个 `SECURITY_PII_MASK_ENABLED`
+（**死 key** —— 脱敏开关 2026-10-26 就从代码里摘掉了，文件里的行还留着、注释还写着
+「建议一直开着」）。`scripts/sync-env.ts` 早就在仓库里，但**从没被跑过**，
+而且它当年会把 `.env` 独有的 key 追加到文件末尾、还会把 dev 的远程地址抄进进 git 的模板 ——
+所以它本身也修了（现在遇到结构漂移直接报错退出）。
 
 ---
 

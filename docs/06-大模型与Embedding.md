@@ -52,7 +52,8 @@
 
 1. `.env` 改 `LLM_PROVIDER=<新 provider>`
 2. 填该 provider 的 `*_API_KEY`（其它 provider 的 key 可保留做备选探活）
-3. `yarn tsx scripts/sync-env.ts` 同步两文件
+3. `yarn env:sync` 同步两文件（`.env.example` 是结构模板，`.env` 是「模板结构 + 本地真值」）
+   —— ⚠️ 提交前再跑一次 `yarn env:check` 校验；它同时会报「代码里已删但文件里还留着」的死 key
 4. **如果新 provider 维度跟当前不同**：DELETE Qdrant collection 重建（见 6.1.2 末尾命令）
 5. 重启后端
 6. 验证：`yarn tsx scripts/probe.ts`（MySQL + Anthropic 协议 LLM 探活）+ `curl http://localhost:3000/api/_dev/probe/llm`
@@ -63,6 +64,9 @@
 - 同步规则见 `.env` 顶部注释 + `scripts/sync-env.ts`：
   - `*_API_KEY / *_PASSWORD / *_SECRET`：.env 写真值，.env.example 留空
   - 非 secret 配置：.env.example 是本地默认（localhost / OpenAI 默认等）；dev 用远程基础设施时 .env 可 override
+  - ⚠️ **哪些 key 该存在，唯一依据是 `src/config.ts` 的 `envSchema`**：
+    文件里有而 `envSchema` 里没有的 = **死 key**（代码已经不读了）→ 删掉；
+    `envSchema` 里有而文件里没有的 = **漏配** → 补进去（7 个登记的例外除外）
 - 密钥按用途分多套：每个 provider 一套（含 Anthropic 协议 + OpenAI 兼容 Embedding 共用同一个 key）
 - 本地不存密钥长期状态，每次从 `.env` 加载
 
