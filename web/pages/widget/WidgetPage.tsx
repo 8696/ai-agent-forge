@@ -914,7 +914,7 @@ function CitationList({ hits }: { hits: CitationHit[] }): ReactElement {
             borderLeft: `3px solid ${
               h.sources.length > 1 ? uiToken.colorSuccess : uiToken.colorBorder
             }`,
-            background: uiToken.colorBgSpotlight,
+            background: uiToken.colorFillQuaternary,
           }}
           styles={{ body: { padding: 10 } }}
         >

@@ -88,7 +88,7 @@ export function Markdown(props: MarkdownProps): ReactElement {
               margin: '10px 0',
               padding: '6px 14px',
               borderLeft: `3px solid ${token.colorPrimary}`,
-              background: token.colorBgSpotlight,
+              background: token.colorFillQuaternary,
               borderRadius: 4,
               color: token.colorTextSecondary,
             }}
@@ -153,7 +153,7 @@ function CodeBlock(props: {
         borderRadius: 8,
         overflow: 'hidden',
         border: `1px solid ${props.token.colorBorderSecondary}`,
-        background: props.token.colorBgSpotlight,
+        background: props.token.colorFillQuaternary,
       }}
     >
       <div

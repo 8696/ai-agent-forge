@@ -52,13 +52,27 @@ const brandToken = {
   wireframe: false,
 };
 
+/**
+ * ⚠️ **`colorBgSpotlight` 故意不覆盖**（浅色 / 深色两个 token 都一样）
+ *
+ * 它的语义不是「通用浮层底色」，而是**「Tooltip 的气泡背景色」**——
+ * antd 全库只有 Tooltip 用它（`antd/es/tooltip/style/index.js`：
+ * `tooltipBg: colorBgSpotlight`）。
+ *
+ * 而 Tooltip 的文字色是另一个别名 token `colorTextLightSolid`，**固定是白色、
+ * 不随明暗模式变**。一旦把 `colorBgSpotlight` 调成浅色，浅色模式下就成了
+ * 「白底白字」——气泡弹出来了，但看不见字（2026-10-30 修过一次这个坑）。
+ *
+ * 要「浅一点的浮层底色」请用 `colorFillQuaternary`（浅色模式 rgba(0,0,0,0.02)，
+ * 深色模式 rgba(255,255,255,0.04)）。
+ */
+
 /** 浅色模式的背景 / 边框 */
 const lightToken = {
   ...brandToken,
   colorBgLayout: '#f5f7fa',
   colorBgContainer: '#ffffff',
   colorBgElevated: '#ffffff',
-  colorBgSpotlight: '#fafbfc',
   colorBorder: '#f0f0f0',
   colorBorderSecondary: '#f5f5f5',
 };
@@ -69,7 +83,7 @@ const darkToken = {
   colorBgLayout: '#141414',
   colorBgContainer: '#1f1f1f',
   colorBgElevated: '#262626',
-  colorBgSpotlight: '#333333',
+  // ⚠️ colorBgSpotlight 故意不覆盖 —— 见上方 lightToken 的说明
   colorBorder: '#424242',
   colorBorderSecondary: '#303030',
 };
